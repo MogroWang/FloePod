@@ -10,9 +10,15 @@ let reportingBusy = false;
 function reportFrontend(msg: string) {
   if (!ipc.inTauri || reportingBusy) return;
   reportingBusy = true;
-  ipc.logFrontend(msg).finally(() => {
-    reportingBusy = false;
-  });
+  void ipc
+    .logFrontend(msg)
+    .catch(() => {
+      // Reporting is best-effort. Consuming the rejection is essential here:
+      // otherwise it produces another unhandledrejection and recursively logs.
+    })
+    .finally(() => {
+      reportingBusy = false;
+    });
 }
 window.addEventListener("error", (e) => reportFrontend(`error: ${e.message}`));
 window.addEventListener("unhandledrejection", (e) => {

@@ -2,7 +2,18 @@
  * 便携版打包：取 tauri build 的裸 exe + 使用说明，压成 zip。
  * 用法：先 pnpm tauri build，再 node scripts/package-portable.mjs
  */
-import { existsSync, mkdirSync, copyFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -10,7 +21,6 @@ import { dirname, join } from "node:path";
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const EXE = join(ROOT, "src-tauri", "target", "release", "FloePod.exe");
 const DIST = join(ROOT, "dist");
-const STAGE = join(DIST, "portable-stage", "FloePod");
 
 if (!existsSync(EXE)) {
   console.error(`未找到 ${EXE}，请先运行 pnpm tauri build`);
@@ -54,15 +64,53 @@ const README = `浮匣 FloePod v${version}（便携版）
 浮匣 FloePod · 本地优先 · 不联网 · 不收集任何数据
 `;
 
-mkdirSync(STAGE, { recursive: true });
-copyFileSync(EXE, join(STAGE, "FloePod.exe"));
-writeFileSync(join(STAGE, "使用说明.txt"), README, "utf8");
-
 const zipPath = join(DIST, `FloePod-${version}-win-x64-portable.zip`);
-execFileSync("powershell.exe", [
-  "-NoProfile",
-  "-Command",
-  `Compress-Archive -Path "${STAGE}" -DestinationPath "${zipPath}" -Force`,
-]);
+mkdirSync(DIST, { recursive: true });
+const stageRoot = mkdtempSync(join(DIST, "portable-stage-"));
+const stage = join(stageRoot, "FloePod");
+const temporaryZip = join(stageRoot, "portable.zip");
+
+try {
+  mkdirSync(stage);
+  copyFileSync(EXE, join(stage, "FloePod.exe"));
+  // Marker prevents the installed build from selecting its program directory merely because it is
+  // writable, while keeping the zip build explicitly portable on first launch.
+  writeFileSync(join(stage, ".floepod-portable"), "portable\n", "utf8");
+  writeFileSync(join(stage, "使用说明.txt"), README, "utf8");
+
+  const expectedFiles = [".floepod-portable", "FloePod.exe", "使用说明.txt"].sort();
+  const entries = readdirSync(stage, { withFileTypes: true });
+  const actualFiles = entries.map((entry) => entry.name).sort();
+  if (
+    entries.some((entry) => !entry.isFile()) ||
+    actualFiles.length !== expectedFiles.length ||
+    actualFiles.some((name, index) => name !== expectedFiles[index])
+  ) {
+    throw new Error(`便携版暂存目录包含非预期内容: ${actualFiles.join(", ")}`);
+  }
+
+  execFileSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "Compress-Archive -LiteralPath $env:FLOEPOD_PORTABLE_STAGE -DestinationPath $env:FLOEPOD_PORTABLE_ZIP -Force",
+    ],
+    {
+      env: {
+        ...process.env,
+        FLOEPOD_PORTABLE_STAGE: stage,
+        FLOEPOD_PORTABLE_ZIP: temporaryZip,
+      },
+    },
+  );
+  // Only expose the final release name after compression completed. A killed/failed
+  // Compress-Archive process can therefore never leave a half-written public artifact.
+  rmSync(zipPath, { force: true });
+  renameSync(temporaryZip, zipPath);
+} finally {
+  rmSync(stageRoot, { recursive: true, force: true });
+}
 
 console.log(`OK ${zipPath}  (exe ${sizeMB} MB)`);

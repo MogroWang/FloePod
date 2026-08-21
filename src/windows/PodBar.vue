@@ -11,6 +11,7 @@ import { Events, listenCurrent } from "@/lib/events";
 import { springValue, type SpringHandle } from "@/lib/spring";
 import { useSettingsStore } from "@/stores/settings";
 import { useStagingStore } from "@/stores/staging";
+import type { DropAction, ModifierState } from "@/types";
 
 const props = defineProps<{ podId: number }>();
 const settingsStore = useSettingsStore();
@@ -24,6 +25,14 @@ let hoverTimeout: number | undefined;
 let shortSpring: SpringHandle | null = null;
 const short = ref(44);
 const unlisteners: Array<() => void> = [];
+let mounted = true;
+let modifierSnapshot: ModifierState | null = null;
+let modifierSample: Promise<ModifierState> | null = null;
+let modifierSampleSeq = 0;
+let lastModifierSample = 0;
+
+type ConcreteDropAction = Exclude<DropAction, "ask">;
+const NO_MODIFIERS: ModifierState = { ctrl: false, shift: false, alt: false };
 
 const count = computed(
   () => staging.items.filter((i) => i.podId === props.podId).length,
@@ -39,48 +48,99 @@ const capsuleStyle = computed(() =>
    目标 62 与 Rust 侧 POD_BAR_ACCEPT 一致：胶囊填满窗口，圆角矩形完整显示。 */
 watch(accepting, (v) => shortSpring?.setTarget(v ? 62 : 44));
 
+function clearHoverTimer() {
+  window.clearTimeout(hoverTimeout);
+  hoverTimeout = undefined;
+}
+
+function retainUnlistener(unlisten: () => void) {
+  if (mounted) unlisteners.push(unlisten);
+  else unlisten();
+}
+
+function reportPresence(inside: boolean) {
+  void ipc
+    .reportPresence(props.podId, "bar", inside)
+    .catch((err) => console.error("bar presence update failed", err));
+}
+
+function setAccept(accept: boolean) {
+  void ipc
+    .setPodAccept(props.podId, accept)
+    .catch((err) => console.error("drop accept update failed", err));
+}
+
+function showPanel() {
+  void ipc.showPanel(props.podId).catch((err) => console.error("show panel failed", err));
+}
+
+function sampleModifiers(force = false) {
+  const now = performance.now();
+  if (!force && now - lastModifierSample < 32) return;
+  lastModifierSample = now;
+  const sequence = ++modifierSampleSeq;
+  const request = ipc.getModifierState().catch(() => NO_MODIFIERS);
+  modifierSample = request;
+  void request.then((value) => {
+    if (sequence === modifierSampleSeq) modifierSnapshot = value;
+  });
+}
+
 function onPointerEnter() {
   hovering.value = true;
-  window.clearTimeout(hoverTimeout);
-  void ipc.reportPresence(props.podId, "bar", true);
+  clearHoverTimer();
+  reportPresence(true);
   hoverTimeout = window.setTimeout(() => {
-    void ipc.showPanel(props.podId);
+    hoverTimeout = undefined;
+    if (hovering.value && !accepting.value && pod.value?.enabled) {
+      showPanel();
+    }
   }, pod.value?.hoverDelayMs ?? 120);
 }
 
 function onPointerLeave() {
   hovering.value = false;
-  window.clearTimeout(hoverTimeout);
-  void ipc.reportPresence(props.podId, "bar", false);
+  clearHoverTimer();
+  reportPresence(false);
 }
 
 function onClick() {
-  void ipc.togglePanel(props.podId);
+  // A pending hover callback must not reopen a panel that this click just hid.
+  clearHoverTimer();
+  void ipc.togglePanel(props.podId).catch((err) => console.error("toggle panel failed", err));
 }
 
 /* ---- 文件拖入（原生） ---- */
-async function handleDrop(paths: string[]) {
+async function handleDrop(paths: string[], sampled: Promise<ModifierState> | null) {
   accepting.value = false;
-  void ipc.setPodAccept(props.podId, false);
+  setAccept(false);
   if (!pod.value || paths.length === 0) return;
   const action = pod.value.dropAction ?? "ask";
-  const mods = await ipc
-    .getModifierState()
-    .catch(() => ({ ctrl: false, shift: false, alt: false }));
-  let chosen: string | null = null;
+  // Prefer the last sample requested while the native drag was still over the
+  // bar. Reading only after drop races with the user releasing Ctrl/Shift/Alt.
+  const mods = sampled ? await sampled : (modifierSnapshot ?? NO_MODIFIERS);
+  let chosen: ConcreteDropAction | null = null;
   if (mods.ctrl) chosen = "copy";
   else if (mods.shift) chosen = "move";
   else if (mods.alt) chosen = "shortcut";
-  else if (action !== "ask") chosen = action;
+  else if (action !== "ask") chosen = action as ConcreteDropAction;
 
   try {
     if (chosen) {
-      await ipc.stagePaths(props.podId, paths, chosen as never);
+      const result = await ipc.stagePaths(props.podId, paths, chosen);
+      if (result.warnings.length) {
+        const warning = result.warnings[0];
+        console.warn("stage completed with source cleanup warning", result.warnings);
+        void ipc.logFrontend(`暂存警告 ${warning.name}: ${warning.error}`).catch(() => {});
+      }
+      await staging.refresh(props.podId).catch((err) => {
+        console.error("post-stage refresh failed", err);
+      });
     } else {
       await ipc.holdPendingDrop(props.podId, paths);
     }
     // 拖入完成后弹出面板
-    void ipc.showPanel(props.podId);
+    showPanel();
   } catch (err) {
     console.error("stage failed", err);
   }
@@ -95,7 +155,10 @@ async function onHtmlDrop(e: DragEvent) {
     e.preventDefault();
     try {
       await ipc.stageText(props.podId, text);
-      void ipc.showPanel(props.podId);
+      await staging.refresh(props.podId).catch((err) => {
+        console.error("post-text-stage refresh failed", err);
+      });
+      showPanel();
     } catch (err) {
       console.error("stage text failed", err);
     }
@@ -103,56 +166,94 @@ async function onHtmlDrop(e: DragEvent) {
 }
 
 onMounted(async () => {
-  await settingsStore.load();
-  staging.setActivePod(props.podId);
-  await staging.refresh(props.podId);
-  void settingsStore.listenChanges();
-  unlisteners.push(await staging.listenChanges(props.podId));
-
-  /* 原生拖放事件（文件路径） */
-  if (ipc.inTauri) {
-    const { getCurrentWebview } = await import("@tauri-apps/api/webview");
-    unlisteners.push(await getCurrentWebview().onDragDropEvent((event) => {
-      const p = event.payload;
-      if (p.type === "enter") {
-        accepting.value = true;
-        void ipc.setPodAccept(props.podId, true);
-      } else if (p.type === "over") {
-        accepting.value = true;
-      } else if (p.type === "leave") {
-        accepting.value = false;
-        void ipc.setPodAccept(props.podId, false);
-      } else if (p.type === "drop") {
-        accepting.value = false;
-        void ipc.setPodAccept(props.podId, false);
-        void handleDrop(p.paths);
-      }
-    }));
-  }
-
-  /* 剪贴板收集热键：只由本匣处理（事件携带 podId） */
-  unlisteners.push(await listenCurrent<{ podId?: number }>(Events.CollectClipboard, async (p) => {
-    if (!p || (p.podId && p.podId !== props.podId)) return;
-    if (!pod.value) return;
-    try {
-      const { readText } = await import("@tauri-apps/plugin-clipboard-manager");
-      const text = await readText();
-      if (text.trim()) await ipc.stageText(props.podId, text);
-    } catch (err) {
-      console.error("collect clipboard failed", err);
-    }
-  }));
-
-  /* 胶囊短边弹簧 */
+  /* 胶囊短边弹簧要先就绪，避免拖放事件早于初始化完成。 */
   shortSpring = springValue(44, 44, (v) => (short.value = v), {
     response: 0.32,
     damping: 1,
   });
+
+  try {
+    await settingsStore
+      .listenChanges()
+      .catch((err) => console.error("settings listener failed", err));
+    await staging
+      .listenChanges(props.podId)
+      .then(retainUnlistener)
+      .catch((err) => console.error("items listener failed", err));
+    await settingsStore.load();
+    if (!mounted) return;
+    staging.setActivePod(props.podId);
+    await staging.refresh(props.podId);
+    if (!mounted) return;
+  } catch (err) {
+    console.error("pod bar initialization failed", err);
+    return;
+  }
+
+  try {
+    /* 原生拖放事件（文件路径） */
+    if (ipc.inTauri) {
+      const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+      retainUnlistener(await getCurrentWebview().onDragDropEvent((event) => {
+        const p = event.payload;
+        if (p.type === "enter") {
+          clearHoverTimer();
+          accepting.value = true;
+          modifierSnapshot = null;
+          sampleModifiers(true);
+          setAccept(true);
+        } else if (p.type === "over") {
+          accepting.value = true;
+          sampleModifiers();
+        } else if (p.type === "leave") {
+          accepting.value = false;
+          modifierSampleSeq += 1;
+          modifierSnapshot = null;
+          modifierSample = null;
+          setAccept(false);
+        } else if (p.type === "drop") {
+          const sampled = modifierSample;
+          accepting.value = false;
+          setAccept(false);
+          modifierSampleSeq += 1;
+          modifierSnapshot = null;
+          modifierSample = null;
+          void handleDrop(p.paths, sampled);
+        }
+      }));
+    }
+
+    /* 剪贴板收集热键：只由本匣处理（事件携带 podId） */
+    retainUnlistener(await listenCurrent<{ podId?: number }>(Events.CollectClipboard, async (p) => {
+      if (!p || (p.podId && p.podId !== props.podId)) return;
+      if (!pod.value) return;
+      try {
+        const { readText } = await import("@tauri-apps/plugin-clipboard-manager");
+        const text = await readText();
+        if (text.trim()) {
+          await ipc.stageText(props.podId, text);
+          await staging.refresh(props.podId).catch((err) => {
+            console.error("post-clipboard-stage refresh failed", err);
+          });
+        }
+      } catch (err) {
+        console.error("collect clipboard failed", err);
+      }
+    }));
+  } catch (err) {
+    console.error("pod bar event initialization failed", err);
+  }
 });
 
 onBeforeUnmount(() => {
-  window.clearTimeout(hoverTimeout);
+  mounted = false;
+  clearHoverTimer();
   shortSpring?.stop();
+  modifierSampleSeq += 1;
+  modifierSnapshot = null;
+  modifierSample = null;
+  setAccept(false);
+  reportPresence(false);
   unlisteners.splice(0).forEach((unlisten) => unlisten());
 });
 </script>
@@ -161,9 +262,14 @@ onBeforeUnmount(() => {
   <div
     class="bar-root"
     :class="`edge-${pod?.edge ?? 'left'}`"
+    role="button"
+    tabindex="0"
+    :aria-label="`打开${pod?.name ?? '匣'}面板`"
     @pointerenter="onPointerEnter"
     @pointerleave="onPointerLeave"
     @click="onClick"
+    @keydown.enter.prevent="onClick"
+    @keydown.space.prevent="onClick"
     @dragover.prevent
     @drop="onHtmlDrop"
   >
@@ -187,6 +293,12 @@ onBeforeUnmount(() => {
   inset: 0;
   overflow: hidden;
   cursor: default;
+}
+.bar-root:focus-visible {
+  outline: none;
+}
+.bar-root:focus-visible .capsule {
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 
 .capsule {

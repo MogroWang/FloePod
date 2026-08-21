@@ -23,15 +23,33 @@ function resolveWindowLabel(): string {
 }
 
 const label = resolveWindowLabel();
-const match = label.match(/^pod_(\d+)(?:_panel)?$/);
-const podId = match ? Number(match[1]) : 1;
+const barMatch = label.match(/^pod_(\d+)$/);
+const panelMatch = label.match(/^pod_(\d+)_panel$/);
+const podId = Number((barMatch ?? panelMatch)?.[1]);
 const view = label === "settings"
   ? SettingsWindow
-  : /^pod_\d+_panel$/.test(label)
+  : panelMatch
     ? PodPanel
-    : PodBar;
+    : barMatch
+      ? PodBar
+      : null;
+const viewProps = Number.isSafeInteger(podId) && podId > 0 ? { podId } : {};
 </script>
 
 <template>
-  <component :is="view" :pod-id="podId" />
+  <component v-if="view" :is="view" v-bind="viewProps" />
+  <main v-else class="window-error" role="alert">
+    无法识别窗口：{{ label }}
+  </main>
 </template>
+
+<style scoped>
+.window-error {
+  box-sizing: border-box;
+  min-height: 100vh;
+  padding: 16px;
+  color: #ffb4ab;
+  background: #211a1a;
+  font: 14px/1.5 system-ui, sans-serif;
+}
+</style>

@@ -37,8 +37,15 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let settings = manager::current_settings(app);
 
     let open_settings = MenuItem::with_id(app, "open_settings", "设置", true, None::<&str>)?;
-    let collect = MenuItem::with_id(app, "collect_clipboard", "收集剪贴板文字", true, None::<&str>)?;
-    let toggle_bars = MenuItem::with_id(app, "toggle_bars", "显示 / 隐藏全部匣", true, None::<&str>)?;
+    let collect = MenuItem::with_id(
+        app,
+        "collect_clipboard",
+        "收集剪贴板文字",
+        true,
+        None::<&str>,
+    )?;
+    let toggle_bars =
+        MenuItem::with_id(app, "toggle_bars", "显示 / 隐藏全部匣", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出浮匣", true, None::<&str>)?;
 
     let mut menu = MenuBuilder::new(app).item(&open_settings);
@@ -70,7 +77,12 @@ pub fn refresh_menu(app: &AppHandle) {
 fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     match event.id().as_ref() {
         "open_settings" => manager::open_settings(app),
-        "toggle_bars" => toggle_bars(app),
+        "toggle_bars" => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                toggle_bars(&app);
+            });
+        }
         "collect_clipboard" => {
             if let Some(id) = crate::hotkeys::collect_into_first_pod(app) {
                 let _ = app.emit_to(
@@ -84,7 +96,10 @@ fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         id => {
             if let Some(id_str) = id.strip_prefix("pod:") {
                 if let Ok(pid) = id_str.parse::<u64>() {
-                    manager::toggle_panel(app, pid);
+                    let app = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        manager::toggle_panel(&app, pid);
+                    });
                 }
             }
         }

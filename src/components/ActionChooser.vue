@@ -3,7 +3,9 @@
 import { computed } from "vue";
 import type { DropAction } from "@/types";
 
-const props = defineProps<{ paths: string[] }>();
+const props = withDefaults(defineProps<{ paths: string[]; busy?: boolean }>(), {
+  busy: false,
+});
 const emit = defineEmits<{
   (e: "choose", action: DropAction, remember: boolean): void;
   (e: "cancel"): void;
@@ -25,18 +27,30 @@ const extra = computed(() => names.value.length - shown.value.length);
     </ul>
 
     <div class="chooser-actions">
-      <button type="button" class="act primary" @pointerdown="emit('choose', 'copy', remember)">
+      <button
+        type="button"
+        class="act primary"
+        :disabled="busy"
+        @click="emit('choose', 'copy', remember)"
+      >
         复制
       </button>
-      <button type="button" class="act" @pointerdown="emit('choose', 'move', remember)">移动</button>
-      <button type="button" class="act" @pointerdown="emit('choose', 'shortcut', remember)">
+      <button type="button" class="act" :disabled="busy" @click="emit('choose', 'move', remember)">
+        移动
+      </button>
+      <button
+        type="button"
+        class="act"
+        :disabled="busy"
+        @click="emit('choose', 'shortcut', remember)"
+      >
         创建快捷方式
       </button>
-      <button type="button" class="act ghost" @pointerdown="emit('cancel')">取消</button>
+      <button type="button" class="act ghost" :disabled="busy" @click="emit('cancel')">取消</button>
     </div>
 
     <label class="remember">
-      <input v-model="remember" type="checkbox" />
+      <input v-model="remember" type="checkbox" :disabled="busy" />
       <span>记住选择，之后不再询问（可在设置中改回）</span>
     </label>
   </div>
@@ -94,6 +108,11 @@ const extra = computed(() => names.value.length - shown.value.length);
 }
 .act:active {
   transform: scale(0.98);
+}
+.act:disabled {
+  cursor: wait;
+  opacity: 0.58;
+  transform: none;
 }
 .act:hover {
   background: var(--surface-2);

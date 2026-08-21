@@ -13,21 +13,24 @@ const KEY_LABELS: Record<string, string> = {
   Shift: "Shift",
   Command: "Cmd",
   Meta: "Win",
-  ArrowUp: "↑",
-  ArrowDown: "↓",
-  ArrowLeft: "←",
-  ArrowRight: "→",
+  ArrowUp: "ArrowUp",
+  ArrowDown: "ArrowDown",
+  ArrowLeft: "ArrowLeft",
+  ArrowRight: "ArrowRight",
+  " ": "Space",
 };
 
 function toCombo(e: KeyboardEvent): string | null {
   if (!e.ctrlKey && !e.altKey && !e.metaKey) return null; // 必须带修饰键
   if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return null; // 只按了修饰键
+  if (["Dead", "Process", "Unidentified"].includes(e.key)) return null;
   let main = e.key;
   if (main.length === 1) main = main.toUpperCase();
   const mods: string[] = [];
   if (e.ctrlKey) mods.push("Ctrl");
   if (e.altKey) mods.push("Alt");
   if (e.shiftKey) mods.push("Shift");
+  if (e.metaKey) mods.push("Super");
   return [...mods, KEY_LABELS[main] ?? main].join("+");
 }
 
@@ -51,7 +54,8 @@ function onKeydown(e: KeyboardEvent) {
     type="button"
     class="hk"
     :class="{ recording, disabled }"
-    @pointerdown="!disabled && (recording = true)"
+    :disabled="disabled"
+    @click="recording = true"
     @keydown="recording && onKeydown($event)"
     @blur="recording = false"
   >

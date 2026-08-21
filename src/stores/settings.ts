@@ -4,6 +4,7 @@ import { Events, listen } from "@/lib/events";
 import type { Pod, Settings, ThemeMode } from "@/types";
 
 let changesListening = false;
+let changesListenPromise: Promise<void> | null = null;
 let systemThemeWatching = false;
 
 function resolvedTheme(mode: ThemeMode, systemDark: boolean): "light" | "dark" {
@@ -34,6 +35,7 @@ export const useSettingsStore = defineStore("settings", {
     monitors: [] as import("@/types").MonitorInfo[],
     systemDark: window.matchMedia("(prefers-color-scheme: dark)").matches,
     dark: window.matchMedia("(prefers-color-scheme: dark)").matches,
+    bootstrapSeq: 0,
   }),
 
   getters: {
@@ -42,7 +44,9 @@ export const useSettingsStore = defineStore("settings", {
 
   actions: {
     async load() {
+      const request = ++this.bootstrapSeq;
       const boot = await ipc.getBootstrap();
+      if (request !== this.bootstrapSeq) return;
       this.monitors = boot.monitors;
       this.apply(boot.settings);
       void this.watchSystemTheme();
@@ -57,14 +61,17 @@ export const useSettingsStore = defineStore("settings", {
     },
 
     async refreshPods() {
+      const request = ++this.bootstrapSeq;
       const boot = await ipc.getBootstrap();
+      if (request !== this.bootstrapSeq) return;
       this.monitors = boot.monitors;
       this.apply(boot.settings);
     },
 
     async save(patch: Partial<Settings>) {
+      const request = ++this.bootstrapSeq;
       const next = await ipc.saveSettings(patch);
-      this.apply(next);
+      if (request === this.bootstrapSeq) this.apply(next);
       return next;
     },
 
@@ -97,7 +104,9 @@ export const useSettingsStore = defineStore("settings", {
           const current = getCurrentWindow();
           const initial = await current.theme();
           if (initial && this.settings?.theme === "system") update(initial === "dark");
-          await current.onThemeChanged(({ payload }) => update(payload === "dark"));
+          await current.onThemeChanged(({ payload }) => {
+            if (this.settings?.theme === "system") update(payload === "dark");
+          });
         } catch (err) {
           console.warn("system theme listener unavailable", err);
         }
@@ -106,11 +115,33 @@ export const useSettingsStore = defineStore("settings", {
 
     async listenChanges() {
       if (changesListening) return;
-      changesListening = true;
-      await Promise.all([
-        listen<Settings>(Events.SettingsChanged, (settings) => this.apply(settings)),
-        listen<void>(Events.PodsChanged, () => void this.refreshPods()),
-      ]);
+      if (changesListenPromise) return changesListenPromise;
+      changesListenPromise = (async () => {
+        const registrations = await Promise.allSettled([
+          listen<Settings>(Events.SettingsChanged, (settings) => {
+            this.bootstrapSeq += 1;
+            this.apply(settings);
+          }),
+          listen<void>(Events.PodsChanged, () => {
+            void this.refreshPods().catch((err) => console.error("pod refresh failed", err));
+          }),
+        ]);
+        const failed = registrations.find(
+          (result): result is PromiseRejectedResult => result.status === "rejected",
+        );
+        if (failed) {
+          for (const result of registrations) {
+            if (result.status === "fulfilled") result.value();
+          }
+          throw failed.reason;
+        }
+        changesListening = true;
+      })();
+      try {
+        await changesListenPromise;
+      } finally {
+        changesListenPromise = null;
+      }
     },
   },
 });

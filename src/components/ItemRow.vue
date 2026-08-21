@@ -3,7 +3,7 @@
  * 条目行：缩略图 + 名称 + 元信息；悬停显示操作；
  * 拖拽（移动超过阈值）发起 OS 拖出；点选 / Ctrl 点选 / Shift 范围选；双击打开。
  */
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, ref } from "vue";
 import type { StagedItem } from "@/types";
 import { formatSize, formatTime, kindLabel } from "@/lib/format";
 import ThumbImg from "./ThumbImg.vue";
@@ -23,6 +23,7 @@ const emit = defineEmits<{
 }>();
 
 const dragArmed = ref(false);
+let stopPointerTracking: (() => void) | null = null;
 
 const meta = computed(() => {
   const parts: string[] = [];
@@ -39,12 +40,17 @@ function onPointerDown(e: PointerEvent) {
   if (e.button !== 0) return;
   const target = e.target as HTMLElement;
   if (target.closest("button")) return;
+  // A native OLE drag normally returns without dispatching a click to this row.
+  // Keep the flag long enough to absorb a synthetic click from that gesture, but
+  // clear it on the next real pointer gesture so an ordinary later click is not lost.
   dragArmed.value = false;
   const startX = e.clientX;
   const startY = e.clientY;
   let reported = false;
+  const pointerId = e.pointerId;
 
   const move = (ev: PointerEvent) => {
+    if (ev.pointerId !== pointerId) return;
     const dx = ev.clientX - startX;
     const dy = ev.clientY - startY;
     if (!reported && Math.hypot(dx, dy) > 6) {
@@ -57,9 +63,16 @@ function onPointerDown(e: PointerEvent) {
   const cleanup = () => {
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", cleanup);
+    window.removeEventListener("pointercancel", cleanup);
+    window.removeEventListener("blur", cleanup);
+    stopPointerTracking = null;
   };
+  stopPointerTracking?.();
+  stopPointerTracking = cleanup;
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", cleanup);
+  window.addEventListener("pointercancel", cleanup);
+  window.addEventListener("blur", cleanup);
 }
 
 function onClick(e: MouseEvent) {
@@ -67,18 +80,35 @@ function onClick(e: MouseEvent) {
     dragArmed.value = false;
     return;
   }
-  const mode = e.ctrlKey ? "toggle" : e.shiftKey ? "range" : "set";
+  const mode = e.shiftKey ? "range" : e.ctrlKey ? "toggle" : "set";
   emit("select", props.item.id, mode);
 }
+
+function onKeydown(e: KeyboardEvent) {
+  if ((e.target as HTMLElement).closest("button")) return;
+  if (e.key === "Enter") {
+    e.preventDefault();
+    emit("open", props.item);
+  } else if (e.key === " ") {
+    e.preventDefault();
+    emit("select", props.item.id, e.shiftKey ? "range" : "toggle");
+  }
+}
+
+onBeforeUnmount(() => stopPointerTracking?.());
 </script>
 
 <template>
   <div
     class="item-row"
     :class="{ selected }"
+    role="option"
+    tabindex="0"
+    :aria-selected="selected"
     @pointerdown="onPointerDown"
     @click="onClick"
     @dblclick="emit('open', item)"
+    @keydown="onKeydown"
   >
     <div class="check" :class="{ on: selected }">
       <svg v-if="selected" width="9" height="9" viewBox="0 0 10 10" fill="none">
@@ -91,12 +121,12 @@ function onClick(e: MouseEvent) {
       <div class="item-meta">{{ meta }}</div>
     </div>
     <div class="row-actions">
-      <button type="button" class="icon-btn" title="打开所在位置" @pointerdown.stop @click.stop="emit('reveal', item)">
+      <button type="button" class="icon-btn" title="打开所在位置" aria-label="打开所在位置" @pointerdown.stop @click.stop="emit('reveal', item)">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <path d="M10 14 20 4M14 4h6v6M11 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-5" />
         </svg>
       </button>
-      <button type="button" class="icon-btn danger" title="移出暂存" @pointerdown.stop @click.stop="emit('remove', item)">
+      <button type="button" class="icon-btn danger" title="移出暂存" aria-label="移出暂存" @pointerdown.stop @click.stop="emit('remove', item)">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
           <path d="M5 7h14M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m3 0-1 13a1.5 1.5 0 0 1-1.5 1.4h-7A1.5 1.5 0 0 1 6.5 20L5.5 7" />
         </svg>
@@ -119,6 +149,10 @@ function onClick(e: MouseEvent) {
 .item-row:hover {
   background: var(--surface-2);
 }
+.item-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
 .item-row.selected {
   background: var(--accent-soft);
 }
@@ -135,6 +169,7 @@ function onClick(e: MouseEvent) {
   opacity: 0;
 }
 .item-row:hover .check,
+.item-row:focus-within .check,
 .item-row.selected .check {
   opacity: 1;
 }
@@ -170,7 +205,8 @@ function onClick(e: MouseEvent) {
   opacity: 0;
   transition: opacity 130ms ease;
 }
-.item-row:hover .row-actions {
+.item-row:hover .row-actions,
+.item-row:focus-within .row-actions {
   opacity: 1;
 }
 .icon-btn {

@@ -5,7 +5,7 @@
  * 排版原则：单一强调色、层级靠字号与留白、分区标题建立可扫视结构、
  * 进入/切换动画统一使用出程缓动（--ease-out）。
  */
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { ipc } from "@/lib/ipc";
 import { useSettingsStore } from "@/stores/settings";
 import SegmentedControl from "@/components/SegmentedControl.vue";
@@ -13,7 +13,7 @@ import ToggleSwitch from "@/components/ToggleSwitch.vue";
 import SettingsRow from "@/components/SettingsRow.vue";
 import HotkeyRecorder from "@/components/HotkeyRecorder.vue";
 import BrandMark from "@/components/BrandMark.vue";
-import type { Edge, Material, Pod, ThemeMode } from "@/types";
+import type { DropAction, Edge, Material, Pod, ThemeMode } from "@/types";
 
 const settingsStore = useSettingsStore();
 const s = computed(() => settingsStore.settings);
@@ -22,6 +22,16 @@ const monitors = computed(() => settingsStore.monitors);
 const page = ref<"general" | "pods" | "hotkeys" | "about">("general");
 const toast = ref("");
 const hotkeyError = ref("");
+const loading = ref(true);
+const loadError = ref("");
+const addPodBusy = ref(false);
+const autostartBusy = ref(false);
+const deletingPodIds = reactive(new Set<number>());
+const podEnabledBusyIds = reactive(new Set<number>());
+let toastTimer: number | undefined;
+let settingsSaveTail: Promise<void> = Promise.resolve();
+const podSaveTails = new Map<number, Promise<void>>();
+let hotkeySaveRevision = 0;
 
 /* ---------- OOBE ---------- */
 const oobeDone = ref(false);
@@ -42,6 +52,9 @@ const oobe = ref({
   material: "acrylic" as Material,
 });
 const oobeBusy = ref(false);
+const oobeCreateStarted = ref(false);
+let oobeCreatePromise: Promise<Pod> | null = null;
+let oobeCreatedPod: Pod | null = null;
 
 const EDGES: { value: Edge; label: string }[] = [
   { value: "top", label: "上" },
@@ -50,7 +63,7 @@ const EDGES: { value: Edge; label: string }[] = [
   { value: "left", label: "左" },
 ];
 
-const DROP_ACTIONS: { value: string; label: string }[] = [
+const DROP_ACTIONS: { value: DropAction; label: string }[] = [
   { value: "ask", label: "询问" },
   { value: "copy", label: "复制" },
   { value: "move", label: "移动" },
@@ -84,11 +97,12 @@ function edgeLabel(edge: string): string {
 
 function showToast(msg: string) {
   toast.value = msg;
-  window.setTimeout(() => (toast.value = ""), 2400);
+  window.clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => (toast.value = ""), 2400);
 }
 
 function appLog(msg: string) {
-  void ipc.appLog(msg);
+  void ipc.appLog(msg).catch((err) => console.warn("app log failed", err));
 }
 
 /** 带超时的等待：Promise 15 秒不返回则抛错，避免永远卡在「创建中」 */
@@ -109,43 +123,180 @@ function withTimeout<T>(p: Promise<T>, label: string, ms = 15000): Promise<T> {
 }
 
 /* ---------- 通用 ---------- */
-async function save(patch: Parameters<typeof settingsStore.save>[0]) {
+type SettingsPatch = Parameters<typeof settingsStore.save>[0];
+type SettingsPatchSource = SettingsPatch | (() => SettingsPatch);
+
+function enqueueSettingsSave(source: SettingsPatchSource) {
+  // Producers are evaluated only when their turn starts. This matters for
+  // nested settings such as hotkeys: two rapid edits must merge with the result
+  // of the previous queued save, not both clone the same stale object.
+  const request = settingsSaveTail.then(() =>
+    settingsStore.save(typeof source === "function" ? source() : source),
+  );
+  settingsSaveTail = request.then(
+    () => undefined,
+    () => undefined,
+  );
+  return request;
+}
+
+async function save(patch: SettingsPatch): Promise<boolean> {
   try {
-    await settingsStore.save(patch);
+    await enqueueSettingsSave(patch);
+    return true;
   } catch (err) {
     console.error(err);
     showToast("保存失败，请重试");
+    return false;
+  }
+}
+
+async function saveAutostart(enabled: boolean) {
+  if (autostartBusy.value) return;
+  autostartBusy.value = true;
+  try {
+    await save({ autostart: enabled });
+  } finally {
+    autostartBusy.value = false;
   }
 }
 
 async function pickFolder(): Promise<string | null> {
-  const { open } = await import("@tauri-apps/plugin-dialog");
-  const dir = await open({ directory: true, multiple: false, title: "选择暂存文件夹" });
-  return typeof dir === "string" ? dir : null;
+  if (!ipc.inTauri) return "D:\\浮匣暂存（浏览器预览）";
+  try {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const dir = await open({ directory: true, multiple: false, title: "选择暂存文件夹" });
+    return typeof dir === "string" ? dir : null;
+  } catch (err) {
+    console.error("folder picker failed", err);
+    showToast("无法打开文件夹选择器");
+    return null;
+  }
 }
 
 async function openPodFolder(pod: Pod) {
   if (!pod.stagingFolder) return;
-  const { openPath } = await import("@tauri-apps/plugin-opener");
-  await openPath(pod.stagingFolder);
+  if (!ipc.inTauri) {
+    showToast(`浏览器预览：${pod.stagingFolder}`);
+    return;
+  }
+  try {
+    const { openPath } = await import("@tauri-apps/plugin-opener");
+    await openPath(pod.stagingFolder);
+  } catch (err) {
+    console.error("open pod folder failed", err);
+    showToast("无法打开暂存文件夹");
+  }
 }
 
-async function savePod(id: number, patch: Partial<Pod>) {
-  try {
-    await ipc.updatePod(id, patch);
+async function chooseOobeFolder() {
+  const folder = await pickFolder();
+  if (folder) oobe.value.folder = folder;
+}
+
+async function changePodFolder(pod: Pod) {
+  const folder = await pickFolder();
+  if (folder) await savePod(pod.id, { stagingFolder: folder });
+}
+
+function enqueuePodSave(id: number, patch: Partial<Pod>) {
+  const previous = podSaveTails.get(id) ?? Promise.resolve();
+  const request = previous.then(async () => {
+    const updated = await ipc.updatePod(id, patch);
     await settingsStore.refreshPods();
+    return updated;
+  });
+  const tail = request.then(
+    () => undefined,
+    () => undefined,
+  );
+  podSaveTails.set(id, tail);
+  void tail.then(() => {
+    if (podSaveTails.get(id) === tail) podSaveTails.delete(id);
+  });
+  return request;
+}
+
+async function savePod(id: number, patch: Partial<Pod>): Promise<boolean> {
+  try {
+    await enqueuePodSave(id, patch);
+    return true;
   } catch (err) {
     console.error(err);
+    await settingsStore.refreshPods().catch((refreshError) => {
+      console.error("pod rollback refresh failed", refreshError);
+    });
     showToast("保存失败，请重试");
+    return false;
+  }
+}
+
+async function savePodEnabled(pod: Pod, enabled: boolean) {
+  if (podEnabledBusyIds.has(pod.id)) return;
+  podEnabledBusyIds.add(pod.id);
+  try {
+    await savePod(pod.id, { enabled });
+  } finally {
+    podEnabledBusyIds.delete(pod.id);
+  }
+}
+
+type PodNumberField = "offset" | "opacity" | "panelWidth" | "hoverDelayMs";
+const podNumberDrafts = reactive<Record<number, Partial<Record<PodNumberField, number>>>>({});
+const podNameDrafts = reactive<Record<number, string>>({});
+
+function podNumberValue(pod: Pod, field: PodNumberField): number {
+  return podNumberDrafts[pod.id]?.[field] ?? pod[field];
+}
+
+function previewPodNumber(id: number, field: PodNumberField, event: Event) {
+  const value = Number((event.target as HTMLInputElement).value);
+  const draft = (podNumberDrafts[id] ??= {});
+  draft[field] = value;
+}
+
+async function commitPodNumber(pod: Pod, field: PodNumberField, event: Event) {
+  previewPodNumber(pod.id, field, event);
+  const value = podNumberDrafts[pod.id]?.[field];
+  if (value == null) return;
+  await savePod(pod.id, { [field]: value });
+  // Do not clear a newer value entered while this request was queued.
+  if (podNumberDrafts[pod.id]?.[field] === value) {
+    delete podNumberDrafts[pod.id]?.[field];
+    if (Object.keys(podNumberDrafts[pod.id] ?? {}).length === 0) delete podNumberDrafts[pod.id];
+  }
+}
+
+function previewPodName(id: number, event: Event) {
+  podNameDrafts[id] = (event.target as HTMLInputElement).value;
+}
+
+async function commitPodName(pod: Pod, event: Event) {
+  previewPodName(pod.id, event);
+  const value = podNameDrafts[pod.id];
+  if (value == null) return;
+  if (value !== pod.name) await savePod(pod.id, { name: value });
+  // Clearing the controlled draft also restores the persisted value on error.
+  if (podNameDrafts[pod.id] === value) delete podNameDrafts[pod.id];
+}
+
+async function commitPodMonitor(pod: Pod, event: Event) {
+  const select = event.target as HTMLSelectElement;
+  const value = select.value;
+  const saved = await savePod(pod.id, { monitor: value });
+  if (!saved && select.value === value) {
+    select.value = settingsStore.pod(pod.id)?.monitor ?? pod.monitor;
   }
 }
 
 async function addPod() {
-  const folder = await pickFolder();
-  if (!folder) return;
-  const n = s.value?.pods.length ?? 0;
-  const edge = (["left", "right", "top", "bottom"] as Edge[])[n % 4];
+  if (addPodBusy.value) return;
+  addPodBusy.value = true;
   try {
+    const folder = await pickFolder();
+    if (!folder) return;
+    const n = s.value?.pods.length ?? 0;
+    const edge = (["left", "right", "top", "bottom"] as Edge[])[n % 4];
     await ipc.createPod({
       name: `匣 ${n + 1}`,
       edge,
@@ -164,27 +315,128 @@ async function addPod() {
   } catch (err) {
     console.error(err);
     showToast("创建失败，请重试");
+  } finally {
+    addPodBusy.value = false;
   }
 }
 
 async function removePod(pod: Pod) {
-  const { ask } = await import("@tauri-apps/plugin-dialog");
-  const ok = await ask(
-    `删除「${pod.name}」？其中的暂存文件会一并移入回收站。`,
-    { title: "删除匣", kind: "warning" },
-  );
-  if (!ok) return;
+  if (deletingPodIds.has(pod.id)) return;
+  deletingPodIds.add(pod.id);
   try {
+    const message = `删除「${pod.name}」？其中的暂存文件会一并移入回收站。`;
+    const ok = ipc.inTauri
+      ? await import("@tauri-apps/plugin-dialog").then(({ ask }) =>
+          ask(message, { title: "删除匣", kind: "warning" }),
+        )
+      : window.confirm(message);
+    if (!ok) return;
     await ipc.deletePod(pod.id, true);
     await settingsStore.refreshPods();
     showToast("已删除");
   } catch (err) {
     console.error(err);
     showToast("删除失败，请重试");
+  } finally {
+    deletingPodIds.delete(pod.id);
   }
 }
 
 /* ---------- OOBE 完成 ---------- */
+function oobePodConfig(): Omit<Pod, "id"> {
+  return {
+    name: oobe.value.name || "我的匣",
+    edge: oobe.value.edge,
+    monitor: oobe.value.monitor,
+    offset: 0.5,
+    stagingFolder: oobe.value.folder,
+    opacity: Number(oobe.value.opacity),
+    material: oobe.value.material,
+    panelWidth: 380,
+    hoverDelayMs: 120,
+    dropAction: "ask",
+    enabled: true,
+  };
+}
+
+/**
+ * Windows 路径身份的前端词法兜底。真实的目录身份仍由 Rust 端负责；这里仅用于
+ * OOBE 在“创建已提交、响应或 firstRunDone 保存失败”后的 UI 对账。
+ *
+ * 统一大小写、分隔符、重复/尾部分隔符和 `.` 组件。刻意保留 `..`，因为前端
+ * 无法在不访问文件系统的前提下安全解析一个可能尚不存在的路径。
+ */
+function normalizeWindowsPathKey(input: string): string {
+  const source = input.trim().replace(/\//g, "\\");
+  if (!source) return "";
+
+  const isUnc = source.startsWith("\\\\");
+  const isDriveRoot = /^[a-zA-Z]:\\+$/.test(source);
+  const parts = source
+    .split("\\")
+    .filter((part) => part !== "" && part !== ".");
+  let normalized = parts.join("\\");
+  if (isUnc) normalized = `\\\\${normalized}`;
+  else if (isDriveRoot && /^[a-zA-Z]:$/.test(normalized)) normalized += "\\";
+  return normalized.toLowerCase();
+}
+
+function findOobePodByFolder(): Pod | undefined {
+  const folderKey = normalizeWindowsPathKey(oobe.value.folder);
+  if (!folderKey) return undefined;
+  return s.value?.pods.find(
+    (pod) => normalizeWindowsPathKey(pod.stagingFolder) === folderKey,
+  );
+}
+
+function ensureOobePod(): Promise<Pod> {
+  if (oobeCreatedPod) return Promise.resolve(oobeCreatedPod);
+  if (oobeCreatePromise) return oobeCreatePromise;
+
+  // If a previous app session created the pod but timed out before firstRunDone
+  // was persisted, reuse it on the next attempt instead of duplicating it.
+  const existing = findOobePodByFolder();
+  if (existing) {
+    oobeCreatedPod = existing;
+    oobeCreateStarted.value = true;
+    return Promise.resolve(existing);
+  }
+
+  oobeCreateStarted.value = true;
+  // Only OOBE retries are idempotent. The normal “new pod” flow must still report a
+  // duplicate folder instead of claiming that an existing pod was newly created.
+  const request = ipc.createPod(oobePodConfig(), true);
+  let operation!: Promise<Pod>;
+  operation = request.then(
+    (pod) => {
+      oobeCreatedPod = pod;
+      return pod;
+    },
+    async (err) => {
+      // A transport rejection does not prove that the backend failed before
+      // committing. Reconcile once before making a retry eligible, otherwise a
+      // completed-but-disconnected create can produce a duplicate pod.
+      await settingsStore.refreshPods().catch((refreshError) => {
+        console.error("OOBE create reconciliation failed", refreshError);
+      });
+      const existingAfterFailure = findOobePodByFolder();
+      if (existingAfterFailure) {
+        oobeCreatedPod = existingAfterFailure;
+        return existingAfterFailure;
+      }
+      // A timed-out older operation may finish after the user has already started a
+      // newer retry. It must never clear the newer in-flight promise or busy state.
+      if (oobeCreatePromise === operation) {
+        oobeCreatePromise = null;
+        oobeCreateStarted.value = false;
+      }
+      throw err;
+    },
+  );
+  oobeCreatePromise = operation;
+  return operation;
+}
+
 async function finishOobe() {
   if (oobeBusy.value) return;
   if (!oobe.value.folder) {
@@ -194,23 +446,8 @@ async function finishOobe() {
   oobeBusy.value = true;
   appLog("finishOobe 开始");
   try {
-    appLog("finishOobe: 调用 createPod");
-    await withTimeout(
-      ipc.createPod({
-        name: oobe.value.name || "我的匣",
-        edge: oobe.value.edge,
-        monitor: oobe.value.monitor,
-        offset: 0.5,
-        stagingFolder: oobe.value.folder,
-        opacity: Number(oobe.value.opacity),
-        material: oobe.value.material,
-        panelWidth: 380,
-        hoverDelayMs: 120,
-        dropAction: "ask",
-        enabled: true,
-      }),
-      "createPod",
-    );
+    appLog("finishOobe: 获取或创建 Pod");
+    await withTimeout(ensureOobePod(), "createPod");
     appLog("finishOobe: createPod 完成");
     await withTimeout(
       ipc.saveSettings({ theme: oobe.value.theme, firstRunDone: true }),
@@ -224,6 +461,20 @@ async function finishOobe() {
   } catch (err) {
     console.error("finishOobe failed", err);
     appLog(`finishOobe 失败: ${err}`);
+    // A timeout does not settle the underlying IPC promise. Reconcile first, then make
+    // another click eligible; create_pod's OOBE-only reuseExisting flag makes a late
+    // first response and a retry converge on the same folder instead of duplicating it.
+    if (String(err).includes("createPod 超时")) {
+      await settingsStore.refreshPods().catch((refreshError) => {
+        console.error("OOBE timeout reconciliation failed", refreshError);
+      });
+      const existingAfterTimeout = findOobePodByFolder();
+      if (existingAfterTimeout) oobeCreatedPod = existingAfterTimeout;
+      else {
+        oobeCreatePromise = null;
+        oobeCreateStarted.value = false;
+      }
+    }
     showToast(`创建失败：${err}`);
   } finally {
     oobeBusy.value = false;
@@ -241,46 +492,116 @@ function nextFromStep2() {
 
 /* ---------- 快捷键 ---------- */
 async function saveHotkey(key: "toggleBar" | "collectClipboard" | "openPanel", combo: string) {
+  const revision = ++hotkeySaveRevision;
   hotkeyError.value = "";
-  const next = { ...s.value!.hotkeys, [key]: combo };
   try {
-    await settingsStore.save({ hotkeys: next });
+    await enqueueSettingsSave(() => ({
+      hotkeys: { ...s.value!.hotkeys, [key]: combo },
+    }));
+    if (revision === hotkeySaveRevision) hotkeyError.value = "";
   } catch (err) {
+    if (revision !== hotkeySaveRevision) return;
     hotkeyError.value = `快捷键「${combo}」注册失败，可能与其他软件冲突`;
     showToast(hotkeyError.value);
   }
 }
 
 async function resetHotkeys() {
-  const defaults = await ipc.getHotkeyDefaults();
-  await settingsStore.save({ hotkeys: defaults }).catch(() => showToast("重置失败"));
+  const revision = ++hotkeySaveRevision;
+  try {
+    const defaults = await ipc.getHotkeyDefaults();
+    // 获取默认值本身也是异步的；若此时用户已经录入了更新的快捷键，旧的
+    // “重置”意图不能晚到并排在新值之后覆盖它。
+    if (revision !== hotkeySaveRevision) return;
+    await enqueueSettingsSave({ hotkeys: defaults });
+    if (revision === hotkeySaveRevision) {
+      hotkeyError.value = "";
+      showToast("已恢复默认快捷键");
+    }
+  } catch (err) {
+    if (revision !== hotkeySaveRevision) return;
+    console.error("reset hotkeys failed", err);
+    showToast("重置失败，请重试");
+  }
 }
 
 /* ---------- 自绘标题栏 ---------- */
 async function winMinimize() {
   if (!ipc.inTauri) return;
-  const { getCurrentWindow } = await import("@tauri-apps/api/window");
-  await getCurrentWindow().minimize();
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    await getCurrentWindow().minimize();
+  } catch (err) {
+    console.error("minimize settings failed", err);
+  }
 }
 
 async function winClose() {
   if (!ipc.inTauri) return;
-  const { getCurrentWindow } = await import("@tauri-apps/api/window");
-  await getCurrentWindow().hide();
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    await getCurrentWindow().hide();
+  } catch (err) {
+    console.error("hide settings failed", err);
+  }
 }
 
-onMounted(async () => {
-  await settingsStore.load();
-  void settingsStore.listenChanges();
-  appLog(
-    `SettingsWindow mounted | firstRun=${firstRun.value} | pods=${s.value?.pods.length ?? 0} | firstRunDone=${s.value?.firstRunDone}`,
-  );
-  if (firstRun.value) {
-    oobeStep.value = 1;
-  } else {
-    page.value = "general";
+async function quitApp() {
+  try {
+    await ipc.quitApp();
+  } catch (err) {
+    console.error("quit app failed", err);
+    showToast("退出失败，请从托盘重试");
   }
-});
+}
+
+async function loadSettings() {
+  loading.value = true;
+  loadError.value = "";
+  try {
+    // 先订阅再取快照；事件若在 getBootstrap 期间到达，store 的 revision
+    // 会阻止旧快照覆盖事件。
+    await settingsStore.listenChanges().catch((err) => {
+      console.error("settings listener failed", err);
+      showToast("设置实时同步不可用");
+    });
+    await settingsStore.load();
+    appLog(
+      `SettingsWindow mounted | firstRun=${firstRun.value} | pods=${s.value?.pods.length ?? 0} | firstRunDone=${s.value?.firstRunDone}`,
+    );
+    if (firstRun.value) {
+      // If the previous run committed the first pod but exited before persisting
+      // firstRunDone, resume that pod instead of presenting an empty form that can
+      // create a second, unrelated pod after restart.
+      const existing = s.value?.pods[0];
+      if (existing) {
+        oobeCreatedPod = existing;
+        oobeCreateStarted.value = true;
+        oobe.value = {
+          ...oobe.value,
+          name: existing.name,
+          edge: existing.edge,
+          monitor: existing.monitor,
+          folder: existing.stagingFolder,
+          opacity: existing.opacity,
+          material: existing.material,
+        };
+        oobeStep.value = 3;
+      } else {
+        oobeStep.value = 1;
+      }
+    }
+    else page.value = "general";
+  } catch (err) {
+    console.error("settings initialization failed", err);
+    loadError.value = "设置加载失败，请检查数据目录后重试。";
+  } finally {
+    loading.value = false;
+  }
+}
+
+onMounted(() => void loadSettings());
+onBeforeUnmount(() => window.clearTimeout(toastTimer));
 
 const PAGES = [
   { id: "general", label: "常规" },
@@ -291,17 +612,17 @@ const PAGES = [
 </script>
 
 <template>
-  <div class="settings-root" v-if="s">
+  <div class="settings-root">
     <!-- 自绘标题栏 -->
     <div class="titlebar" data-tauri-drag-region>
       <div class="titlebar-title" data-tauri-drag-region>浮匣 设置</div>
       <div class="titlebar-controls">
-        <button type="button" class="tb-btn" title="最小化" @pointerdown="winMinimize">
+        <button type="button" class="tb-btn" title="最小化" @click="winMinimize">
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
             <path d="M2 6h8" />
           </svg>
         </button>
-        <button type="button" class="tb-btn close" title="关闭" @pointerdown="winClose">
+        <button type="button" class="tb-btn close" title="关闭" @click="winClose">
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
             <path d="m3 3 6 6M9 3l-6 6" />
           </svg>
@@ -309,6 +630,15 @@ const PAGES = [
       </div>
     </div>
 
+    <div v-if="loading" class="load-state" role="status" aria-live="polite">
+      正在加载设置…
+    </div>
+    <div v-else-if="loadError" class="load-state error-state" role="alert">
+      <p>{{ loadError }}</p>
+      <button type="button" class="btn primary" @click="loadSettings">重试</button>
+    </div>
+
+    <template v-else-if="s">
     <!-- OOBE 首启引导 -->
     <div v-if="firstRun" class="oobe">
       <div class="oobe-card">
@@ -320,7 +650,7 @@ const PAGES = [
             需要时再把文件从匣的窗口拖出去继续使用。
           </p>
           <p class="oobe-text dim">现在先创建一个「匣」吧。</p>
-          <button type="button" class="btn primary" @pointerdown="oobeStep = 2">开始</button>
+          <button type="button" class="btn primary" @click="oobeStep = 2">开始</button>
         </template>
 
         <template v-else-if="oobeStep === 2">
@@ -345,15 +675,15 @@ const PAGES = [
               <span>保存文件夹</span>
               <div class="folder-line">
                 <input :value="oobe.folder" class="input mono" readonly placeholder="选择存放暂存文件的文件夹" />
-                <button type="button" class="btn" @pointerdown="async () => (oobe.folder = (await pickFolder()) ?? oobe.folder)">
+                <button type="button" class="btn" @click="chooseOobeFolder">
                   选择…
                 </button>
               </div>
             </div>
           </div>
           <div class="oobe-actions">
-            <button type="button" class="btn ghost" @pointerdown="oobeStep = 1">上一步</button>
-            <button type="button" class="btn primary" :disabled="!oobe.folder" @pointerdown="nextFromStep2">下一步</button>
+            <button type="button" class="btn ghost" @click="oobeStep = 1">上一步</button>
+            <button type="button" class="btn primary" :disabled="!oobe.folder" @click="nextFromStep2">下一步</button>
           </div>
         </template>
 
@@ -374,9 +704,16 @@ const PAGES = [
             </label>
           </div>
           <div class="oobe-actions">
-            <button type="button" class="btn ghost" @pointerdown="oobeStep = 2">上一步</button>
-            <button type="button" class="btn primary" :disabled="oobeBusy" @pointerdown="finishOobe">
-              {{ oobeBusy ? "创建中…" : "完成" }}
+            <button
+              type="button"
+              class="btn ghost"
+              :disabled="oobeBusy || oobeCreateStarted"
+              @click="oobeStep = 2"
+            >
+              上一步
+            </button>
+            <button type="button" class="btn primary" :disabled="oobeBusy" @click="finishOobe">
+              {{ oobeBusy ? "创建中…" : oobeCreateStarted ? "重试完成" : "完成" }}
             </button>
           </div>
         </template>
@@ -398,7 +735,8 @@ const PAGES = [
               type="button"
               class="nav-item"
               :class="{ active: page === p.id }"
-              @pointerdown="page = p.id"
+              :aria-current="page === p.id ? 'page' : undefined"
+              @click="page = p.id"
             >
               <svg
                 class="nav-ico"
@@ -429,15 +767,19 @@ const PAGES = [
                 <p class="page-desc">浮匣的整体外观与行为。</p>
                 <div class="settings-card">
                   <SettingsRow label="主题" hint="跟随系统会随 Windows 深浅色自动切换">
-                    <SegmentedControl :options="THEMES" :model-value="s.theme" @update:model-value="(v) => save({ theme: v as never })" />
+                    <SegmentedControl :options="THEMES" :model-value="s.theme" @update:model-value="(v) => save({ theme: v as ThemeMode })" />
                   </SettingsRow>
                   <div class="sep" />
                   <SettingsRow label="开机自启" hint="以托盘常驻方式随 Windows 启动">
-                    <ToggleSwitch :model-value="s.autostart" @update:model-value="(v) => save({ autostart: v })" />
+                    <ToggleSwitch
+                      :model-value="s.autostart"
+                      :disabled="autostartBusy"
+                      @update:model-value="saveAutostart"
+                    />
                   </SettingsRow>
                   <div class="sep" />
                   <SettingsRow label="退出浮匣" hint="关闭所有匣并退出程序（托盘仍可退出）">
-                    <button type="button" class="btn" @pointerdown="ipc.quitApp()">退出</button>
+                    <button type="button" class="btn" @click="quitApp">退出</button>
                   </SettingsRow>
                 </div>
               </template>
@@ -449,25 +791,36 @@ const PAGES = [
                     <h2 class="page-title">匣</h2>
                     <p class="page-desc">每个匣是贴在屏幕边缘的独立暂存点，可分别设置位置、显示器和保存文件夹。</p>
                   </div>
-                  <button type="button" class="btn" @pointerdown="addPod">+ 新建匣</button>
+                  <button type="button" class="btn" :disabled="addPodBusy" @click="addPod">
+                    {{ addPodBusy ? "创建中…" : "+ 新建匣" }}
+                  </button>
                 </div>
 
                 <TransitionGroup name="pod" tag="div" class="pod-list">
                   <div v-for="pod in s.pods" :key="pod.id" class="pod-card" :class="{ off: !pod.enabled }">
                     <div class="pod-head">
                       <input
-                        :value="pod.name"
+                        :value="podNameDrafts[pod.id] ?? pod.name"
                         class="pod-name-input"
                         maxlength="12"
-                        @change="(e) => savePod(pod.id, { name: (e.target as HTMLInputElement).value })"
+                        @input="(e) => previewPodName(pod.id, e)"
+                        @change="(e) => commitPodName(pod, e)"
                       />
                       <span class="pod-edge-tag">{{ edgeLabel(pod.edge) }}</span>
                       <div class="pod-head-ops">
                         <ToggleSwitch
                           :model-value="pod.enabled"
-                          @update:model-value="(v) => savePod(pod.id, { enabled: v })"
+                          :disabled="podEnabledBusyIds.has(pod.id)"
+                          @update:model-value="(v) => savePodEnabled(pod, v)"
                         />
-                        <button type="button" class="op-btn danger" title="删除此匣" @pointerdown="removePod(pod)">
+                        <button
+                          type="button"
+                          class="op-btn danger"
+                          title="删除此匣"
+                          aria-label="删除此匣"
+                          :disabled="deletingPodIds.has(pod.id)"
+                          @click="removePod(pod)"
+                        >
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M5 7h14M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m3 0-1 13a1.5 1.5 0 0 1-1.5 1.4h-7A1.5 1.5 0 0 1 6.5 20L5.5 7" />
                           </svg>
@@ -487,7 +840,11 @@ const PAGES = [
                         <div class="frow">
                           <span class="flabel">显示器</span>
                           <div class="fctrl">
-                            <select :value="pod.monitor" class="input sel" @change="(e) => savePod(pod.id, { monitor: (e.target as HTMLSelectElement).value })">
+                            <select
+                              :value="pod.monitor"
+                              class="input sel"
+                              @change="(e) => commitPodMonitor(pod, e)"
+                            >
                               <option value="">主显示器</option>
                               <option v-for="m in monitors" :key="m.name" :value="m.name">{{ m.label }}</option>
                             </select>
@@ -496,8 +853,17 @@ const PAGES = [
                         <div class="frow">
                           <span class="flabel">沿边缘位置</span>
                           <div class="fctrl">
-                            <input type="range" class="slider" min="0" max="1" step="0.01" :value="pod.offset" @input="(e) => savePod(pod.id, { offset: Number((e.target as HTMLInputElement).value) })" />
-                            <span class="fval">{{ Math.round(pod.offset * 100) }}%</span>
+                            <input
+                              type="range"
+                              class="slider"
+                              min="0"
+                              max="1"
+                              step="0.01"
+                              :value="podNumberValue(pod, 'offset')"
+                              @input="(e) => previewPodNumber(pod.id, 'offset', e)"
+                              @change="(e) => commitPodNumber(pod, 'offset', e)"
+                            />
+                            <span class="fval">{{ Math.round(podNumberValue(pod, "offset") * 100) }}%</span>
                           </div>
                         </div>
                       </div>
@@ -507,8 +873,17 @@ const PAGES = [
                         <div class="frow">
                           <span class="flabel">不透明度</span>
                           <div class="fctrl">
-                            <input type="range" class="slider" min="0.55" max="1" step="0.05" :value="pod.opacity" @input="(e) => savePod(pod.id, { opacity: Number((e.target as HTMLInputElement).value) })" />
-                            <span class="fval">{{ Math.round(pod.opacity * 100) }}%</span>
+                            <input
+                              type="range"
+                              class="slider"
+                              min="0.55"
+                              max="1"
+                              step="0.05"
+                              :value="podNumberValue(pod, 'opacity')"
+                              @input="(e) => previewPodNumber(pod.id, 'opacity', e)"
+                              @change="(e) => commitPodNumber(pod, 'opacity', e)"
+                            />
+                            <span class="fval">{{ Math.round(podNumberValue(pod, "opacity") * 100) }}%</span>
                           </div>
                         </div>
                         <div class="frow">
@@ -524,15 +899,33 @@ const PAGES = [
                         <div class="frow">
                           <span class="flabel">面板宽度</span>
                           <div class="fctrl">
-                            <input type="range" class="slider" min="300" max="520" step="10" :value="pod.panelWidth" @input="(e) => savePod(pod.id, { panelWidth: Number((e.target as HTMLInputElement).value) })" />
-                            <span class="fval">{{ pod.panelWidth }}px</span>
+                            <input
+                              type="range"
+                              class="slider"
+                              min="300"
+                              max="520"
+                              step="10"
+                              :value="podNumberValue(pod, 'panelWidth')"
+                              @input="(e) => previewPodNumber(pod.id, 'panelWidth', e)"
+                              @change="(e) => commitPodNumber(pod, 'panelWidth', e)"
+                            />
+                            <span class="fval">{{ podNumberValue(pod, "panelWidth") }}px</span>
                           </div>
                         </div>
                         <div class="frow">
                           <span class="flabel">悬停展开延迟</span>
                           <div class="fctrl">
-                            <input type="range" class="slider" min="0" max="400" step="20" :value="pod.hoverDelayMs" @input="(e) => savePod(pod.id, { hoverDelayMs: Number((e.target as HTMLInputElement).value) })" />
-                            <span class="fval">{{ pod.hoverDelayMs }}ms</span>
+                            <input
+                              type="range"
+                              class="slider"
+                              min="0"
+                              max="400"
+                              step="20"
+                              :value="podNumberValue(pod, 'hoverDelayMs')"
+                              @input="(e) => previewPodNumber(pod.id, 'hoverDelayMs', e)"
+                              @change="(e) => commitPodNumber(pod, 'hoverDelayMs', e)"
+                            />
+                            <span class="fval">{{ podNumberValue(pod, "hoverDelayMs") }}ms</span>
                           </div>
                         </div>
                       </div>
@@ -542,15 +935,15 @@ const PAGES = [
                         <div class="frow">
                           <span class="flabel">落地动作</span>
                           <div class="fctrl">
-                            <SegmentedControl :options="DROP_ACTIONS" :model-value="pod.dropAction" @update:model-value="(v) => savePod(pod.id, { dropAction: v as never })" />
+                            <SegmentedControl :options="DROP_ACTIONS" :model-value="pod.dropAction" @update:model-value="(v) => savePod(pod.id, { dropAction: v as DropAction })" />
                           </div>
                         </div>
                         <div class="frow folder-row">
                           <span class="flabel">暂存文件夹</span>
                           <div class="fctrl folder-line">
                             <input :value="pod.stagingFolder" class="input mono" readonly :title="pod.stagingFolder" placeholder="未选择" />
-                            <button type="button" class="btn" @pointerdown="async () => { const f = await pickFolder(); if (f) await savePod(pod.id, { stagingFolder: f }); }">选择…</button>
-                            <button v-if="pod.stagingFolder" type="button" class="btn ghost" @pointerdown="openPodFolder(pod)">打开</button>
+                            <button type="button" class="btn" @click="changePodFolder(pod)">选择…</button>
+                            <button v-if="pod.stagingFolder" type="button" class="btn ghost" @click="openPodFolder(pod)">打开</button>
                           </div>
                         </div>
                       </div>
@@ -578,7 +971,7 @@ const PAGES = [
                 </div>
                 <p v-if="hotkeyError" class="error">{{ hotkeyError }}</p>
                 <div class="reset-line">
-                  <button type="button" class="btn ghost" @pointerdown="resetHotkeys">恢复默认快捷键</button>
+                  <button type="button" class="btn ghost" @click="resetHotkeys">恢复默认快捷键</button>
                 </div>
               </template>
 
@@ -609,6 +1002,7 @@ const PAGES = [
         </main>
       </div>
     </template>
+    </template>
 
     <Transition name="toast">
       <div v-if="toast" class="toast">{{ toast }}</div>
@@ -624,6 +1018,24 @@ const PAGES = [
   flex-direction: column;
   background: var(--surface);
   color: var(--ink);
+}
+.load-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--ink-2);
+  font-size: 13px;
+  text-align: center;
+  padding: 32px;
+}
+.load-state p {
+  margin: 0;
+}
+.load-state.error-state {
+  color: var(--danger);
 }
 
 /* ---------- 自绘标题栏 ---------- */
@@ -1020,6 +1432,10 @@ select.input {
 .op-btn:hover {
   background: var(--surface-hover);
   color: var(--ink);
+}
+.op-btn:disabled {
+  cursor: wait;
+  opacity: 0.5;
 }
 .op-btn.danger:hover {
   background: color-mix(in oklab, var(--danger) 14%, transparent);

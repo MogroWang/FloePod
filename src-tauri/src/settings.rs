@@ -1,9 +1,13 @@
+use std::collections::HashSet;
+use std::path::{Component, Path, PathBuf};
+
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
 use crate::db;
 
 pub const KEY: &str = "app";
+const NEXT_POD_ID_KEY: &str = "next_pod_id";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -76,12 +80,6 @@ impl Default for Pod {
     }
 }
 
-impl Pod {
-    pub fn is_vertical(&self) -> bool {
-        matches!(self.edge.as_str(), "left" | "right")
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -96,9 +94,9 @@ pub struct Settings {
     #[serde(default)]
     pub pods: Vec<Pod>,
     /// 只读：由应用在读取时注入，不持久化
-    #[serde(skip_deserializing, default)]
+    #[serde(skip_serializing, skip_deserializing, default)]
     pub version: String,
-    #[serde(skip_deserializing, default)]
+    #[serde(skip_serializing, skip_deserializing, default)]
     pub data_dir: String,
 }
 
@@ -124,8 +122,7 @@ pub fn load(conn: &Connection, data_dir: &str, version: &str) -> Result<Settings
     let mut s: Settings = match db::kv_get(conn, KEY)? {
         Some(json) => {
             let v: serde_json::Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-            let mut s: Settings =
-                serde_json::from_value(v.clone()).map_err(|e| e.to_string())?;
+            let mut s: Settings = serde_json::from_value(v.clone()).map_err(|e| e.to_string())?;
             migrate_legacy(&mut s, &v);
             s
         }
@@ -134,6 +131,241 @@ pub fn load(conn: &Connection, data_dir: &str, version: &str) -> Result<Settings
     s.version = version.to_string();
     s.data_dir = data_dir.to_string();
     Ok(s)
+}
+
+/// 将绝对路径做词法归一化，并尽可能解析已存在祖先中的符号链接 / junction。
+///
+/// 暂存目录允许尚不存在，因此不能简单要求 `canonicalize()` 整条路径成功。
+pub fn resolve_path(path: &Path) -> Result<PathBuf, String> {
+    resolve_path_impl(path, false)
+}
+
+/// 配置校验允许可移动盘暂时离线；这种情况下只能保留词法归一化结果。
+/// 真正读写文件时仍必须使用 [`resolve_path`]，从而把“盘符不可用”与“叶子不存在”区分开。
+fn resolve_config_path(path: &Path) -> Result<PathBuf, String> {
+    resolve_path_impl(path, true)
+}
+
+/// Compare two persisted path spellings without requiring their drive/share to be online.
+/// Runtime file operations must still call [`resolve_path`] before touching the filesystem.
+pub fn configured_paths_equal(a: &Path, b: &Path) -> Result<bool, String> {
+    Ok(paths_equal(
+        &resolve_config_path(a)?,
+        &resolve_config_path(b)?,
+    ))
+}
+
+fn resolve_path_impl(path: &Path, allow_missing_root: bool) -> Result<PathBuf, String> {
+    if !path.is_absolute() {
+        return Err(format!("路径必须是绝对路径: {}", path.display()));
+    }
+
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return Err(format!("路径越过根目录: {}", path.display()));
+                }
+            }
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+
+    let mut cursor = normalized.as_path();
+    let mut missing = Vec::new();
+    loop {
+        match std::fs::symlink_metadata(cursor) {
+            Ok(_) => {
+                let mut resolved = cursor
+                    .canonicalize()
+                    .map_err(|e| format!("无法解析路径 {}: {e}", cursor.display()))?;
+                for part in missing.iter().rev() {
+                    resolved.push(part);
+                }
+                return Ok(resolved);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let Some(name) = cursor.file_name() else {
+                    return if allow_missing_root {
+                        Ok(normalized)
+                    } else {
+                        Err(format!("路径所在磁盘或共享位置不可用: {}", path.display()))
+                    };
+                };
+                missing.push(name.to_os_string());
+                cursor = cursor
+                    .parent()
+                    .ok_or_else(|| format!("无法解析路径: {}", path.display()))?;
+            }
+            Err(e) => return Err(format!("无法访问路径 {}: {e}", cursor.display())),
+        }
+    }
+}
+
+fn component_eq(a: &std::ffi::OsStr, b: &std::ffi::OsStr) -> bool {
+    #[cfg(windows)]
+    {
+        a.to_string_lossy()
+            .eq_ignore_ascii_case(&b.to_string_lossy())
+    }
+    #[cfg(not(windows))]
+    {
+        a == b
+    }
+}
+
+/// `path` 是否等于 `root` 或位于其下。调用方应先用 [`resolve_path`] 归一化。
+pub fn path_is_within(path: &Path, root: &Path) -> bool {
+    let path_parts: Vec<_> = path.components().map(|c| c.as_os_str()).collect();
+    let root_parts: Vec<_> = root.components().map(|c| c.as_os_str()).collect();
+    root_parts.len() <= path_parts.len()
+        && root_parts
+            .iter()
+            .zip(path_parts.iter())
+            .all(|(a, b)| component_eq(a, b))
+}
+
+pub fn paths_equal(a: &Path, b: &Path) -> bool {
+    let a_parts: Vec<_> = a.components().map(|c| c.as_os_str()).collect();
+    let b_parts: Vec<_> = b.components().map(|c| c.as_os_str()).collect();
+    a_parts.len() == b_parts.len()
+        && a_parts
+            .iter()
+            .zip(b_parts.iter())
+            .all(|(x, y)| component_eq(x, y))
+}
+
+pub fn path_key(path: &Path) -> String {
+    #[cfg(windows)]
+    {
+        path.to_string_lossy().replace('/', "\\").to_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_string_lossy().to_string()
+    }
+}
+
+/// 完整验证将要持久化或用于文件操作的设置。
+pub fn validate(s: &Settings, data_dir: &str) -> Result<(), String> {
+    validate_impl(s, data_dir, true)
+}
+
+/// 文件操作只验证实际涉及的 pod，并要求它的磁盘/共享根当前可访问。
+/// 这样一个离线的无关移动盘不会阻断其他 pod，同时也不会把“盘符离线”误判为条目已删除。
+pub fn validate_pod_for_io(s: &Settings, data_dir: &str, pod_id: u64) -> Result<(), String> {
+    let pod = s
+        .pods
+        .iter()
+        .find(|pod| pod.id == pod_id)
+        .cloned()
+        .ok_or_else(|| format!("匣不存在: {pod_id}"))?;
+    let mut isolated = s.clone();
+    isolated.pods = vec![pod];
+    validate_impl(&isolated, data_dir, false)
+}
+
+fn validate_impl(s: &Settings, data_dir: &str, allow_missing_roots: bool) -> Result<(), String> {
+    if !matches!(s.theme.as_str(), "system" | "light" | "dark") {
+        return Err(format!("未知主题: {}", s.theme));
+    }
+
+    let data_dir = resolve_path(Path::new(data_dir))?;
+    let mut ids = HashSet::new();
+    let mut folders: Vec<(u64, String, PathBuf)> = Vec::new();
+
+    for pod in &s.pods {
+        if pod.id == 0 || !ids.insert(pod.id) {
+            return Err(format!("匣 ID 无效或重复: {}", pod.id));
+        }
+        if pod.name.trim().is_empty() {
+            return Err(format!("匣 {} 的名称不能为空", pod.id));
+        }
+        if !matches!(pod.edge.as_str(), "top" | "right" | "bottom" | "left") {
+            return Err(format!("匣「{}」的屏幕边缘无效", pod.name));
+        }
+        if !pod.offset.is_finite() || !(0.0..=1.0).contains(&pod.offset) {
+            return Err(format!("匣「{}」的位置无效", pod.name));
+        }
+        if !pod.opacity.is_finite() || !(0.4..=1.0).contains(&pod.opacity) {
+            return Err(format!("匣「{}」的不透明度无效", pod.name));
+        }
+        if !matches!(pod.material.as_str(), "acrylic" | "plain") {
+            return Err(format!("匣「{}」的材质无效", pod.name));
+        }
+        if !(300..=520).contains(&pod.panel_width) {
+            return Err(format!("匣「{}」的面板宽度无效", pod.name));
+        }
+        if pod.hover_delay_ms > 600 {
+            return Err(format!("匣「{}」的悬停延迟无效", pod.name));
+        }
+        if !matches!(
+            pod.drop_action.as_str(),
+            "ask" | "copy" | "move" | "shortcut"
+        ) {
+            return Err(format!("匣「{}」的拖入动作无效", pod.name));
+        }
+
+        let raw = pod.staging_folder.trim();
+        if raw.is_empty() {
+            if pod.enabled {
+                return Err(format!("匣「{}」尚未选择暂存文件夹", pod.name));
+            }
+            // 兼容旧版或未配置完成的禁用匣；重新启用前仍必须选择安全目录。
+            continue;
+        }
+        let folder = if allow_missing_roots {
+            resolve_config_path(Path::new(raw))?
+        } else {
+            resolve_path(Path::new(raw))?
+        };
+        if folder.parent().is_none() {
+            return Err(format!(
+                "不能把磁盘或共享根目录设为暂存文件夹: {}",
+                folder.display()
+            ));
+        }
+        if path_is_within(&folder, &data_dir) || path_is_within(&data_dir, &folder) {
+            return Err("暂存文件夹不能与 FloePod 数据目录相同或互相包含".into());
+        }
+        if let Some(profile) = std::env::var_os("USERPROFILE") {
+            if let Ok(profile) = resolve_path(Path::new(&profile)) {
+                if paths_equal(&folder, &profile) || path_is_within(&profile, &folder) {
+                    return Err("不能把整个用户目录或其父目录设为暂存文件夹".into());
+                }
+            }
+        }
+        for key in ["WINDIR", "ProgramFiles", "ProgramFiles(x86)"] {
+            if let Some(protected) = std::env::var_os(key) {
+                if let Ok(protected) = resolve_path(Path::new(&protected)) {
+                    if path_is_within(&folder, &protected) {
+                        return Err(format!(
+                            "不能把系统目录设为暂存文件夹: {}",
+                            folder.display()
+                        ));
+                    }
+                }
+            }
+        }
+        folders.push((pod.id, pod.name.clone(), folder));
+    }
+
+    for i in 0..folders.len() {
+        for j in (i + 1)..folders.len() {
+            let (_, name_a, a) = &folders[i];
+            let (_, name_b, b) = &folders[j];
+            if path_is_within(a, b) || path_is_within(b, a) {
+                return Err(format!(
+                    "匣「{name_a}」与「{name_b}」的暂存文件夹不能相同或互相嵌套"
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// 旧版（0.2/0.3）单个暂存配置 -> 生成一个默认「匣」，保证老用户升级不丢配置。
@@ -164,7 +396,10 @@ fn migrate_legacy(s: &mut Settings, v: &serde_json::Value) {
             .unwrap_or("acrylic")
             .into(),
         panel_width: v.get("panelWidth").and_then(|x| x.as_u64()).unwrap_or(380) as u32,
-        hover_delay_ms: v.get("hoverDelayMs").and_then(|x| x.as_u64()).unwrap_or(120),
+        hover_delay_ms: v
+            .get("hoverDelayMs")
+            .and_then(|x| x.as_u64())
+            .unwrap_or(120),
         drop_action: v
             .get("dropAction")
             .and_then(|x| x.as_str())
@@ -191,24 +426,51 @@ pub fn merge_persist(
         Some(json) => serde_json::from_str(&json).map_err(|e| e.to_string())?,
         None => serde_json::Map::new(),
     };
-    if let Some(obj) = patch.as_object() {
-        for (k, v) in obj {
-            if k == "version" || k == "dataDir" || k == "pods" {
-                continue;
+    let obj = patch
+        .as_object()
+        .ok_or_else(|| "设置补丁必须是对象".to_string())?;
+    for (k, v) in obj {
+        match k.as_str() {
+            "theme" | "firstRunDone" | "autostart" | "hotkeys" => {
+                stored.insert(k.clone(), v.clone());
             }
-            stored.insert(k.clone(), v.clone());
+            "version" | "dataDir" | "pods" => {}
+            _ => return Err(format!("未知设置字段: {k}")),
         }
     }
-    let json = serde_json::to_string(&stored).map_err(|e| e.to_string())?;
-    db::kv_set(conn, KEY, &json)?;
-    load(conn, data_dir, version)
+
+    // 必须先完整反序列化和验证，确认候选设置有效后才能覆盖数据库。
+    let raw = serde_json::Value::Object(stored);
+    let mut candidate: Settings = serde_json::from_value(raw.clone()).map_err(|e| e.to_string())?;
+    migrate_legacy(&mut candidate, &raw);
+    candidate.version = version.to_string();
+    candidate.data_dir = data_dir.to_string();
+    validate(&candidate, data_dir)?;
+    persist(conn, &candidate)?;
+    Ok(candidate)
 }
 
 /* ---------- pod 增删改（读写设置并持久化） ---------- */
 
 pub fn next_pod_id(conn: &Connection, data_dir: &str, version: &str) -> Result<u64, String> {
     let s = load(conn, data_dir, version)?;
-    Ok(s.pods.iter().map(|p| p.id).max().unwrap_or(0) + 1)
+    let floor = s
+        .pods
+        .iter()
+        .map(|p| p.id)
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| "匣 ID 已耗尽".to_string())?;
+    let next = db::kv_get(conn, NEXT_POD_ID_KEY)?
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(floor)
+        .max(floor);
+    let following = next
+        .checked_add(1)
+        .ok_or_else(|| "匣 ID 已耗尽".to_string())?;
+    db::kv_set(conn, NEXT_POD_ID_KEY, &following.to_string())?;
+    Ok(next)
 }
 
 pub fn upsert_pod(
@@ -223,6 +485,7 @@ pub fn upsert_pod(
     } else {
         s.pods.push(pod.clone());
     }
+    validate(&s, data_dir)?;
     persist(conn, &s)?;
     Ok(s)
 }
@@ -244,9 +507,26 @@ mod tests {
     use super::*;
 
     fn conn() -> Connection {
-        let mut c = Connection::open_in_memory().unwrap();
-        db::migrate(&mut c).unwrap();
+        let c = Connection::open_in_memory().unwrap();
+        db::migrate(&c).unwrap();
         c
+    }
+
+    fn pod(id: u64, folder: &Path) -> Pod {
+        Pod {
+            id,
+            name: format!("匣 {id}"),
+            edge: "left".into(),
+            monitor: String::new(),
+            offset: 0.5,
+            staging_folder: folder.to_string_lossy().to_string(),
+            opacity: 0.85,
+            material: "acrylic".into(),
+            panel_width: 380,
+            hover_delay_ms: 120,
+            drop_action: "ask".into(),
+            enabled: true,
+        }
     }
 
     #[test]
@@ -269,11 +549,13 @@ mod tests {
     #[test]
     fn merge_ignores_pods_and_version() {
         let c = conn();
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path().join("data").to_string_lossy().to_string();
         db::kv_set(&c, KEY, r#"{"theme":"system","pods":[]}"#).unwrap();
         let s = merge_persist(
             &c,
             serde_json::json!({"theme":"dark","pods":[{"id":99}],"version":"9.9"}),
-            "DATA",
+            &data_dir,
             "0.4.0",
         )
         .unwrap();
@@ -285,24 +567,59 @@ mod tests {
     #[test]
     fn pod_upsert_delete() {
         let c = conn();
-        let pod = Pod {
-            id: 1,
-            name: "A".into(),
-            edge: "left".into(),
-            monitor: String::new(),
-            offset: 0.5,
-            staging_folder: "C:\\a".into(),
-            opacity: 0.85,
-            material: "acrylic".into(),
-            panel_width: 380,
-            hover_delay_ms: 120,
-            drop_action: "ask".into(),
-            enabled: true,
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path().join("data").to_string_lossy().to_string();
+        let pod = pod(1, &tmp.path().join("stage"));
+        upsert_pod(&c, &pod, &data_dir, "0.4.0").unwrap();
+        assert_eq!(load(&c, &data_dir, "0.4.0").unwrap().pods.len(), 1);
+        delete_pod(&c, 1, &data_dir, "0.4.0").unwrap();
+        assert!(load(&c, &data_dir, "0.4.0").unwrap().pods.is_empty());
+    }
+
+    #[test]
+    fn validate_rejects_data_dir_overlap_both_directions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path().join("data");
+        let mut settings = Settings::default();
+        settings.pods.push(pod(1, &data_dir.join("stage")));
+        assert!(validate(&settings, &data_dir.to_string_lossy()).is_err());
+
+        settings.pods[0] = pod(1, tmp.path());
+        assert!(validate(&settings, &data_dir.to_string_lossy()).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_equal_or_nested_pod_folders() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path().join("data");
+        let stage = tmp.path().join("stage");
+        let settings = Settings {
+            pods: vec![pod(1, &stage), pod(2, &stage.join("nested"))],
+            ..Settings::default()
         };
-        upsert_pod(&c, &pod, "D", "0.4.0").unwrap();
-        assert_eq!(load(&c, "D", "0.4.0").unwrap().pods.len(), 1);
-        delete_pod(&c, 1, "D", "0.4.0").unwrap();
-        assert!(load(&c, "D", "0.4.0").unwrap().pods.is_empty());
+        assert!(validate(&settings, &data_dir.to_string_lossy()).is_err());
+    }
+
+    #[test]
+    fn validate_allows_legacy_disabled_pod_without_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut disabled = pod(1, &tmp.path().join("unused"));
+        disabled.enabled = false;
+        disabled.staging_folder.clear();
+        let settings = Settings {
+            pods: vec![disabled],
+            ..Settings::default()
+        };
+        assert!(validate(&settings, &tmp.path().join("data").to_string_lossy()).is_ok());
+    }
+
+    #[test]
+    fn pod_ids_are_monotonic_even_before_persisting_pod() {
+        let c = conn();
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path().join("data").to_string_lossy().to_string();
+        assert_eq!(next_pod_id(&c, &data_dir, "0.4.0").unwrap(), 1);
+        assert_eq!(next_pod_id(&c, &data_dir, "0.4.0").unwrap(), 2);
     }
 
     #[test]
