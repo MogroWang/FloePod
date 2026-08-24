@@ -70,7 +70,7 @@ impl Default for Pod {
             monitor: String::new(),
             offset: 0.5,
             staging_folder: String::new(),
-            opacity: 0.85,
+            opacity: 1.0,
             material: "acrylic".into(),
             panel_width: 380,
             hover_delay_ms: 120,
@@ -291,7 +291,7 @@ fn validate_impl(s: &Settings, data_dir: &str, allow_missing_roots: bool) -> Res
         if !pod.offset.is_finite() || !(0.0..=1.0).contains(&pod.offset) {
             return Err(format!("匣「{}」的位置无效", pod.name));
         }
-        if !pod.opacity.is_finite() || !(0.4..=1.0).contains(&pod.opacity) {
+        if !pod.opacity.is_finite() || !(0.1..=1.0).contains(&pod.opacity) {
             return Err(format!("匣「{}」的不透明度无效", pod.name));
         }
         if !matches!(pod.material.as_str(), "acrylic" | "plain") {
@@ -389,7 +389,7 @@ fn migrate_legacy(s: &mut Settings, v: &serde_json::Value) {
         monitor: String::new(),
         offset: 0.5,
         staging_folder: folder,
-        opacity: v.get("opacity").and_then(|x| x.as_f64()).unwrap_or(0.85),
+        opacity: v.get("opacity").and_then(|x| x.as_f64()).unwrap_or(1.0),
         material: v
             .get("material")
             .and_then(|x| x.as_str())
@@ -520,7 +520,7 @@ mod tests {
             monitor: String::new(),
             offset: 0.5,
             staging_folder: folder.to_string_lossy().to_string(),
-            opacity: 0.85,
+            opacity: 1.0,
             material: "acrylic".into(),
             panel_width: 380,
             hover_delay_ms: 120,

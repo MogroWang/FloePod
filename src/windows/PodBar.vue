@@ -48,8 +48,8 @@ const count = computed(
 
 const capsuleStyle = computed(() =>
   vertical.value
-    ? { width: short.value + "px", height: "100%", opacity: pod.value?.opacity ?? 0.85 }
-    : { height: short.value + "px", width: "100%", opacity: pod.value?.opacity ?? 0.85 },
+    ? { width: short.value + "px", height: "100%", opacity: pod.value?.opacity ?? 1 }
+    : { height: short.value + "px", width: "100%", opacity: pod.value?.opacity ?? 1 },
 );
 
 /* 仅在拖入接纳时短条变宽（圆角矩形）；悬停弹出面板不改变形状。

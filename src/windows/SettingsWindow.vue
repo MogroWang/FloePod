@@ -13,6 +13,8 @@ import ToggleSwitch from "@/components/ToggleSwitch.vue";
 import SettingsRow from "@/components/SettingsRow.vue";
 import HotkeyRecorder from "@/components/HotkeyRecorder.vue";
 import BrandMark from "@/components/BrandMark.vue";
+import RangeSlider from "@/components/RangeSlider.vue";
+import PodEdgeDiagram from "@/components/PodEdgeDiagram.vue";
 import type { DropAction, Edge, Material, Pod, ThemeMode } from "@/types";
 
 const settingsStore = useSettingsStore();
@@ -48,7 +50,7 @@ const oobe = ref({
   monitor: "",
   folder: "",
   theme: "system" as ThemeMode,
-  opacity: 0.85,
+  opacity: 1,
   material: "acrylic" as Material,
 });
 const oobeBusy = ref(false);
@@ -93,6 +95,11 @@ const NAV_ICONS: Record<string, string> = {
 
 function edgeLabel(edge: string): string {
   return edge === "left" ? "左" : edge === "right" ? "右" : edge === "top" ? "上" : "下";
+}
+
+function monitorLabel(pod: Pod): string {
+  if (!pod.monitor) return "主显示器";
+  return monitors.value.find((m) => m.name === pod.monitor)?.label ?? pod.monitor;
 }
 
 function showToast(msg: string) {
@@ -249,16 +256,13 @@ function podNumberValue(pod: Pod, field: PodNumberField): number {
   return podNumberDrafts[pod.id]?.[field] ?? pod[field];
 }
 
-function previewPodNumber(id: number, field: PodNumberField, event: Event) {
-  const value = Number((event.target as HTMLInputElement).value);
+function previewPodNumber(id: number, field: PodNumberField, value: number) {
   const draft = (podNumberDrafts[id] ??= {});
   draft[field] = value;
 }
 
-async function commitPodNumber(pod: Pod, field: PodNumberField, event: Event) {
-  previewPodNumber(pod.id, field, event);
-  const value = podNumberDrafts[pod.id]?.[field];
-  if (value == null) return;
+async function commitPodNumber(pod: Pod, field: PodNumberField, value: number) {
+  previewPodNumber(pod.id, field, value);
   await savePod(pod.id, { [field]: value });
   // Do not clear a newer value entered while this request was queued.
   if (podNumberDrafts[pod.id]?.[field] === value) {
@@ -303,7 +307,7 @@ async function addPod() {
       monitor: "",
       offset: 0.5,
       stagingFolder: folder,
-      opacity: 0.85,
+      opacity: 1,
       material: "acrylic",
       panelWidth: 380,
       hoverDelayMs: 120,
@@ -696,7 +700,17 @@ const PAGES = [
             </label>
             <label class="field">
               <span>不透明度</span>
-              <input type="range" class="slider" min="0.55" max="1" step="0.05" v-model.number="oobe.opacity" />
+              <div class="slider-line">
+                <RangeSlider
+                  :value="oobe.opacity"
+                  :min="0.1"
+                  :max="1"
+                  :step="0.01"
+                  aria-label="不透明度"
+                  @update:value="(v) => (oobe.opacity = v)"
+                />
+                <span class="fval">{{ Math.round(oobe.opacity * 100) }}%</span>
+              </div>
             </label>
             <label class="field">
               <span>材质</span>
@@ -831,6 +845,11 @@ const PAGES = [
                     <div class="pod-groups">
                       <div class="pod-group">
                         <div class="group-title">位置</div>
+                        <PodEdgeDiagram
+                          :edge="pod.edge"
+                          :offset="podNumberValue(pod, 'offset')"
+                          :monitor-label="monitorLabel(pod)"
+                        />
                         <div class="frow">
                           <span class="flabel">屏幕边缘</span>
                           <div class="fctrl">
@@ -853,15 +872,14 @@ const PAGES = [
                         <div class="frow">
                           <span class="flabel">沿边缘位置</span>
                           <div class="fctrl">
-                            <input
-                              type="range"
-                              class="slider"
-                              min="0"
-                              max="1"
-                              step="0.01"
+                            <RangeSlider
                               :value="podNumberValue(pod, 'offset')"
-                              @input="(e) => previewPodNumber(pod.id, 'offset', e)"
-                              @change="(e) => commitPodNumber(pod, 'offset', e)"
+                              :min="0"
+                              :max="1"
+                              :step="0.01"
+                              aria-label="沿边缘位置"
+                              @update:value="(v) => previewPodNumber(pod.id, 'offset', v)"
+                              @commit="(v) => commitPodNumber(pod, 'offset', v)"
                             />
                             <span class="fval">{{ Math.round(podNumberValue(pod, "offset") * 100) }}%</span>
                           </div>
@@ -873,15 +891,14 @@ const PAGES = [
                         <div class="frow">
                           <span class="flabel">不透明度</span>
                           <div class="fctrl">
-                            <input
-                              type="range"
-                              class="slider"
-                              min="0.55"
-                              max="1"
-                              step="0.05"
+                            <RangeSlider
                               :value="podNumberValue(pod, 'opacity')"
-                              @input="(e) => previewPodNumber(pod.id, 'opacity', e)"
-                              @change="(e) => commitPodNumber(pod, 'opacity', e)"
+                              :min="0.1"
+                              :max="1"
+                              :step="0.01"
+                              aria-label="不透明度"
+                              @update:value="(v) => previewPodNumber(pod.id, 'opacity', v)"
+                              @commit="(v) => commitPodNumber(pod, 'opacity', v)"
                             />
                             <span class="fval">{{ Math.round(podNumberValue(pod, "opacity") * 100) }}%</span>
                           </div>
@@ -899,15 +916,14 @@ const PAGES = [
                         <div class="frow">
                           <span class="flabel">面板宽度</span>
                           <div class="fctrl">
-                            <input
-                              type="range"
-                              class="slider"
-                              min="300"
-                              max="520"
-                              step="10"
+                            <RangeSlider
                               :value="podNumberValue(pod, 'panelWidth')"
-                              @input="(e) => previewPodNumber(pod.id, 'panelWidth', e)"
-                              @change="(e) => commitPodNumber(pod, 'panelWidth', e)"
+                              :min="300"
+                              :max="520"
+                              :step="10"
+                              aria-label="面板宽度"
+                              @update:value="(v) => previewPodNumber(pod.id, 'panelWidth', v)"
+                              @commit="(v) => commitPodNumber(pod, 'panelWidth', v)"
                             />
                             <span class="fval">{{ podNumberValue(pod, "panelWidth") }}px</span>
                           </div>
@@ -915,15 +931,14 @@ const PAGES = [
                         <div class="frow">
                           <span class="flabel">悬停展开延迟</span>
                           <div class="fctrl">
-                            <input
-                              type="range"
-                              class="slider"
-                              min="0"
-                              max="400"
-                              step="20"
+                            <RangeSlider
                               :value="podNumberValue(pod, 'hoverDelayMs')"
-                              @input="(e) => previewPodNumber(pod.id, 'hoverDelayMs', e)"
-                              @change="(e) => commitPodNumber(pod, 'hoverDelayMs', e)"
+                              :min="0"
+                              :max="400"
+                              :step="20"
+                              aria-label="悬停展开延迟"
+                              @update:value="(v) => previewPodNumber(pod.id, 'hoverDelayMs', v)"
+                              @commit="(v) => commitPodNumber(pod, 'hoverDelayMs', v)"
                             />
                             <span class="fval">{{ podNumberValue(pod, "hoverDelayMs") }}ms</span>
                           </div>
@@ -1344,9 +1359,11 @@ select.input {
 .input.sel {
   min-width: 140px;
 }
-.slider {
-  width: 150px;
-  accent-color: var(--accent);
+.slider-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 .folder-line {
   display: flex;

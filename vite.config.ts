@@ -7,6 +7,8 @@ const host = process.env.TAURI_DEV_HOST;
 
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
+  // Tauri 生产构建必须使用相对路径，否则 WebView 中资源 404
+  base: "./",
   plugins: [vue(), tailwindcss()],
 
   resolve: {

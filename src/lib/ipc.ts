@@ -44,7 +44,7 @@ let mockSettings: import("@/types").Settings = {
       monitor: "",
       offset: 0.5,
       stagingFolder: "D:\\浮匣暂存（浏览器预览）",
-      opacity: 0.85,
+      opacity: 1,
       material: "acrylic",
       panelWidth: 380,
       hoverDelayMs: 120,
@@ -52,7 +52,7 @@ let mockSettings: import("@/types").Settings = {
       enabled: true,
     },
   ],
-  version: "0.5.5-mock",
+  version: "0.6.0-mock",
   dataDir: "浏览器预览",
 };
 const mockMonitors: MonitorInfo[] = [
@@ -135,7 +135,7 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
         monitor: "",
         offset: 0.5,
         stagingFolder: "",
-        opacity: 0.85,
+        opacity: 1,
         material: "acrylic",
         panelWidth: 380,
         hoverDelayMs: 120,
