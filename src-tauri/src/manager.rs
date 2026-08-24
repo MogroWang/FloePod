@@ -339,7 +339,7 @@ fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
                 .skip_taskbar(true)
                 .resizable(false)
                 .shadow(false)
-                .focusable(false)
+                .focusable(true) // 必须可聚焦才能接收拖放事件
                 .visible(false)
                 .build()
         {
@@ -359,6 +359,7 @@ fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
         .skip_taskbar(true)
         .resizable(false)
         .shadow(true)
+        .focusable(true) // 必须可聚焦才能接收拖放事件
         .visible(false)
         .build()
         {
@@ -823,6 +824,13 @@ pub fn set_pod_accept(app: &AppHandle, id: u64, accepting: bool) {
         return;
     }
     place_pod_bar(app, &pod, accepting);
+}
+
+/// 拖动胶囊条过程中实时重定位（不写库）；松手后由 update_pod 持久化 offset。
+pub fn move_pod_bar(app: &AppHandle, id: u64, offset: f64) {
+    let Some(mut pod) = pod_of(app, id) else { return };
+    pod.offset = offset.clamp(0.0, 1.0);
+    place_pod_bar(app, &pod, false);
 }
 
 /// 看门狗：逐个匣检查--面板未固定、未在拖出、列表模式且指针离开超过宽限期 -> 直接隐藏。

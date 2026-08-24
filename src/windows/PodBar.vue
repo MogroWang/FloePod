@@ -19,6 +19,7 @@ const staging = useStagingStore();
 
 const pod = computed(() => settingsStore.pod(props.podId));
 const vertical = computed(() => pod.value?.edge === "left" || pod.value?.edge === "right");
+const horizontal = computed(() => pod.value?.edge === "top" || pod.value?.edge === "bottom");
 const hovering = ref(false);
 const accepting = ref(false);
 let hoverTimeout: number | undefined;
@@ -33,6 +34,13 @@ let lastModifierSample = 0;
 
 type ConcreteDropAction = Exclude<DropAction, "ask">;
 const NO_MODIFIERS: ModifierState = { ctrl: false, shift: false, alt: false };
+
+/* ---- 边缘拖动 ---- */
+const dragging = ref(false);
+let justDragged = false; // 记录刚刚完成拖动，防止触发点击
+let dragStartPos = 0;
+let dragStartOffset = 0;
+let dragStartScreenLength = 1080; // 拖动开始时的屏幕尺寸
 
 const count = computed(
   () => staging.items.filter((i) => i.podId === props.podId).length,
@@ -90,6 +98,8 @@ function onPointerEnter() {
   hovering.value = true;
   clearHoverTimer();
   reportPresence(true);
+  // 拖动中不弹出面板
+  if (dragging.value) return;
   hoverTimeout = window.setTimeout(() => {
     hoverTimeout = undefined;
     if (hovering.value && !accepting.value && pod.value?.enabled) {
@@ -105,9 +115,107 @@ function onPointerLeave() {
 }
 
 function onClick() {
+  // 如果刚完成拖动，不触发点击
+  if (justDragged) {
+    justDragged = false;
+    return;
+  }
   // A pending hover callback must not reopen a panel that this click just hid.
   clearHoverTimer();
   void ipc.togglePanel(props.podId).catch((err) => console.error("toggle panel failed", err));
+}
+
+/* ---- 边缘拖动处理 ---- */
+async function onPointerDown(e: PointerEvent) {
+  // 只响应主按钮（左键）
+  if (e.button !== 0 || !pod.value) return;
+
+  // 记录起始位置和当前 offset
+  dragStartPos = vertical.value ? e.clientY : e.clientX;
+  dragStartOffset = pod.value.offset;
+  dragging.value = false;
+  justDragged = false;
+
+  // 获取显示器尺寸用于计算 offset
+  try {
+    const monitors = await ipc.getMonitors();
+    const monitorName = pod.value.monitor;
+    const monitor = monitors.find(m => m.name === monitorName);
+    // 使用实际显示器的尺寸，如果没有找到则使用 window.screen
+    if (monitor) {
+      // TODO: 需要从 Rust 端获取显示器实际尺寸
+      dragStartScreenLength = vertical.value ? window.screen.height : window.screen.width;
+    } else {
+      dragStartScreenLength = vertical.value ? window.screen.height : window.screen.width;
+    }
+  } catch {
+    dragStartScreenLength = vertical.value ? window.screen.height : window.screen.width;
+  }
+
+  // 添加全局监听
+  window.addEventListener("pointermove", onPointerMove);
+  window.addEventListener("pointerup", onPointerUp);
+  window.addEventListener("pointercancel", onPointerUp);
+
+  // 阻止默认行为和事件冒泡
+  e.preventDefault();
+  e.stopPropagation();
+}
+
+async function onPointerMove(e: PointerEvent) {
+  if (!pod.value) return;
+
+  const currentPos = vertical.value ? e.clientY : e.clientX;
+  const delta = currentPos - dragStartPos;
+
+  // 拖动阈值：3px
+  if (!dragging.value && Math.abs(delta) < 3) return;
+
+  // 标记为拖动中
+  if (!dragging.value) {
+    dragging.value = true;
+    // 拖动时取消 hover 定时器，避免弹出面板
+    window.clearTimeout(hoverTimeout);
+    // 隐藏面板（如果已显示）
+    void ipc.hidePanel(props.podId);
+  }
+
+  // 计算新的 offset（0-1 范围）
+  const deltaRatio = delta / dragStartScreenLength;
+  const newOffset = Math.max(0, Math.min(1, dragStartOffset + deltaRatio));
+
+  // 使用轻量级命令实时移动窗口（不写数据库，性能更好）
+  await ipc.movePodBar(props.podId, newOffset);
+
+  // 阻止默认行为
+  e.preventDefault();
+}
+
+async function onPointerUp(e: PointerEvent) {
+  // 移除全局监听
+  window.removeEventListener("pointermove", onPointerMove);
+  window.removeEventListener("pointerup", onPointerUp);
+  window.removeEventListener("pointercancel", onPointerUp);
+
+  if (dragging.value) {
+    dragging.value = false;
+    justDragged = true; // 标记刚刚完成拖动，防止触发点击
+    
+    // 计算最终的 offset
+    const currentPos = vertical.value ? e.clientY : e.clientX;
+    const delta = currentPos - dragStartPos;
+    const deltaRatio = delta / dragStartScreenLength;
+    const finalOffset = Math.max(0, Math.min(1, dragStartOffset + deltaRatio));
+    
+    // 保存到数据库
+    if (pod.value) {
+      await ipc.updatePod(props.podId, { offset: finalOffset });
+    }
+    
+    // 阻止拖动结束后触发 onClick
+    e.preventDefault();
+    e.stopPropagation();
+  }
 }
 
 /* ---- 文件拖入（原生） ---- */
@@ -267,16 +375,17 @@ onBeforeUnmount(() => {
     :aria-label="`打开${pod?.name ?? '匣'}面板`"
     @pointerenter="onPointerEnter"
     @pointerleave="onPointerLeave"
+    @pointerdown="onPointerDown"
     @click="onClick"
     @keydown.enter.prevent="onClick"
     @keydown.space.prevent="onClick"
     @dragover.prevent
     @drop="onHtmlDrop"
   >
-    <div class="capsule" :class="{ accepting, hovering }" :style="capsuleStyle">
+    <div class="capsule" :class="{ accepting, hovering, dragging }" :style="capsuleStyle">
       <div class="capsule-inner">
         <Transition name="fade">
-          <div v-if="accepting" class="drop-hint">松手暂存</div>
+          <div v-if="accepting" class="drop-hint" :class="{ 'drop-hint-horizontal': horizontal }">松手暂存</div>
         </Transition>
         <template v-if="!accepting">
           <div v-if="count > 0" class="count-badge">{{ count > 99 ? "99+" : count }}</div>
@@ -346,6 +455,12 @@ onBeforeUnmount(() => {
   box-shadow: inset 0 0 0 1.5px oklch(1 0 0 / 0.25);
   animation: breathe 1.1s ease-in-out infinite;
 }
+.capsule.dragging {
+  background: var(--accent);
+  box-shadow: inset 0 0 0 1.5px oklch(1 0 0 / 0.25);
+  cursor: grabbing;
+  transition: none;
+}
 @keyframes breathe {
   0%, 100% { filter: brightness(1); }
   50% { filter: brightness(1.18); }
@@ -385,6 +500,10 @@ onBeforeUnmount(() => {
   font-weight: 650;
   color: var(--on-accent);
   white-space: nowrap;
+}
+.drop-hint-horizontal {
+  writing-mode: horizontal-tb;
+  letter-spacing: 0.2em;
 }
 
 .fade-enter-active,

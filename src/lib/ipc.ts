@@ -52,7 +52,7 @@ let mockSettings: import("@/types").Settings = {
       enabled: true,
     },
   ],
-  version: "0.5.1-mock",
+  version: "0.5.5-mock",
   dataDir: "浏览器预览",
 };
 const mockMonitors: MonitorInfo[] = [
@@ -107,7 +107,7 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
   const ret = (v: unknown) => v as T;
   switch (cmd) {
     case "get_bootstrap":
-      return ret({ settings: mockSettings, monitors: mockMonitors, version: "0.5.1-mock" });
+      return ret({ settings: mockSettings, monitors: mockMonitors, version: mockSettings.version });
     case "get_pod":
       return ret(mockSettings.pods.find((p) => p.id === Number(args?.podId)) ?? null);
     case "get_monitors":
@@ -372,6 +372,8 @@ export const ipc = {
     invoke("set_dragging_out", { podId, dragging }),
   setPodAccept: (podId: number, accepting: boolean): Promise<void> =>
     invoke("set_pod_accept", { podId, accepting }),
+  movePodBar: (podId: number, offset: number): Promise<void> =>
+    invoke("move_pod_bar", { podId, offset }),
   toggleAllBars: (): Promise<void> => invoke("toggle_all_bars"),
   openSettings: (): Promise<void> => invoke("open_settings"),
   logFrontend: (msg: string): Promise<void> => invoke("log_frontend", { msg }),
