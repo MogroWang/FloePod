@@ -1,17 +1,28 @@
+# 依赖
 node_modules
+
+# pnpm 虚拟商店缓存（本地生成）
+.pnpm-store
+
+# 前端构建产物
 dist
 dist-ssr
 *.local
 .vite
-.zcode
 
-# Tauri / Rust
+# Tauri / Rust 构建产物
 src-tauri/target
 src-tauri/gen
 
-# 便携版数据目录（运行时生成）
+# 发布产物（便携 zip / 裸 exe / 解包目录）
+release
+
+# 运行时生成
+# 便携版数据目录（exe 旁）
 FloePodData
 *.log
 
+# 编辑器 / 工具 / 系统
+.zcode
 .DS_Store
 Thumbs.db
