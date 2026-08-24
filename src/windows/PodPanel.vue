@@ -8,7 +8,16 @@ import { ipc } from "@/lib/ipc";
 import { Events, listenCurrent } from "@/lib/events";
 import { useSettingsStore } from "@/stores/settings";
 import { useStagingStore } from "@/stores/staging";
-import type { ConflictStrategy, DropAction, ExportMode, PanelMode, StagedItem } from "@/types";
+import type {
+  ConflictStrategy,
+  DragCutToken,
+  DropAction,
+  ExportMode,
+  ExportResult,
+  PanelMode,
+  PanelState,
+  StagedItem,
+} from "@/types";
 import ItemRow from "@/components/ItemRow.vue";
 import ActionChooser from "@/components/ActionChooser.vue";
 import ConflictDialog from "@/components/ConflictDialog.vue";
@@ -31,12 +40,26 @@ const textValue = ref("");
 const toast = ref("");
 let toastTimer: number | undefined;
 let anchorId: number | null = null;
+let confirmClearTimer: number | undefined;
+let mounted = true;
 
 /* ---------- 固定 / 滑入 ---------- */
 const pinned = ref(false);
+const pinBusy = ref(false);
+const exportBusy = ref(false);
+const listActionBusy = ref(false);
+const dragBusy = ref(false);
+const askBusy = ref(false);
+const textBusy = ref(false);
 const rootEl = ref<HTMLElement | null>(null);
-let lastSlideIn = 0;
+const headEl = ref<HTMLElement | null>(null);
+const listEl = ref<HTMLElement | null>(null);
+const contentEl = ref<HTMLElement | null>(null);
+const footEl = ref<HTMLElement | null>(null);
+let lastSlideIn = Number.NEGATIVE_INFINITY;
 const unlisteners: Array<() => void> = [];
+let modeRevision = 0;
+let pinRevision = 0;
 
 function slideDir(): string {
   return edge.value;
@@ -60,8 +83,23 @@ function slideDirs(): string[] {
   return ["left", "right", "top", "bottom"].map((d) => `slide-in-${d}`);
 }
 
-function onTogglePinned() {
-  void ipc.setPanelPinned(props.podId, !pinned.value);
+async function onTogglePinned() {
+  if (pinBusy.value) return;
+  const previous = pinned.value;
+  const next = !previous;
+  // Prevent an older getPanelState response from undoing this local command.
+  pinRevision += 1;
+  pinBusy.value = true;
+  pinned.value = next;
+  try {
+    await ipc.setPanelPinned(props.podId, next);
+  } catch (err) {
+    pinned.value = previous;
+    console.error("pin update failed", err);
+    showToast("固定状态更新失败，请重试");
+  } finally {
+    pinBusy.value = false;
+  }
 }
 
 /* ---------- 冲突上下文 ---------- */
@@ -70,16 +108,103 @@ const conflict = ref<{ names: string[]; ids: number[]; dest: string; mode: Expor
 );
 
 const items = computed(() => staging.activeItems);
-const selectedCount = computed(() => staging.selectedIds.size);
+const selectedItems = computed(() => staging.selectedItems);
+const selectedCount = computed(() => selectedItems.value.length);
+
+function currentSelectedIds(): number[] {
+  return selectedItems.value.map((item) => item.id);
+}
+
+function clearSelection() {
+  staging.clearSelection();
+  anchorId = null;
+}
+
+function selectAll() {
+  staging.selectAll();
+  anchorId = items.value[0]?.id ?? null;
+}
+
+function retainUnlistener(unlisten: () => void) {
+  if (mounted) unlisteners.push(unlisten);
+  else unlisten();
+}
+
+function applyPanelMode(nextMode: PanelMode, paths: string[] = []) {
+  // A conflict contains destination/selection context which only exists in this
+  // WebView. If the WebView was recreated mid-conflict, the safest recoverable
+  // state is the list rather than an unusable blank conflict screen.
+  if (nextMode === "conflict" && !conflict.value) {
+    mode.value = "list";
+    pendingPaths.value = [];
+    void ipc.setPanelMode(props.podId, "list").catch((err) => {
+      console.error("recover stale conflict mode failed", err);
+    });
+    return;
+  }
+
+  // An ask screen without its pending paths cannot be completed. Recover to a
+  // usable list and repair the backend state rather than rendering a list with
+  // its footer hidden by the stale `ask` mode.
+  if (nextMode === "ask" && paths.length === 0) {
+    mode.value = "list";
+    pendingPaths.value = [];
+    void ipc.setPanelMode(props.podId, "list").catch((err) => {
+      console.error("recover empty pending drop failed", err);
+    });
+    return;
+  }
+
+  mode.value = nextMode;
+  pendingPaths.value = nextMode === "ask" ? [...paths] : [];
+  if (nextMode !== "conflict") conflict.value = null;
+  if (nextMode !== "list") textOpen.value = false;
+}
+
+function applyPanelState(state: PanelState) {
+  applyPanelMode(state.mode, state.paths);
+  pinned.value = state.pinned;
+}
+
+async function syncPanelState() {
+  const expectedModeRevision = modeRevision;
+  const expectedPinRevision = pinRevision;
+  try {
+    const state = await ipc.getPanelState(props.podId);
+    if (!mounted) return;
+    // Events registered before this read are authoritative if they arrived
+    // while the command was in flight; do not overwrite them with an older read.
+    if (modeRevision === expectedModeRevision) applyPanelMode(state.mode, state.paths);
+    if (pinRevision === expectedPinRevision) pinned.value = state.pinned;
+  } catch (err) {
+    console.error("panel state snapshot failed", err);
+  }
+}
 
 function showToast(msg: string) {
+  if (!mounted) return;
   toast.value = msg;
   window.clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => (toast.value = ""), 2200);
 }
 
+async function refreshAfterMutation(label: string): Promise<boolean> {
+  try {
+    await staging.refresh(props.podId);
+    return true;
+  } catch (err) {
+    console.error(`${label} succeeded but list refresh failed`, err);
+    showToast(`${label}已完成，但列表刷新失败`);
+    return false;
+  }
+}
+
 /* ---------- 选择 ---------- */
 function onSelect(id: number, m: "set" | "toggle" | "range") {
+  // Long-running export/drag/remove operations apply a result to the current
+  // selection. Freeze row selection meanwhile so their completion cannot erase
+  // a newer user selection made against an older list snapshot.
+  if (exportBusy.value || listActionBusy.value || dragBusy.value) return;
   if (m === "set") {
     staging.clearSelection();
     staging.selectedIds.add(id);
@@ -95,12 +220,25 @@ function onSelect(id: number, m: "set" | "toggle" | "range") {
     if (a >= 0 && b >= 0) {
       const [lo, hi] = a < b ? [a, b] : [b, a];
       for (const i of ids.slice(lo, hi + 1)) staging.selectedIds.add(i);
+    } else {
+      clearSelection();
+      staging.selectedIds.add(id);
+      anchorId = id;
     }
   } else {
     staging.selectedIds.add(id);
     anchorId = id;
   }
 }
+
+watch(
+  () => items.value.map((item) => item.id).join(","),
+  () => {
+    if (anchorId != null && !items.value.some((item) => item.id === anchorId)) {
+      anchorId = null;
+    }
+  },
+);
 
 function selectedOrSingle(item: StagedItem): string[] {
   if (staging.selectedIds.has(item.id)) {
@@ -156,186 +294,386 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
 }
 
 async function onDragOut(paths: string[]) {
-  if (paths.length === 0) return;
+  if (paths.length === 0 || dragBusy.value || exportBusy.value || listActionBusy.value) return;
   const first = staging.items.find((i) => i.stagingPath === paths[0]);
   const icon = makeDragIcon(paths, first?.ext ?? null);
-  const isCut = dragMode.value === "move";
+  // The mode control is reactive and both preparation calls below can wait on
+  // native I/O. One immutable snapshot must drive both the OLE effect and whether
+  // source cleanup is authorised, otherwise move -> copy can delete a copied source.
+  const requestedMode = dragMode.value;
+  const isCut = requestedMode === "move";
+  let cutToken: DragCutToken | null = null;
+  dragBusy.value = true;
   try {
     await ipc.setDraggingOut(props.podId, true);
-    await ipc.startDragOut(paths, icon, dragMode.value, (dropped) => {
-      if (dropped && isCut) {
-        void ipc.finalizeDragCut(paths).then(() => staging.refresh(props.podId));
+    if (isCut) cutToken = await ipc.prepareDragCut(props.podId, paths);
+    const dropped = await ipc.startDragOut(paths, icon, requestedMode);
+    if (dropped && isCut) {
+      try {
+        if (!cutToken) throw new Error("剪切令牌缺失");
+        await ipc.finalizeDragCut(cutToken);
+        cutToken = null;
+      } catch (err) {
+        console.error("drag destination accepted but source cleanup failed", err);
+        await staging.refresh(props.podId).catch((refreshError) => {
+          console.error("post-drag failure refresh failed", refreshError);
+        });
+        showToast("目标已接收文件，但剪切源清理失败");
+        return;
       }
-    });
+      clearSelection();
+      if (await refreshAfterMutation("剪切移出")) showToast(`已剪切移出 ${paths.length} 项`);
+    }
   } catch (err) {
     console.error("drag out failed", err);
+    showToast("拖出失败，请重试");
   } finally {
-    await ipc.setDraggingOut(props.podId, false);
+    if (cutToken) {
+      await ipc.cancelDragCut(cutToken).catch((err) => {
+        console.error("drag cut token cleanup failed", err);
+      });
+    }
+    await ipc.setDraggingOut(props.podId, false).catch((err) => {
+      console.error("drag state cleanup failed", err);
+    });
+    dragBusy.value = false;
   }
 }
 
 /* ---------- 打开 / 移除 ---------- */
 async function openItem(item: StagedItem) {
-  const { openPath } = await import("@tauri-apps/plugin-opener");
-  await openPath(item.stagingPath);
+  try {
+    const { openPath } = await import("@tauri-apps/plugin-opener");
+    await openPath(item.stagingPath);
+  } catch (err) {
+    console.error("open item failed", err);
+    showToast("无法打开此项目");
+  }
 }
 
 async function revealItem(item: StagedItem) {
-  const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
-  await revealItemInDir(item.stagingPath);
+  try {
+    const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
+    await revealItemInDir(item.stagingPath);
+  } catch (err) {
+    console.error("reveal item failed", err);
+    showToast("无法打开所在位置");
+  }
 }
 
 async function removeItem(item: StagedItem) {
-  await staging.removeItems([item.id], true);
-  showToast("已移出暂存（文件进回收站）");
+  if (listActionBusy.value || exportBusy.value || dragBusy.value) return;
+  listActionBusy.value = true;
+  try {
+    await staging.removeItems([item.id], true);
+    if (anchorId === item.id) anchorId = null;
+    showToast("已移出暂存（文件进回收站）");
+  } catch (err) {
+    console.error("remove item failed", err);
+    showToast("移出失败，请重试");
+  } finally {
+    listActionBusy.value = false;
+  }
 }
 
 async function removeSelected() {
-  if (!selectedCount.value) return;
+  if (!selectedCount.value || listActionBusy.value || exportBusy.value || dragBusy.value) return;
   const n = selectedCount.value;
-  await staging.removeItems([...staging.selectedIds], true);
-  showToast(`已移出 ${n} 项（文件进回收站）`);
+  listActionBusy.value = true;
+  try {
+    await staging.removeItems(currentSelectedIds(), true);
+    anchorId = null;
+    showToast(`已移出 ${n} 项（文件进回收站）`);
+  } catch (err) {
+    console.error("remove selected failed", err);
+    showToast("移出失败，请重试");
+  } finally {
+    listActionBusy.value = false;
+  }
 }
 
 /* ---------- 导出 ---------- */
 async function pickDest(): Promise<string | null> {
+  if (!ipc.inTauri) return "D:\\浮匣导出（浏览器预览）";
   const { open } = await import("@tauri-apps/plugin-dialog");
   const dir = await open({ directory: true, multiple: false, title: "选择目标文件夹" });
   return typeof dir === "string" ? dir : null;
 }
 
+async function applyExportResult(result: ExportResult, exportMode: ExportMode) {
+  const verb = exportMode === "move" ? "移动" : "复制";
+  const retryableIds = result.failed.map((issue) => issue.id);
+  if (result.failed.length || result.warnings.length) {
+    // 只保留“目标尚未生成”的失败项供重试；warning 已经产生目标副作用，
+    // 再次导出只会制造重复副本。
+    staging.setSelection(retryableIds);
+    anchorId = null;
+  } else if (exportMode === "move") {
+    if (result.skippedIds.length) staging.setSelection(result.skippedIds);
+    else clearSelection();
+  }
+
+  const refreshed = await refreshAfterMutation(verb);
+  let message: string;
+  if (result.failed.length || result.warnings.length) {
+    const parts = [`已完成 ${result.completedIds.length} 项`];
+    if (result.staleIds.length) parts.push(`清理 ${result.staleIds.length} 条失效索引`);
+    if (result.failed.length) parts.push(`${result.failed.length} 项可重试`);
+    if (result.warnings.length) parts.push(`${result.warnings.length} 项需检查`);
+    const first = result.failed[0] ?? result.warnings[0];
+    message = `${parts.join("，")}：${first.name} ${first.error}`;
+  } else if (result.skippedIds.length) {
+    const stale = result.staleIds.length ? `，清理 ${result.staleIds.length} 条失效索引` : "";
+    message = `${verb}完成 ${result.completedIds.length} 项，跳过 ${result.skippedIds.length} 项${stale}`;
+  } else if (result.staleIds.length) {
+    message = `已${verb} ${result.completedIds.length} 项，清理 ${result.staleIds.length} 条失效索引`;
+  } else {
+    message = `已${verb} ${result.completedIds.length} 项`;
+  }
+  if (!refreshed) message += "；列表刷新失败";
+  showToast(message);
+}
+
 async function exportSelected(exportMode: ExportMode) {
-  const ids = [...staging.selectedIds];
-  if (!ids.length) return;
-  const dest = await pickDest();
-  if (!dest) return;
+  const ids = currentSelectedIds();
+  if (!ids.length || exportBusy.value || listActionBusy.value || dragBusy.value) return;
+  exportBusy.value = true;
   try {
-    const names = await staging.exportItems(ids, dest, exportMode);
-    if (names.length > 0) {
-      conflict.value = { names, ids, dest, mode: exportMode };
+    // A native folder picker takes the pointer away from the WebView. Reuse the
+    // runtime's operation guard so the hover watchdog cannot hide this panel.
+    await ipc.setDraggingOut(props.podId, true);
+    const dest = await pickDest();
+    if (!dest) return;
+    const result = await staging.exportItems(ids, dest, exportMode);
+    if (result.conflicts.length > 0) {
+      conflict.value = { names: result.conflicts, ids, dest, mode: exportMode };
       mode.value = "conflict";
+      await ipc.setPanelMode(props.podId, "conflict").catch((err) => {
+        console.error("conflict mode sync failed", err);
+        showToast("冲突状态同步失败，请尽快选择处理方式");
+      });
       return;
     }
-    if (exportMode === "move") staging.clearSelection();
-    await staging.refresh(props.podId);
-    showToast(exportMode === "move" ? `已移动 ${ids.length} 项` : `已复制 ${ids.length} 项`);
+    await applyExportResult(result, exportMode);
   } catch (err) {
     console.error(err);
+    if (mode.value === "conflict") {
+      conflict.value = null;
+      mode.value = "list";
+      await ipc.setPanelMode(props.podId, "list").catch(() => {});
+    }
     showToast("导出失败，请重试");
+  } finally {
+    await ipc.setDraggingOut(props.podId, false).catch((err) => {
+      console.error("export guard cleanup failed", err);
+    });
+    exportBusy.value = false;
   }
 }
 
 async function resolveConflict(strategy: Exclude<ConflictStrategy, "ask">) {
   const ctx = conflict.value;
-  if (!ctx) return;
+  if (!ctx || exportBusy.value) return;
+  exportBusy.value = true;
+  try {
+    const result = await ipc.exportItems(ctx.ids, ctx.dest, ctx.mode, strategy);
+    conflict.value = null;
+    mode.value = "list";
+    const modeSynced = await ipc.setPanelMode(props.podId, "list").then(
+      () => true,
+      (err) => {
+        console.error("conflict completion mode sync failed", err);
+        return false;
+      },
+    );
+    await applyExportResult(result, ctx.mode);
+    if (!modeSynced) showToast("导出已处理，但面板状态同步失败");
+  } catch (err) {
+    console.error("resolve conflict failed", err);
+    showToast("导出失败，请重试");
+  } finally {
+    exportBusy.value = false;
+  }
+}
+
+async function cancelConflict() {
+  if (exportBusy.value) return;
   conflict.value = null;
   mode.value = "list";
-  try {
-    await ipc.exportItems(ctx.ids, ctx.dest, ctx.mode, strategy);
-    if (ctx.mode === "move") staging.clearSelection();
-    await staging.refresh(props.podId);
-    showToast(ctx.mode === "move" ? "移动完成" : "复制完成");
-  } catch {
-    showToast("导出失败，请重试");
-  }
+  await ipc.setPanelMode(props.podId, "list").catch((err) => {
+    console.error("cancel conflict failed", err);
+  });
 }
 
 /* ---------- 询问模式 ---------- */
 async function chooseAction(action: DropAction, remember: boolean) {
-  const paths = pendingPaths.value;
-  pendingPaths.value = [];
-  mode.value = "list";
-  await ipc.setPanelMode(props.podId, "list");
-  if (remember && pod.value) {
-    await ipc.updatePod(props.podId, { dropAction: action });
-  }
+  if (askBusy.value) return;
+  const paths = [...pendingPaths.value];
+  if (!paths.length || action === "ask") return;
+  askBusy.value = true;
   try {
-    await ipc.stagePaths(props.podId, paths, action);
+    const result = await ipc.stagePaths(props.podId, paths, action);
     const verb = action === "copy" ? "复制" : action === "move" ? "移动" : "快捷方式";
-    showToast(`已暂存 ${paths.length} 项（${verb}）`);
+    pendingPaths.value = [];
+    mode.value = "list";
+    const modeSynced = await ipc.setPanelMode(props.podId, "list").then(
+      () => true,
+      (err) => {
+        console.error("pending drop completion mode sync failed", err);
+        return false;
+      },
+    );
+    const refreshed = await refreshAfterMutation("暂存");
+    if (!modeSynced) showToast("文件已暂存，但面板状态同步失败");
+    else if (result.warnings.length) {
+      const warning = result.warnings[0];
+      showToast(`已暂存，但 ${warning.name} 的源清理需检查：${warning.error}`);
+    } else if (refreshed) showToast(`已暂存 ${paths.length} 项（${verb}）`);
+    if (remember) {
+      try {
+        await ipc.updatePod(props.podId, { dropAction: action });
+      } catch (err) {
+        console.error("remember drop action failed", err);
+        showToast("文件已暂存，但默认动作保存失败");
+      }
+    }
   } catch (err) {
     console.error(err);
     showToast("暂存失败，请重试");
+  } finally {
+    askBusy.value = false;
   }
 }
 
 async function cancelAsk() {
+  if (askBusy.value) return;
   pendingPaths.value = [];
   mode.value = "list";
-  await ipc.setPanelMode(props.podId, "list");
+  await ipc.setPanelMode(props.podId, "list").catch((err) => {
+    console.error("cancel pending drop failed", err);
+    showToast("取消失败，请重试");
+  });
 }
 
 /* ---------- 文字暂存 ---------- */
 async function stashText() {
   const content = textValue.value.trim();
-  if (!content) return;
+  if (!content || textBusy.value) return;
+  textBusy.value = true;
   try {
-    await ipc.stageText(props.podId, content, textTitle.value.trim() || undefined);
+    await ipc.stageText(props.podId, textValue.value, textTitle.value.trim() || undefined);
     textTitle.value = "";
     textValue.value = "";
     textOpen.value = false;
-    showToast("文字已暂存");
+    if (await refreshAfterMutation("文字暂存")) showToast("文字已暂存");
   } catch {
     showToast("暂存失败，请重试");
+  } finally {
+    textBusy.value = false;
   }
 }
 
 /* ---------- 清空 ---------- */
 const confirmClear = ref(false);
 async function clearAll() {
+  if (listActionBusy.value || exportBusy.value || dragBusy.value) return;
   if (!confirmClear.value) {
     confirmClear.value = true;
-    window.setTimeout(() => (confirmClear.value = false), 2500);
+    window.clearTimeout(confirmClearTimer);
+    confirmClearTimer = window.setTimeout(() => (confirmClear.value = false), 2500);
     return;
   }
+  window.clearTimeout(confirmClearTimer);
   confirmClear.value = false;
-  await staging.clearActivePod(true);
-  showToast("已清空（文件进回收站）");
+  listActionBusy.value = true;
+  try {
+    await staging.clearActivePod(true);
+    anchorId = null;
+    showToast("已清空（文件进回收站）");
+  } catch (err) {
+    console.error("clear pod failed", err);
+    showToast("清空失败，请重试");
+  } finally {
+    listActionBusy.value = false;
+  }
 }
 
 /* ---------- 键盘 ---------- */
 function onKeydown(e: KeyboardEvent) {
-  if ((e.target as HTMLElement).tagName === "TEXTAREA" || (e.target as HTMLElement).tagName === "INPUT") {
+  const target = e.target as HTMLElement;
+  if (target.tagName === "TEXTAREA" || target.tagName === "INPUT") {
     if (e.key === "Escape") (e.target as HTMLElement).blur();
     return;
   }
   if (e.key === "Escape") {
-    if (selectedCount.value) staging.clearSelection();
-    else void ipc.hidePanel(props.podId);
+    if (mode.value === "conflict") void cancelConflict();
+    else if (mode.value === "ask") void cancelAsk();
+    else if (textOpen.value) textOpen.value = false;
+    else if (selectedCount.value) clearSelection();
+    else {
+      void ipc.hidePanel(props.podId).catch((err) => console.error("hide panel failed", err));
+    }
   } else if (e.ctrlKey && e.key.toLowerCase() === "a") {
     e.preventDefault();
-    staging.selectAll();
-  } else if (e.key === "Delete" && selectedCount.value) {
+    if (
+      mode.value === "list" &&
+      !textOpen.value &&
+      !exportBusy.value &&
+      !listActionBusy.value &&
+      !dragBusy.value
+    )
+      selectAll();
+  } else if (e.key === "Delete" && mode.value === "list" && !textOpen.value && selectedCount.value) {
     void removeSelected();
   }
 }
 
 /* ---------- 面板尺寸自适应（防抖合并，避免连续 resize 造成跳动） ---------- */
-const listEl = ref<HTMLElement | null>(null);
 let ro: ResizeObserver | null = null;
 let sizeTimer: number | undefined;
+let resizeSequence = 0;
+
+function cssPixels(value: string): number {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
 
 function scheduleResize() {
   window.clearTimeout(sizeTimer);
+  const sequence = ++resizeSequence;
   sizeTimer = window.setTimeout(async () => {
     await nextTick();
-    const el = listEl.value;
-    if (!el) return;
-    if (mode.value === "list") {
-      const h = Math.min(el.scrollHeight, 560);
-      await ipc
-        .setPanelSize(props.podId, pod.value?.panelWidth ?? 380, h + 118)
-        .catch(() => {});
-    } else {
-      await ipc
-        .setPanelSize(props.podId, pod.value?.panelWidth ?? 380, el.scrollHeight + 16)
-        .catch(() => {});
-    }
+    if (sequence !== resizeSequence || !mounted) return;
+    const root = rootEl.value;
+    const body = listEl.value;
+    const content = contentEl.value;
+    const head = headEl.value;
+    if (!root || !body || !content || !head) return;
+
+    // Observe and measure the intrinsic child, never the flex scroll viewport.
+    // Measuring body.scrollHeight after resizing the native window feeds the
+    // previous viewport height back into the next request and grows repeatedly.
+    const bodyStyle = getComputedStyle(body);
+    const rootStyle = getComputedStyle(root);
+    const bodyPadding = cssPixels(bodyStyle.paddingTop) + cssPixels(bodyStyle.paddingBottom);
+    const rootBorder = cssPixels(rootStyle.borderTopWidth) + cssPixels(rootStyle.borderBottomWidth);
+    const intrinsicBody = Math.ceil(content.scrollHeight + bodyPadding);
+    const bodyHeight = mode.value === "list" ? Math.min(intrinsicBody, 560) : intrinsicBody;
+    const chromeHeight = head.offsetHeight + (footEl.value?.offsetHeight ?? 0) + rootBorder;
+    await ipc
+      .setPanelSize(props.podId, pod.value?.panelWidth ?? 380, Math.ceil(bodyHeight + chromeHeight))
+      .catch((err) => console.error("panel resize failed", err));
   }, 110);
 }
 
 watch(
-  () => [mode.value, items.value.length, textOpen.value, selectedCount.value],
+  () => [
+    mode.value,
+    items.value.length,
+    textOpen.value,
+    selectedCount.value,
+    pod.value?.panelWidth,
+  ],
   () => scheduleResize(),
 );
 
@@ -345,81 +683,120 @@ onMounted(async () => {
   pinned.value = false;
   staging.setActivePod(props.podId);
 
-  // 先注册定向事件，再读取设置/列表，避免首次显示时丢失模式或固定状态。
-  unlisteners.push(
-    ...(await Promise.all([
-      staging.listenChanges(props.podId),
-      listenCurrent<{ mode: PanelMode; paths?: string[] }>(Events.PanelMode, (p) => {
-        mode.value = p.mode;
-        pendingPaths.value = p.paths ?? [];
-      }),
-      /* 面板每次出现都重播滑入动画 */
-      listenCurrent<never>(Events.PanelShown, () => playSlideIn()),
-      /* 固定状态同步 */
-      listenCurrent<{ pinned: boolean }>(Events.PanelPinned, (p) => {
-        pinned.value = p.pinned;
-      }),
-      /* 窗口已被隐藏：DOM 置为「待显示」透明态，下次显示第一帧不闪现完整内容 */
-      listenCurrent<never>(Events.PanelHidden, () => {
-        const el = rootEl.value;
-        if (!el) return;
-        el.classList.remove(
-          "slide-out",
-          "slide-out-left",
-          "slide-out-right",
-          "slide-out-top",
-          "slide-out-bottom",
-        );
-        el.classList.remove("slide-in", ...slideDirs());
-        el.classList.add("pre-show");
-      }),
-    ])),
-  );
+  // 先注册定向事件，再主动读取运行态快照。Promise.allSettled 可确保单个
+  // 监听失败时，已成功注册的监听仍然会被保留并在卸载时释放。
+  const registrations = await Promise.allSettled([
+    staging.listenChanges(props.podId),
+    listenCurrent<{ mode: PanelMode; paths?: string[] }>(Events.PanelMode, (p) => {
+      modeRevision += 1;
+      applyPanelMode(p.mode, p.paths ?? []);
+    }),
+    listenCurrent<PanelState>(Events.PanelState, (state) => {
+      modeRevision += 1;
+      pinRevision += 1;
+      applyPanelState(state);
+    }),
+    /* 面板每次出现都重播滑入动画 */
+    listenCurrent<never>(Events.PanelShown, () => playSlideIn()),
+    /* 固定状态同步 */
+    listenCurrent<{ pinned: boolean }>(Events.PanelPinned, (p) => {
+      pinRevision += 1;
+      pinned.value = p.pinned;
+    }),
+    /* 窗口已被隐藏：DOM 置为「待显示」透明态，下次显示第一帧不闪现完整内容 */
+    listenCurrent<never>(Events.PanelHidden, () => {
+      // Hidden is also used by the global temporary hide/show flow. Runtime
+      // state is synchronized by PanelState/PanelMode/PanelPinned; mutating it
+      // here would discard an in-progress Ask/conflict during a suspension.
+      const el = rootEl.value;
+      if (!el) return;
+      el.classList.remove(
+        "slide-out",
+        "slide-out-left",
+        "slide-out-right",
+        "slide-out-top",
+        "slide-out-bottom",
+      );
+      el.classList.remove("slide-in", ...slideDirs());
+      el.classList.add("pre-show");
+    }),
+  ]);
+  for (const result of registrations) {
+    if (result.status === "fulfilled") retainUnlistener(result.value);
+    else console.error("panel listener registration failed", result.reason);
+  }
+  if (!mounted) return;
 
-  await settingsStore.load();
-  await staging.refresh(props.podId);
-  void settingsStore.listenChanges();
+  await syncPanelState();
+  try {
+    await settingsStore
+      .listenChanges()
+      .catch((err) => console.error("settings listener failed", err));
+    await settingsStore.load();
+    await staging.refresh(props.podId);
+  } catch (err) {
+    console.error("pod panel initialization failed", err);
+    showToast("面板内容加载失败，请重新打开");
+  }
+  if (!mounted) return;
 
   window.addEventListener("keydown", onKeydown);
 
   ro = new ResizeObserver(() => scheduleResize());
-  if (listEl.value) ro.observe(listEl.value);
+  if (contentEl.value) ro.observe(contentEl.value);
 
   await nextTick();
+  scheduleResize();
   playSlideIn();
 });
 
 onBeforeUnmount(() => {
+  mounted = false;
   window.removeEventListener("keydown", onKeydown);
   ro?.disconnect();
   window.clearTimeout(toastTimer);
+  window.clearTimeout(confirmClearTimer);
   window.clearTimeout(sizeTimer);
+  resizeSequence += 1;
   unlisteners.splice(0).forEach((unlisten) => unlisten());
 });
 
 function onPointerEnter() {
-  void ipc.reportPresence(props.podId, "panel", true);
+  void ipc
+    .reportPresence(props.podId, "panel", true)
+    .catch((err) => console.error("panel presence update failed", err));
 }
 function onPointerLeave() {
-  void ipc.reportPresence(props.podId, "panel", false);
+  void ipc
+    .reportPresence(props.podId, "panel", false)
+    .catch((err) => console.error("panel presence update failed", err));
+}
+
+async function openSettings() {
+  try {
+    await ipc.openSettings();
+  } catch (err) {
+    console.error("open settings failed", err);
+    showToast("无法打开设置");
+  }
 }
 </script>
 
 <template>
   <div ref="rootEl" class="panel-root" @pointerenter="onPointerEnter" @pointerleave="onPointerLeave">
     <!-- 头部 -->
-    <header class="panel-head">
+    <header ref="headEl" class="panel-head">
       <div class="pod-title">
         <div class="pod-name" :title="pod?.name">{{ pod?.name ?? "匣" }}</div>
         <span v-if="items.length" class="item-count">{{ items.length }}</span>
       </div>
       <div class="head-right">
         <button
-          v-if="!textOpen"
+          v-if="mode === 'list' && !textOpen"
           type="button"
           class="head-btn"
           title="暂存一段文字"
-          @pointerdown="textOpen = true"
+          @click="textOpen = true"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
             <path d="M4 7h16M4 12h10M4 17h7" />
@@ -429,15 +806,17 @@ function onPointerLeave() {
           type="button"
           class="head-btn"
           :class="{ on: pinned }"
+          :disabled="pinBusy"
+          :aria-pressed="pinned"
           :title="pinned ? '已固定，移开鼠标面板保持展开' : '固定面板（移开鼠标后保持展开）'"
-          @pointerdown="onTogglePinned"
+          @click="onTogglePinned"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 17v5" />
             <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z" />
           </svg>
         </button>
-        <button type="button" class="head-btn" title="设置" @pointerdown="ipc.openSettings()">
+        <button type="button" class="head-btn" title="设置" @click="openSettings">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="3" />
             <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h.09a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1Z" />
@@ -448,76 +827,103 @@ function onPointerLeave() {
 
     <!-- 主体 -->
     <div ref="listEl" class="panel-body">
-      <ActionChooser
-        v-if="mode === 'ask' && pendingPaths.length"
-        :paths="pendingPaths"
-        @choose="chooseAction"
-        @cancel="cancelAsk"
-      />
+      <div ref="contentEl" class="panel-content">
+        <ActionChooser
+          v-if="mode === 'ask' && pendingPaths.length"
+          :paths="pendingPaths"
+          :busy="askBusy"
+          @choose="chooseAction"
+          @cancel="cancelAsk"
+        />
 
-      <ConflictDialog
-        v-else-if="mode === 'conflict' && conflict"
-        :names="conflict.names"
-        :mode="conflict.mode"
-        @resolve="resolveConflict"
-      />
+        <ConflictDialog
+          v-else-if="mode === 'conflict' && conflict"
+          :names="conflict.names"
+          :mode="conflict.mode"
+          :busy="exportBusy"
+          @resolve="resolveConflict"
+          @cancel="cancelConflict"
+        />
 
-      <div v-else-if="textOpen" class="text-stash">
-        <label class="text-field">
-          <span>文件标题</span>
-          <input
-            v-model="textTitle"
-            maxlength="48"
-            placeholder="可选，默认使用正文第一行"
-            autofocus
-            @keydown.enter.prevent
-          />
-        </label>
-        <label class="text-field">
-          <span>正文</span>
-          <textarea
-            v-model="textValue"
-            placeholder="粘贴或输入要暂存的文字…"
-            rows="5"
-          />
-        </label>
-        <div class="text-actions">
-          <button type="button" class="act primary" @pointerdown="stashText">暂存</button>
-          <button type="button" class="act ghost" @pointerdown="textOpen = false">取消</button>
+        <div v-else-if="textOpen" class="text-stash">
+          <label class="text-field">
+            <span>文件标题</span>
+            <input
+              v-model="textTitle"
+              maxlength="48"
+              placeholder="可选，默认使用正文第一行"
+              :disabled="textBusy"
+              autofocus
+              @keydown.enter.prevent
+            />
+          </label>
+          <label class="text-field">
+            <span>正文</span>
+            <textarea
+              v-model="textValue"
+              placeholder="粘贴或输入要暂存的文字…"
+              rows="5"
+              :disabled="textBusy"
+            />
+          </label>
+          <div class="text-actions">
+            <button type="button" class="act primary" :disabled="textBusy" @click="stashText">
+              {{ textBusy ? "暂存中…" : "暂存" }}
+            </button>
+            <button type="button" class="act ghost" :disabled="textBusy" @click="textOpen = false">
+              取消
+            </button>
+          </div>
         </div>
+
+        <template v-else>
+          <div v-if="items.length === 0" class="empty">
+            <div class="empty-title">「{{ pod?.name ?? "匣" }}」是空的</div>
+            <div class="empty-hint">把文件或图片拖到屏幕边缘的这个匣上<br />将按当前匣的动作设置暂存</div>
+          </div>
+          <TransitionGroup
+            v-else
+            name="list"
+            tag="div"
+            class="items"
+            role="listbox"
+            aria-label="暂存项目"
+            aria-multiselectable="true"
+          >
+            <ItemRow
+              v-for="item in items"
+              :key="item.id"
+              :item="item"
+              :selected="staging.selectedIds.has(item.id)"
+              :get-drag-paths="() => selectedOrSingle(item)"
+              @select="onSelect"
+              @open="openItem"
+              @reveal="revealItem"
+              @remove="removeItem"
+              @drag-out="onDragOut"
+            />
+          </TransitionGroup>
+        </template>
       </div>
-
-      <template v-else>
-        <div v-if="items.length === 0" class="empty">
-          <div class="empty-title">「{{ pod?.name ?? "匣" }}」是空的</div>
-          <div class="empty-hint">把文件或图片拖到屏幕边缘的这个匣上<br />将按当前匣的动作设置暂存</div>
-        </div>
-        <TransitionGroup v-else name="list" tag="div" class="items">
-          <ItemRow
-            v-for="item in items"
-            :key="item.id"
-            :item="item"
-            :selected="staging.selectedIds.has(item.id)"
-            :get-drag-paths="() => selectedOrSingle(item)"
-            @select="onSelect"
-            @open="openItem"
-            @reveal="revealItem"
-            @remove="removeItem"
-            @drag-out="onDragOut"
-          />
-        </TransitionGroup>
-      </template>
     </div>
 
     <!-- 底部 -->
-    <footer class="panel-foot">
+    <footer v-if="mode === 'list' && !textOpen" ref="footEl" class="panel-foot">
       <template v-if="selectedCount > 0">
         <span class="sel-count">已选 {{ selectedCount }} 项</span>
         <div class="foot-actions">
-          <button type="button" class="foot-btn" @pointerdown="exportSelected('copy')">复制到…</button>
-          <button type="button" class="foot-btn" @pointerdown="exportSelected('move')">移动到…</button>
-          <button type="button" class="foot-btn danger" @pointerdown="removeSelected">移出</button>
-          <button type="button" class="foot-btn ghost" @pointerdown="staging.clearSelection()">取消</button>
+          <button type="button" class="foot-btn" :disabled="exportBusy || listActionBusy || dragBusy" @click="exportSelected('copy')">
+            复制到…
+          </button>
+          <button type="button" class="foot-btn" :disabled="exportBusy || listActionBusy || dragBusy" @click="exportSelected('move')">
+            移动到…
+          </button>
+          <button type="button" class="foot-btn danger" :disabled="listActionBusy || exportBusy || dragBusy" @click="removeSelected">
+            移出
+          </button>
+          <button type="button" class="foot-btn ghost" :disabled="exportBusy || listActionBusy || dragBusy" @click="clearSelection">
+            取消
+          </button>
         </div>
       </template>
       <template v-else-if="items.length > 0">
@@ -528,11 +934,12 @@ function onPointerLeave() {
               { value: 'move', label: '剪切' },
             ]"
             v-model="dragMode"
+            :disabled="dragBusy || exportBusy || listActionBusy"
           />
         </div>
         <div class="foot-right">
-          <button type="button" class="foot-btn ghost" @pointerdown="staging.selectAll()">全选</button>
-          <button type="button" class="foot-btn ghost danger" @pointerdown="clearAll">
+          <button type="button" class="foot-btn ghost" :disabled="listActionBusy || exportBusy || dragBusy" @click="selectAll">全选</button>
+          <button type="button" class="foot-btn ghost danger" :disabled="listActionBusy || exportBusy || dragBusy" @click="clearAll">
             {{ confirmClear ? "确认清空？" : "清空" }}
           </button>
         </div>
@@ -668,12 +1075,19 @@ function onPointerLeave() {
 .head-btn.on {
   color: var(--accent);
 }
+.head-btn:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
 
 .panel-body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   padding: 4px 8px;
+}
+.panel-content {
+  min-width: 0;
 }
 
 .empty {
@@ -756,6 +1170,12 @@ function onPointerLeave() {
 }
 .foot-btn:active {
   transform: scale(0.97);
+}
+.foot-btn:disabled,
+.act:disabled {
+  cursor: wait;
+  opacity: 0.58;
+  transform: none;
 }
 .foot-btn:hover {
   background: var(--surface-2);

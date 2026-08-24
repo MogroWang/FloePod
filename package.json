@@ -4,6 +4,10 @@
   "version": "0.5.1",
   "description": "浮匣 FloePod - 本地优先的屏幕边缘文件暂存工具",
   "type": "module",
+  "packageManager": "pnpm@11.22.0",
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",

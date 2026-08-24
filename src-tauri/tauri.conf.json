@@ -29,7 +29,7 @@
       }
     ],
     "security": {
-      "capabilities": ["default"]
+      "capabilities": ["settings", "pods"]
     }
   },
   "bundle": {

@@ -1,0 +1,105 @@
+name: Build Windows
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows:
+    name: Validate and package Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm and Node.js
+        uses: pnpm/setup@v2
+        with:
+          runtime: node@24.19.0
+          cache: true
+          install: false
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Rust dependencies and build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check and build frontend
+        run: pnpm build
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+
+      - name: Run Rust lints
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+
+      - name: Build Tauri application and NSIS installer
+        run: pnpm tauri build --ci
+
+      - name: Build portable package
+        run: node scripts/package-portable.mjs
+
+      - name: Collect Windows artifacts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $artifactDir = Join-Path $env:GITHUB_WORKSPACE "dist/github-artifacts"
+          New-Item -ItemType Directory -Path $artifactDir -Force | Out-Null
+
+          $binary = Get-Item "src-tauri/target/release/FloePod.exe"
+          $installers = @(Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "*.exe" -File)
+          $portablePackages = @(Get-ChildItem "dist" -Filter "FloePod-*-win-x64-portable.zip" -File)
+
+          if ($installers.Count -eq 0) {
+            throw "Tauri did not produce an NSIS installer."
+          }
+          if ($portablePackages.Count -ne 1) {
+            throw "Expected exactly one portable package, found $($portablePackages.Count)."
+          }
+
+          Copy-Item -LiteralPath $binary.FullName -Destination $artifactDir
+          $installers | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination $artifactDir
+          }
+          Copy-Item -LiteralPath $portablePackages[0].FullName -Destination $artifactDir
+
+          $checksums = Get-ChildItem $artifactDir -File |
+            Sort-Object Name |
+            ForEach-Object {
+              $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              "$hash  $($_.Name)"
+            }
+          $checksums | Set-Content -LiteralPath (Join-Path $artifactDir "SHA256SUMS.txt") -Encoding utf8NoBOM
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v7
+        with:
+          name: FloePod-windows-x64-${{ github.run_number }}-${{ github.sha }}
+          path: dist/github-artifacts/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

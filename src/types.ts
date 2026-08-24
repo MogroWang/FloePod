@@ -7,6 +7,36 @@ export type Material = "acrylic" | "plain";
 export type ThemeMode = "system" | "light" | "dark";
 export type ExportMode = "copy" | "move";
 export type ConflictStrategy = "ask" | "overwrite" | "skip" | "rename";
+/** 一次性剪切拖出令牌；只可 finalize 或 cancel 一次。 */
+export type DragCutToken = string;
+
+export interface ExportIssue {
+  id: number;
+  name: string;
+  error: string;
+}
+
+export interface StageWarning {
+  name: string;
+  error: string;
+}
+
+/** 暂存副作用已提交；warnings 表示目标有效但仍需人工检查的源清理问题。 */
+export interface StagePathsResult {
+  items: StagedItem[];
+  warnings: StageWarning[];
+}
+
+/** 批量导出是逐项提交的；明确区分可安全重试的失败和已有副作用的警告。 */
+export interface ExportResult {
+  conflicts: string[];
+  completedIds: number[];
+  skippedIds: number[];
+  /** 已从数据库清理、但目标目录没有产生文件的失效源条目。 */
+  staleIds: number[];
+  failed: ExportIssue[];
+  warnings: ExportIssue[];
+}
 
 /** 一个「匣」：贴在屏幕边缘的独立暂存点 */
 export interface Pod {
@@ -90,3 +120,12 @@ export interface Bootstrap {
 }
 
 export type PanelMode = "list" | "ask" | "conflict";
+
+/** Rust 侧单个面板的瞬时运行态快照。 */
+export interface PanelState {
+  mode: PanelMode;
+  paths: string[];
+  pinned: boolean;
+  visible: boolean;
+  draggingOut: boolean;
+}

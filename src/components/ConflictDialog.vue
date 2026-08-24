@@ -3,8 +3,14 @@
 import { computed } from "vue";
 import type { ConflictStrategy } from "@/types";
 
-const props = defineProps<{ names: string[]; mode: "copy" | "move" }>();
-const emit = defineEmits<{ (e: "resolve", strategy: Exclude<ConflictStrategy, "ask">): void }>();
+const props = withDefaults(
+  defineProps<{ names: string[]; mode: "copy" | "move"; busy?: boolean }>(),
+  { busy: false },
+);
+const emit = defineEmits<{
+  (e: "resolve", strategy: Exclude<ConflictStrategy, "ask">): void;
+  (e: "cancel"): void;
+}>();
 
 const shown = computed(() => props.names.slice(0, 6));
 const extra = computed(() => props.names.length - shown.value.length);
@@ -19,9 +25,23 @@ const verb = computed(() => (props.mode === "move" ? "移动" : "复制"));
       <li v-if="extra > 0" class="more">以及另外 {{ extra }} 个</li>
     </ul>
     <div class="actions">
-      <button type="button" class="act primary" @pointerdown="emit('resolve', 'rename')">保留两者</button>
-      <button type="button" class="act" @pointerdown="emit('resolve', 'overwrite')">覆盖</button>
-      <button type="button" class="act ghost" @pointerdown="emit('resolve', 'skip')">跳过</button>
+      <button
+        type="button"
+        class="act primary"
+        :disabled="busy"
+        @click="emit('resolve', 'rename')"
+      >
+        保留两者
+      </button>
+      <button type="button" class="act" :disabled="busy" @click="emit('resolve', 'overwrite')">
+        覆盖
+      </button>
+      <button type="button" class="act ghost" :disabled="busy" @click="emit('resolve', 'skip')">
+        跳过
+      </button>
+      <button type="button" class="act ghost" :disabled="busy" @click="emit('cancel')">
+        取消
+      </button>
     </div>
   </div>
 </template>
@@ -60,7 +80,7 @@ const verb = computed(() => (props.mode === "move" ? "移动" : "复制"));
 }
 .actions {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: 1fr 1fr;
   gap: 8px;
 }
 .act {
@@ -77,6 +97,11 @@ const verb = computed(() => (props.mode === "move" ? "移动" : "复制"));
 }
 .act:active {
   transform: scale(0.98);
+}
+.act:disabled {
+  cursor: wait;
+  opacity: 0.58;
+  transform: none;
 }
 .act.primary {
   background: var(--accent);

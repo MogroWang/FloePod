@@ -55,6 +55,10 @@ export function springValue(
       v = 0;
       onUpdate(x);
       done = true;
+      // requestAnimationFrame ids are only handles, not a reliable "is running"
+      // flag once the callback has fired. Reset it here so a later setTarget can
+      // start a fresh animation after this spring has settled.
+      raf = 0;
       onComplete?.();
       return;
     }

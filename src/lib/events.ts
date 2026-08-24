@@ -7,6 +7,7 @@ export const Events = {
   PanelMode: "floepod://panel-mode",
   PanelShown: "floepod://panel-shown",
   PanelPinned: "floepod://panel-pinned",
+  PanelState: "floepod://panel-state",
   PanelHidden: "floepod://panel-hidden",
   CollectClipboard: "floepod://collect-clipboard",
   OpenPanel: "floepod://open-panel",

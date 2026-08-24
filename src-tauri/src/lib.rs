@@ -1,5 +1,6 @@
 //! 浮匣 FloePod - 本地优先的屏幕边缘文件暂存工具（多匣版）。
 
+mod autostart;
 mod commands;
 mod db;
 mod events;
@@ -30,26 +31,18 @@ pub fn run() {
         .manage(app_state)
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             // 二次启动：唤起已有实例
-            manager::open_settings(&app);
+            manager::open_settings(app);
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None::<Vec<&str>>,
-        ))
         .plugin(tauri_plugin_drag::init())
         .setup(|app| {
             let settings = {
                 let state = app.state::<state::AppState>();
                 let conn = state.db.lock().unwrap();
-                settings::load(
-                    &conn,
-                    &state.data_dir.to_string_lossy(),
-                    VERSION,
-                )?
+                settings::load(&conn, &state.data_dir.to_string_lossy(), VERSION)?
             };
 
             tray::init(app.handle())?;
@@ -62,7 +55,12 @@ pub fn run() {
                 settings.first_run_done
             ));
 
-            // 落地：创建匣窗口 / 应用外观 / 自启 / 监听 / 托盘
+            // 启动时显式校准系统自启动状态；失败不妨碍用户手动启动应用，但必须留痕。
+            if let Err(e) = manager::sync_autostart(app.handle(), settings.autostart) {
+                commands::debug_log(&format!("[autostart] {e}"));
+            }
+
+            // 落地：创建匣窗口 / 应用外观 / 监听 / 托盘
             manager::apply_settings(app.handle(), &settings);
             // 启动对账：把暂存文件夹中已有但未入库的文件读入列表
             app.state::<state::AppState>()
@@ -94,7 +92,10 @@ pub fn run() {
                             .and_then(|s| s.strip_suffix("_panel"))
                             .and_then(|s| s.parse::<u64>().ok())
                         {
-                            manager::hide_panel(&window.app_handle(), id);
+                            let app = window.app_handle().clone();
+                            tauri::async_runtime::spawn(async move {
+                                manager::hide_panel(&app, id);
+                            });
                         }
                     }
                     _ => {}
@@ -115,12 +116,15 @@ pub fn run() {
             commands::stage_text,
             commands::list_pod_items,
             commands::remove_items,
+            commands::prepare_drag_cut,
             commands::finalize_drag_cut,
+            commands::cancel_drag_cut,
             commands::export_items,
             commands::read_thumbnail,
             commands::show_panel,
             commands::toggle_panel,
             commands::hide_panel,
+            manager::get_panel_state,
             commands::set_panel_mode,
             commands::hold_pending_drop,
             commands::report_presence,

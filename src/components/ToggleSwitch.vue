@@ -16,7 +16,7 @@ function toggle() {
     :disabled="disabled"
     class="switch"
     :class="{ on: modelValue }"
-    @pointerdown="toggle"
+    @click="toggle"
   >
     <span class="knob" />
   </button>

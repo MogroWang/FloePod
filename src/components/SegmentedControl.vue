@@ -9,6 +9,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 const props = defineProps<{
   options: { value: string; label: string }[];
   modelValue: string;
+  disabled?: boolean;
 }>();
 const emit = defineEmits<{ (e: "update:modelValue", v: string): void }>();
 
@@ -35,6 +36,28 @@ function positionThumb() {
   };
 }
 
+async function onOptionKeydown(e: KeyboardEvent, value: string) {
+  if (props.disabled) return;
+  const current = props.options.findIndex((option) => option.value === value);
+  if (current < 0 || props.options.length === 0) return;
+  let next = current;
+  if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+    next = (current - 1 + props.options.length) % props.options.length;
+  } else if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+    next = (current + 1) % props.options.length;
+  } else if (e.key === "Home") {
+    next = 0;
+  } else if (e.key === "End") {
+    next = props.options.length - 1;
+  } else {
+    return;
+  }
+  e.preventDefault();
+  emit("update:modelValue", props.options[next].value);
+  await nextTick();
+  segRef.value?.querySelectorAll<HTMLButtonElement>(".seg-item")[next]?.focus();
+}
+
 onMounted(() => {
   positionThumb();
   ro = new ResizeObserver(() => positionThumb());
@@ -49,7 +72,7 @@ watch([index, () => props.options], async () => {
 </script>
 
 <template>
-  <div ref="segRef" class="seg" role="radiogroup">
+  <div ref="segRef" class="seg" :class="{ disabled }" role="radiogroup" :aria-disabled="disabled">
     <div class="seg-thumb" :style="thumbStyle" />
     <button
       v-for="o in options"
@@ -57,9 +80,12 @@ watch([index, () => props.options], async () => {
       type="button"
       role="radio"
       :aria-checked="o.value === modelValue"
+      :tabindex="o.value === modelValue ? 0 : -1"
+      :disabled="disabled"
       class="seg-item"
       :class="{ active: o.value === modelValue }"
-      @pointerdown="emit('update:modelValue', o.value)"
+      @click="!disabled && emit('update:modelValue', o.value)"
+      @keydown="onOptionKeydown($event, o.value)"
     >
       {{ o.label }}
     </button>
@@ -102,5 +128,11 @@ watch([index, () => props.options], async () => {
 .seg-item.active {
   color: var(--ink);
   font-weight: 550;
+}
+.seg.disabled {
+  opacity: 0.58;
+}
+.seg-item:disabled {
+  cursor: not-allowed;
 }
 </style>
