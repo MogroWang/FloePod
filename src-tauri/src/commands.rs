@@ -290,6 +290,16 @@ pub(crate) fn is_reparse_or_symlink(meta: &fs::Metadata) -> bool {
 }
 
 fn copy_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+    // 安全检查：防止目标位于源目录内部导致无限递归复制。
+    // 目标尚不存在时无法规范化，直接放行；目录复制只写入 dst 子树，不会回写 src。
+    let src_canonical = src.canonicalize().unwrap_or_else(|_| src.to_path_buf());
+    let dst_canonical = dst.canonicalize().unwrap_or_else(|_| dst.to_path_buf());
+    if dst_canonical.starts_with(&src_canonical) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("目标不能位于源目录内部: {}", dst.display()),
+        ));
+    }
     let meta = fs::symlink_metadata(src)?;
     if is_reparse_or_symlink(&meta) {
         return Err(io::Error::new(
@@ -2144,6 +2154,13 @@ pub async fn set_pod_accept(app: AppHandle, pod_id: u64, accepting: bool) {
 #[tauri::command]
 pub async fn set_panel_size(app: AppHandle, pod_id: u64, _width: u32, height: u32) {
     manager::set_panel_size(&app, pod_id, height);
+}
+
+/// 拖动胶囊条时实时移动窗口（不写数据库）；松手后由 update_pod 持久化 offset。
+#[tauri::command]
+pub async fn move_pod_bar(app: AppHandle, pod_id: u64, offset: f64) -> Result<(), String> {
+    manager::move_pod_bar(&app, pod_id, offset);
+    Ok(())
 }
 
 #[tauri::command]

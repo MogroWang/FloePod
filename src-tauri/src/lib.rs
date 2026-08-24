@@ -132,6 +132,7 @@ pub fn run() {
             commands::set_dragging_out,
             commands::set_pod_accept,
             commands::set_panel_size,
+            commands::move_pod_bar,
             commands::toggle_all_bars,
             commands::open_settings,
             commands::log_frontend,
