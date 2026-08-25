@@ -5,8 +5,7 @@ const MAX_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_MESSAGE_CHARS: usize = 16 * 1024;
 static LOG_LOCK: Mutex<()> = Mutex::new(());
 
-/// Release builds have no console. Keep one bounded local diagnostic file in
-/// the selected data directory without allowing logging failures to affect app work.
+/// 发布版没有控制台，在数据目录保留一份限长日志；写入失败不影响应用运行。
 pub fn write(message: &str) {
     let _guard = LOG_LOCK
         .lock()

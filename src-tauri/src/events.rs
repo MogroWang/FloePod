@@ -1,8 +1,6 @@
 use tauri::{AppHandle, Emitter, Manager};
 
-/// Rust -> frontend event names. Keep these values aligned with the TypeScript
-/// contract; persisted installations can have several independently loaded
-/// WebViews at once.
+/// Rust 到前端的事件名，与 TypeScript 中的定义保持一致。
 pub const ITEMS_CHANGED: &str = "floepod://items-changed";
 pub const SETTINGS_CHANGED: &str = "floepod://settings-changed";
 pub const PODS_CHANGED: &str = "floepod://pods-changed";
@@ -37,8 +35,7 @@ pub fn pod_window(label: &str) -> Option<PodWindow> {
     }
 }
 
-/// Deliver an item mutation only to the two WebViews owned by the affected pod.
-/// Missing windows are normal for disabled pods and during settings transitions.
+/// 条目变更只发送给对应匣的两个 WebView；停用匣或切换设置时窗口不存在属于正常情况。
 pub fn emit_items_changed(app: &AppHandle, pod_id: u64) {
     let payload = serde_json::json!({ "podId": pod_id });
     for label in [pod_bar_label(pod_id), pod_panel_label(pod_id)] {

@@ -147,8 +147,7 @@ fn resolve_config_path(path: &Path) -> Result<PathBuf, String> {
     resolve_path_impl(path, true)
 }
 
-/// Compare two persisted path spellings without requiring their drive/share to be online.
-/// Runtime file operations must still call [`resolve_path`] before touching the filesystem.
+/// 比较两条持久化路径时不要求磁盘或共享在线；实际文件操作仍须先调用 [`resolve_path`]。
 pub fn configured_paths_equal(a: &Path, b: &Path) -> Result<bool, String> {
     Ok(paths_equal(
         &resolve_config_path(a)?,

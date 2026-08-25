@@ -13,8 +13,7 @@ function reportFrontend(msg: string) {
   void ipc
     .logFrontend(msg)
     .catch(() => {
-      // Reporting is best-effort. Consuming the rejection is essential here:
-      // otherwise it produces another unhandledrejection and recursively logs.
+      // 上报失败必须在此消费，否则会再次触发 unhandledrejection 并循环记录。
     })
     .finally(() => {
       reportingBusy = false;

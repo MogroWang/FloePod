@@ -36,8 +36,7 @@ fn resolve_from(
     let base = roaming_app_data
         .filter(|path| path.is_absolute())
         .or_else(|| local_app_data.filter(|path| path.is_absolute()))
-        // Even in a restricted environment, never degrade to a relative
-        // `FloePod` directory beside the current working directory.
+        // 受限环境中也不能退回当前工作目录旁的相对 `FloePod` 目录。
         .unwrap_or(temporary_directory);
     let installed = base.join("FloePod");
     let _ = fs::create_dir_all(&installed);

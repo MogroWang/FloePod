@@ -1,4 +1,4 @@
-/** Keep native image work bounded across every ThumbImg instance in this WebView. */
+/** 限制当前 WebView 内所有缩略图组件的原生图片任务并发数。 */
 const MAX_CONCURRENT_THUMBNAILS = 3;
 
 let active = 0;

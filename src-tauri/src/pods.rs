@@ -145,7 +145,7 @@ pub fn update(app: AppHandle, pod_id: u64, patch: serde_json::Value) -> Result<P
             .map_err(|error| error.to_string())?;
         settings::upsert_pod(&transaction, &pod, &staging::data_dir(&state), VERSION)?;
         if folder_changed {
-            // A folder change switches index roots; it does not move physical files.
+            // 更换目录只切换索引根目录，不移动原文件。
             db::delete_items_by_pod(&transaction, pod_id as i64)?;
         }
         transaction.commit().map_err(|error| error.to_string())?;
@@ -212,8 +212,7 @@ pub fn delete(app: AppHandle, pod_id: u64, recycle_files: bool) -> Result<(), St
         }
     }
 
-    // Removing the rows even when files are kept prevents a future pod from
-    // inheriting stale entries through any legacy ID reuse.
+    // 即使保留文件也要删除记录，避免后续匣因旧 ID 复用继承这些条目。
     {
         let mut connection = state.db.lock().unwrap();
         let transaction = connection

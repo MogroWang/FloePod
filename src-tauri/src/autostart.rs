@@ -180,8 +180,7 @@ mod registry {
 
     impl Drop for OwnedKey {
         fn drop(&mut self) {
-            // SAFETY: OwnedKey is only constructed from a successful registry open/create call
-            // and exclusively owns the returned handle.
+            // SAFETY: OwnedKey 只由成功的注册表打开或创建调用构造，并独占返回的句柄。
             unsafe {
                 RegCloseKey(self.0);
             }
@@ -210,8 +209,7 @@ mod registry {
     fn open_run_key(create: bool) -> Result<Option<OwnedKey>, String> {
         let path = wide_null(RUN_KEY);
         let mut key = null_mut();
-        // SAFETY: path is NUL-terminated, output storage is valid, and no security descriptor
-        // or class string is supplied. The returned handle is wrapped immediately.
+        // SAFETY: path 以 NUL 结尾，输出地址有效，未传入安全描述符或类名；返回句柄立即封装。
         let status = unsafe {
             if create {
                 RegCreateKeyExW(
@@ -251,8 +249,7 @@ mod registry {
             .checked_mul(size_of::<u16>())
             .and_then(|len| u32::try_from(len).ok())
             .ok_or_else(|| "自启动命令过长，无法写入注册表".to_string())?;
-        // SAFETY: name and data are NUL-terminated buffers valid for the duration of the call;
-        // byte_len describes the complete UTF-16 REG_SZ including its terminator.
+        // SAFETY: name 和 data 在调用期间有效且以 NUL 结尾，byte_len 包含 REG_SZ 终止符。
         let status = unsafe {
             RegSetValueExW(
                 key.0,
@@ -281,7 +278,7 @@ mod registry {
         for _ in 0..3 {
             let mut value_type = 0;
             let mut byte_len = 0;
-            // SAFETY: value name is NUL-terminated; null data requests the required byte count.
+            // SAFETY: 值名以 NUL 结尾，空数据指针仅用于查询所需字节数。
             let status = unsafe {
                 RegQueryValueExW(
                     key.0,
@@ -307,8 +304,8 @@ mod registry {
 
             let mut data = vec![0u16; byte_len as usize / size_of::<u16>()];
             let mut actual_len = byte_len;
-            // SAFETY: data owns byte_len initialized bytes and actual_len advertises exactly
-            // that capacity. A concurrent growth is handled by ERROR_MORE_DATA and retried.
+            // SAFETY: data 拥有 byte_len 个已初始化字节，actual_len 与容量一致；
+            // 并发增长由 ERROR_MORE_DATA 分支重试。
             let status = unsafe {
                 RegQueryValueExW(
                     key.0,
@@ -345,7 +342,7 @@ mod registry {
 
     fn delete_value_if_present(key: &OwnedKey, name: &str) -> Result<(), String> {
         let name = wide_null(name);
-        // SAFETY: name is a valid NUL-terminated UTF-16 value name and key is owned/open.
+        // SAFETY: name 是有效且以 NUL 结尾的 UTF-16 值名，key 由当前对象持有并已打开。
         let status = unsafe { RegDeleteValueW(key.0, name.as_ptr()) };
         if status == ERROR_FILE_NOT_FOUND {
             Ok(())

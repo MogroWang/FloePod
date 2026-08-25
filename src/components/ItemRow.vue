@@ -40,9 +40,7 @@ function onPointerDown(e: PointerEvent) {
   if (e.button !== 0) return;
   const target = e.target as HTMLElement;
   if (target.closest("button")) return;
-  // A native OLE drag normally returns without dispatching a click to this row.
-  // Keep the flag long enough to absorb a synthetic click from that gesture, but
-  // clear it on the next real pointer gesture so an ordinary later click is not lost.
+  // 原生拖出偶尔会补发一次合成点击：短暂保留标记吸收它，下一次真实按下时再清除。
   dragArmed.value = false;
   const startX = e.clientX;
   const startY = e.clientY;

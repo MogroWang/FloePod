@@ -27,7 +27,7 @@ export interface ExportResult {
   conflicts: string[];
   completedIds: number[];
   skippedIds: number[];
-  /** Removed from SQLite because the source was already absent; no target was produced. */
+  /** 源文件已不存在，数据库记录已清理，但没有生成目标文件。 */
   staleIds: number[];
   failed: ExportIssue[];
   warnings: ExportIssue[];
@@ -37,7 +37,7 @@ export interface Pod {
   id: number;
   name: string;
   edge: Edge;
-  /** Native monitor name; empty means the primary monitor. */
+  /** 系统显示器名称；空字符串表示主显示器。 */
   monitor: string;
   offset: number;
   stagingFolder: string;
@@ -53,7 +53,7 @@ export interface MonitorInfo {
   name: string;
   label: string;
   primary: boolean;
-  /** Physical monitor rectangle and WebView scale factor. */
+  /** 显示器物理坐标和 WebView 缩放比例。 */
   x: number;
   y: number;
   width: number;
@@ -85,7 +85,7 @@ export interface Settings {
   autostart: boolean;
   hotkeys: Hotkeys;
   pods: Pod[];
-  /** Runtime metadata; excluded from persisted settings JSON. */
+  /** 运行时信息，不写入设置文件。 */
   version: string;
   dataDir: string;
 }

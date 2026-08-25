@@ -1,5 +1,4 @@
-//! Stable Tauri command boundary. Filesystem and persistence behavior lives in
-//! concrete domain modules so it can be tested without a WebView runtime.
+//! Tauri 命令入口。文件和持久化逻辑位于独立模块，可脱离 WebView 测试。
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
@@ -67,8 +66,7 @@ pub fn get_hotkey_defaults() -> Hotkeys {
     Hotkeys::with_defaults()
 }
 
-// Window creation inside pod/settings mutations requires an async Tauri command
-// on Windows; a synchronous command can deadlock against the UI message loop.
+// Windows 上创建窗口必须使用异步 Tauri 命令，同步命令可能与 UI 消息循环死锁。
 #[tauri::command]
 pub async fn create_pod(
     app: AppHandle,

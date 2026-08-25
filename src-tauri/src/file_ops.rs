@@ -61,9 +61,8 @@ pub fn is_reparse_or_symlink(metadata: &fs::Metadata) -> bool {
     }
 }
 
-/// Copy without merging directories or replacing files. Windows path
-/// normalization is required here: `canonicalize` adds a `\\?\` prefix to an
-/// existing source but cannot do so for a not-yet-created target.
+/// 复制时不合并目录、不覆盖文件。源路径经 `canonicalize` 后可能带有 `\\?\` 前缀，
+/// 尚未创建的目标路径无法用同样方式规范化，因此需要单独处理 Windows 路径。
 pub fn copy_path(source: &Path, target: &Path) -> io::Result<()> {
     let metadata = fs::symlink_metadata(source)?;
     let resolve = |path: &Path| {
@@ -139,9 +138,7 @@ pub struct ExportCopyOutcome {
     pub warning: Option<String>,
 }
 
-/// Build a complete same-directory temporary copy before publishing it. For an
-/// overwrite, retain the old target under a backup name until publication has
-/// succeeded so a failed rename can restore it in place.
+/// 先在同目录完成临时副本，再发布到目标名。覆盖时保留旧目标，发布失败可原位恢复。
 pub fn copy_for_export(
     source: &Path,
     target: &Path,
@@ -251,8 +248,7 @@ pub fn copy_for_export(
 pub struct StagedMove {
     pub staged: PathBuf,
     pub original: PathBuf,
-    /// Cross-volume moves retain the source under this sibling name until the
-    /// SQLite commit succeeds, making every pre-commit rollback a same-volume rename.
+    /// 跨盘移动在 SQLite 提交前将源文件保留为同目录临时名，使回滚只需同盘重命名。
     pub quarantine: Option<PathBuf>,
 }
 
@@ -328,7 +324,7 @@ pub fn rollback_staged_moves(records: &[StagedMove]) -> Vec<String> {
         .collect()
 }
 
-/// Publish a move without exposing a completed but untracked cross-volume copy.
+/// 发布移动结果时，避免留下已经复制完成但尚未入库的跨盘文件。
 pub fn move_into_staging(source: &Path, target: &Path) -> Result<StagedMove, String> {
     match fs::rename(source, target) {
         Ok(()) => Ok(StagedMove {

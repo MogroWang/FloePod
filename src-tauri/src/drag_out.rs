@@ -24,8 +24,7 @@ fn basic_identity(metadata: &fs::Metadata) -> DragCutFileIdentity {
     {
         use std::os::windows::fs::MetadataExt;
         DragCutFileIdentity {
-            // Stable Rust does not yet expose all by-handle IDs used here. The
-            // optional fields allow adopting them without changing token semantics.
+            // 稳定版 Rust 尚未提供全部句柄标识，预留字段便于以后补充而不改变令牌语义。
             volume_serial_number: None,
             file_index: None,
             creation_time: metadata.creation_time(),
@@ -243,7 +242,7 @@ pub fn prepare(app: AppHandle, pod_id: u64, paths: Vec<String>) -> Result<String
 pub fn finalize(app: AppHandle, token: String) -> Result<(), String> {
     let state = app.state::<AppState>();
     let _operation = state.file_ops.lock().unwrap();
-    // Consume first: no validation or Recycle Bin failure can make a token reusable.
+    // 先消费令牌；后续校验或回收站操作失败也不能让它再次使用。
     let snapshot = take_snapshot(&state, &token)?;
     let ids: Vec<_> = snapshot.entries.iter().map(|entry| entry.item_id).collect();
     let (current, items) = {

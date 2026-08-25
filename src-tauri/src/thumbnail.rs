@@ -23,8 +23,7 @@ pub struct ThumbnailPayload {
 
 pub fn read(app: AppHandle, path: String) -> Result<Option<ThumbnailPayload>, String> {
     let state = app.state::<AppState>();
-    // Snapshot the source while serialized with mutating operations, then release
-    // the lock before the CPU-heavy probe and decode.
+    // 与写操作串行取得源文件快照，耗时的格式探测和解码则在释放锁后执行。
     let bytes = {
         let _operation = state.file_ops.lock().unwrap();
         let (current, item) = {

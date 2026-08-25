@@ -114,7 +114,7 @@ pub fn export_items(
                 if mode == "move" {
                     moved_ids.push(item.id);
                     changed_pods.insert(item.pod_id);
-                    // The stale row is removed, but no destination file was produced.
+                    // 源文件不存在时只清理旧记录，不生成目标文件。
                     result.stale_ids.push(item.id);
                 } else {
                     result.failed.push(issue("源文件已不存在".into()));

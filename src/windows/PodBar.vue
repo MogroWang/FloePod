@@ -124,7 +124,7 @@ function onClick() {
     justDragged = false;
     return;
   }
-  // A pending hover callback must not reopen a panel that this click just hid.
+  // 点击关闭面板后，尚未执行的悬停回调不能把它重新打开。
   clearHoverTimer();
   void ipc.togglePanel(props.podId).catch((err) => console.error("toggle panel failed", err));
 }
@@ -217,8 +217,7 @@ async function handleDrop(paths: string[], sampled: Promise<ModifierState> | nul
   setAccept(false);
   if (!pod.value || paths.length === 0) return;
   const action = pod.value.dropAction ?? "ask";
-  // Prefer the last sample requested while the native drag was still over the
-  // bar. Reading only after drop races with the user releasing Ctrl/Shift/Alt.
+  // 使用原生拖拽仍位于匣上时的最后一次采样，避免松手后读取不到修饰键。
   const mods = sampled ? await sampled : (modifierSnapshot ?? NO_MODIFIERS);
   const chosen = dropActionFor(mods, action);
 

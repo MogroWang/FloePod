@@ -23,6 +23,7 @@ FloePodData
 *.log
 
 # 编辑器 / 工具 / 系统
+.vscode/
 .zcode
 .DS_Store
 Thumbs.db
