@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 拖入动作询问：复制 / 移动 / 创建快捷方式 / 取消 + 记住选择 */
 import { computed } from "vue";
-import type { DropAction } from "@/types";
+import type { DropAction } from "@/domain/types";
 
 const props = withDefaults(defineProps<{ paths: string[]; busy?: boolean }>(), {
   busy: false,

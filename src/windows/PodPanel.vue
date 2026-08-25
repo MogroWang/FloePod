@@ -4,10 +4,10 @@
  * 不抢焦点显示（Rust 侧 SW_SHOWNOACTIVATE），悬停离开自动收回（Rust 看门狗）。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { ipc } from "@/lib/ipc";
-import { Events, listenCurrent } from "@/lib/events";
-import { useSettingsStore } from "@/stores/settings";
-import { useStagingStore } from "@/stores/staging";
+import { open } from "@tauri-apps/plugin-dialog";
+import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { presentExport } from "@/domain/exportPresentation";
+import { updateSelection, type SelectionMode } from "@/domain/selection";
 import type {
   ConflictStrategy,
   DragCutToken,
@@ -17,7 +17,11 @@ import type {
   PanelMode,
   PanelState,
   StagedItem,
-} from "@/types";
+} from "@/domain/types";
+import { ipc } from "@/ipc/client";
+import { Events, listenCurrent } from "@/ipc/events";
+import { useSettingsStore } from "@/stores/settings";
+import { useStagingStore } from "@/stores/staging";
 import ItemRow from "@/components/ItemRow.vue";
 import ActionChooser from "@/components/ActionChooser.vue";
 import ConflictDialog from "@/components/ConflictDialog.vue";
@@ -47,7 +51,6 @@ let anchorId: number | null = null;
 let confirmClearTimer: number | undefined;
 let mounted = true;
 
-/* ---------- 固定 / 滑入 ---------- */
 const pinned = ref(false);
 const pinBusy = ref(false);
 const exportBusy = ref(false);
@@ -106,7 +109,6 @@ async function onTogglePinned() {
   }
 }
 
-/* ---------- 冲突上下文 ---------- */
 const conflict = ref<{ names: string[]; ids: number[]; dest: string; mode: ExportMode } | null>(
   null,
 );
@@ -203,36 +205,20 @@ async function refreshAfterMutation(label: string): Promise<boolean> {
   }
 }
 
-/* ---------- 选择 ---------- */
-function onSelect(id: number, m: "set" | "toggle" | "range") {
+function onSelect(id: number, mode: SelectionMode) {
   // Long-running export/drag/remove operations apply a result to the current
   // selection. Freeze row selection meanwhile so their completion cannot erase
   // a newer user selection made against an older list snapshot.
   if (exportBusy.value || listActionBusy.value || dragBusy.value) return;
-  if (m === "set") {
-    staging.clearSelection();
-    staging.selectedIds.add(id);
-    anchorId = id;
-  } else if (m === "toggle") {
-    if (staging.selectedIds.has(id)) staging.selectedIds.delete(id);
-    else staging.selectedIds.add(id);
-    anchorId = id;
-  } else if (m === "range" && anchorId != null) {
-    const ids = items.value.map((i) => i.id);
-    const a = ids.indexOf(anchorId);
-    const b = ids.indexOf(id);
-    if (a >= 0 && b >= 0) {
-      const [lo, hi] = a < b ? [a, b] : [b, a];
-      for (const i of ids.slice(lo, hi + 1)) staging.selectedIds.add(i);
-    } else {
-      clearSelection();
-      staging.selectedIds.add(id);
-      anchorId = id;
-    }
-  } else {
-    staging.selectedIds.add(id);
-    anchorId = id;
-  }
+  const next = updateSelection(
+    staging.selectedIds,
+    items.value.map((item) => item.id),
+    id,
+    mode,
+    anchorId,
+  );
+  staging.selectedIds = next.selected;
+  anchorId = next.anchor;
 }
 
 watch(
@@ -251,7 +237,6 @@ function selectedOrSingle(item: StagedItem): string[] {
   return [item.stagingPath];
 }
 
-/* ---------- 拖出 ---------- */
 function makeDragIcon(paths: string[], ext: string | null): string {
   const c = document.createElement("canvas");
   const dpr = window.devicePixelRatio || 1;
@@ -344,10 +329,8 @@ async function onDragOut(paths: string[]) {
   }
 }
 
-/* ---------- 打开 / 移除 ---------- */
 async function openItem(item: StagedItem) {
   try {
-    const { openPath } = await import("@tauri-apps/plugin-opener");
     await openPath(item.stagingPath);
   } catch (err) {
     console.error("open item failed", err);
@@ -357,7 +340,6 @@ async function openItem(item: StagedItem) {
 
 async function revealItem(item: StagedItem) {
   try {
-    const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
     await revealItemInDir(item.stagingPath);
   } catch (err) {
     console.error("reveal item failed", err);
@@ -396,44 +378,21 @@ async function removeSelected() {
   }
 }
 
-/* ---------- 导出 ---------- */
 async function pickDest(): Promise<string | null> {
   if (!ipc.inTauri) return "D:\\浮匣导出（浏览器预览）";
-  const { open } = await import("@tauri-apps/plugin-dialog");
   const dir = await open({ directory: true, multiple: false, title: "选择目标文件夹" });
   return typeof dir === "string" ? dir : null;
 }
 
 async function applyExportResult(result: ExportResult, exportMode: ExportMode) {
   const verb = exportMode === "move" ? "移动" : "复制";
-  const retryableIds = result.failed.map((issue) => issue.id);
-  if (result.failed.length || result.warnings.length) {
-    // 只保留“目标尚未生成”的失败项供重试；warning 已经产生目标副作用，
-    // 再次导出只会制造重复副本。
-    staging.setSelection(retryableIds);
+  const presentation = presentExport(result, exportMode);
+  if (presentation.selection !== null) {
+    staging.setSelection(presentation.selection);
     anchorId = null;
-  } else if (exportMode === "move") {
-    if (result.skippedIds.length) staging.setSelection(result.skippedIds);
-    else clearSelection();
   }
-
   const refreshed = await refreshAfterMutation(verb);
-  let message: string;
-  if (result.failed.length || result.warnings.length) {
-    const parts = [`已完成 ${result.completedIds.length} 项`];
-    if (result.staleIds.length) parts.push(`清理 ${result.staleIds.length} 条失效索引`);
-    if (result.failed.length) parts.push(`${result.failed.length} 项可重试`);
-    if (result.warnings.length) parts.push(`${result.warnings.length} 项需检查`);
-    const first = result.failed[0] ?? result.warnings[0];
-    message = `${parts.join("，")}：${first.name} ${first.error}`;
-  } else if (result.skippedIds.length) {
-    const stale = result.staleIds.length ? `，清理 ${result.staleIds.length} 条失效索引` : "";
-    message = `${verb}完成 ${result.completedIds.length} 项，跳过 ${result.skippedIds.length} 项${stale}`;
-  } else if (result.staleIds.length) {
-    message = `已${verb} ${result.completedIds.length} 项，清理 ${result.staleIds.length} 条失效索引`;
-  } else {
-    message = `已${verb} ${result.completedIds.length} 项`;
-  }
+  let message = presentation.message;
   if (!refreshed) message += "；列表刷新失败";
   showToast(message);
 }
@@ -509,7 +468,6 @@ async function cancelConflict() {
   });
 }
 
-/* ---------- 询问模式 ---------- */
 async function chooseAction(action: DropAction, remember: boolean) {
   if (askBusy.value) return;
   const paths = [...pendingPaths.value];
@@ -559,7 +517,6 @@ async function cancelAsk() {
   });
 }
 
-/* ---------- 文字暂存 ---------- */
 async function stashText() {
   const content = textValue.value.trim();
   if (!content || textBusy.value) return;
@@ -577,7 +534,6 @@ async function stashText() {
   }
 }
 
-/* ---------- 清空 ---------- */
 const confirmClear = ref(false);
 async function clearAll() {
   if (listActionBusy.value || exportBusy.value || dragBusy.value) return;
@@ -602,7 +558,6 @@ async function clearAll() {
   }
 }
 
-/* ---------- 键盘 ---------- */
 function onKeydown(e: KeyboardEvent) {
   const target = e.target as HTMLElement;
   if (target.tagName === "TEXTAREA" || target.tagName === "INPUT") {
@@ -632,7 +587,6 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
-/* ---------- 面板尺寸自适应（防抖合并，避免连续 resize 造成跳动） ---------- */
 let ro: ResizeObserver | null = null;
 let sizeTimer: number | undefined;
 let resizeSequence = 0;
@@ -794,7 +748,6 @@ async function openSettings() {
     @pointerenter="onPointerEnter"
     @pointerleave="onPointerLeave"
   >
-    <!-- 头部 -->
     <header ref="headEl" class="panel-head">
       <div class="pod-title">
         <div class="pod-name" :title="pod?.name">{{ pod?.name ?? "匣" }}</div>
@@ -835,7 +788,6 @@ async function openSettings() {
       </div>
     </header>
 
-    <!-- 主体 -->
     <div ref="listEl" class="panel-body">
       <div ref="contentEl" class="panel-content">
         <ActionChooser
@@ -917,7 +869,6 @@ async function openSettings() {
       </div>
     </div>
 
-    <!-- 底部 -->
     <footer v-if="mode === 'list' && !textOpen" ref="footEl" class="panel-foot">
       <template v-if="selectedCount > 0">
         <span class="sel-count">已选 {{ selectedCount }} 项</span>
@@ -957,7 +908,6 @@ async function openSettings() {
       </template>
     </footer>
 
-    <!-- 轻提示 -->
     <Transition name="toast">
       <div v-if="toast" class="toast">{{ toast }}</div>
     </Transition>

@@ -146,10 +146,17 @@ pub fn list_monitors(app: &AppHandle) -> Vec<serde_json::Value> {
         } else {
             format!("显示器 {idx}")
         };
+        let position = m.position();
+        let size = m.size();
         out.push(serde_json::json!({
             "name": m.name().map(|s| s.as_str()).unwrap_or(""),
             "label": label,
             "primary": is_primary,
+            "x": position.x,
+            "y": position.y,
+            "width": size.width,
+            "height": size.height,
+            "scaleFactor": m.scale_factor(),
         }));
     }
     out
@@ -454,8 +461,6 @@ fn apply_material_once(app: &AppHandle, material: &str, id: u64) {
         }
     }
 }
-
-/* ---------- 面板显隐（按匣） ---------- */
 
 fn panel_snapshot(app: &AppHandle, id: u64) -> PanelSnapshot {
     let state = app.state::<AppState>();

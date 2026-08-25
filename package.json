@@ -11,6 +11,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
+    "test": "node --test --experimental-strip-types src/domain/contracts.test.ts",
     "preview": "vite preview",
     "tauri": "tauri",
     "icons": "tauri icon"
