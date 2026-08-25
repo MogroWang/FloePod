@@ -30,6 +30,19 @@ struct MonitorGeometry {
     scale_factor: f64,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MonitorInfo {
+    pub name: String,
+    pub label: String,
+    pub primary: bool,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub scale_factor: f64,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PanelSnapshot {
@@ -133,7 +146,7 @@ fn monitor(app: &AppHandle, pod: &Pod) -> Option<MonitorGeometry> {
     })
 }
 
-pub fn list_monitors(app: &AppHandle) -> Vec<serde_json::Value> {
+pub fn list_monitors(app: &AppHandle) -> Vec<MonitorInfo> {
     let Some(monitors) = app.available_monitors().ok() else {
         return vec![];
     };
@@ -153,16 +166,16 @@ pub fn list_monitors(app: &AppHandle) -> Vec<serde_json::Value> {
         };
         let position = m.position();
         let size = m.size();
-        out.push(serde_json::json!({
-            "name": m.name().map(|s| s.as_str()).unwrap_or(""),
-            "label": label,
-            "primary": is_primary,
-            "x": position.x,
-            "y": position.y,
-            "width": size.width,
-            "height": size.height,
-            "scaleFactor": m.scale_factor(),
-        }));
+        out.push(MonitorInfo {
+            name: m.name().map(|name| name.as_str()).unwrap_or("").to_string(),
+            label,
+            primary: is_primary,
+            x: position.x,
+            y: position.y,
+            width: size.width,
+            height: size.height,
+            scale_factor: m.scale_factor(),
+        });
     }
     out
 }
@@ -415,13 +428,9 @@ fn sync_pods_with_settings(app: &AppHandle, s: &Settings) {
     let existing: std::collections::HashSet<u64> = app
         .webview_windows()
         .keys()
-        .filter_map(|l| {
-            if let Some(rest) = l.strip_prefix("pod_") {
-                let id_str = rest.strip_suffix("_panel").unwrap_or(rest);
-                id_str.parse::<u64>().ok()
-            } else {
-                None
-            }
+        .filter_map(|label| match events::pod_window(label) {
+            Some(events::PodWindow::Bar(id) | events::PodWindow::Panel(id)) => Some(id),
+            None => None,
         })
         .collect();
 
@@ -1085,5 +1094,23 @@ mod tests {
             panel_toggle_action(true, Some(&runtime)),
             PanelToggleAction::Hide
         );
+    }
+
+    #[test]
+    fn monitor_info_keeps_the_frontend_camel_case_contract() {
+        let monitor = MonitorInfo {
+            name: "DISPLAY2".into(),
+            label: "显示器 2".into(),
+            primary: false,
+            x: -1920,
+            y: 0,
+            width: 3840,
+            height: 2160,
+            scale_factor: 2.0,
+        };
+        let value = serde_json::to_value(monitor).unwrap();
+        assert_eq!(value["scaleFactor"], 2.0);
+        assert_eq!(value["width"], 3840);
+        assert!(value.get("scale_factor").is_none());
     }
 }

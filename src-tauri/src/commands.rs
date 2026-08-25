@@ -27,7 +27,7 @@ where
 #[serde(rename_all = "camelCase")]
 pub struct Bootstrap {
     settings: Settings,
-    monitors: Vec<serde_json::Value>,
+    monitors: Vec<manager::MonitorInfo>,
     version: String,
 }
 
@@ -53,7 +53,7 @@ pub fn get_pod(app: AppHandle, pod_id: u64) -> Result<Option<Pod>, String> {
 }
 
 #[tauri::command]
-pub fn get_monitors(app: AppHandle) -> Vec<serde_json::Value> {
+pub fn get_monitors(app: AppHandle) -> Vec<manager::MonitorInfo> {
     manager::list_monitors(&app)
 }
 
