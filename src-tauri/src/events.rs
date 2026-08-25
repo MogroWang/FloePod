@@ -1,4 +1,8 @@
-/** Rust -> 前端事件名（与 src/lib/events.ts 保持一致） */
+use tauri::{AppHandle, Emitter, Manager};
+
+/// Rust -> frontend event names. Keep these values aligned with the TypeScript
+/// contract; persisted installations can have several independently loaded
+/// WebViews at once.
 pub const ITEMS_CHANGED: &str = "floepod://items-changed";
 pub const SETTINGS_CHANGED: &str = "floepod://settings-changed";
 pub const PODS_CHANGED: &str = "floepod://pods-changed";
@@ -9,3 +13,68 @@ pub const PANEL_PINNED: &str = "floepod://panel-pinned";
 pub const PANEL_STATE: &str = "floepod://panel-state";
 pub const PANEL_HIDDEN: &str = "floepod://panel-hidden";
 pub const COLLECT_CLIPBOARD: &str = "floepod://collect-clipboard";
+
+pub fn pod_bar_label(pod_id: u64) -> String {
+    format!("pod_{pod_id}")
+}
+
+pub fn pod_panel_label(pod_id: u64) -> String {
+    format!("pod_{pod_id}_panel")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PodWindow {
+    Bar(u64),
+    Panel(u64),
+}
+
+pub fn pod_window(label: &str) -> Option<PodWindow> {
+    let value = label.strip_prefix("pod_")?;
+    if let Some(id) = value.strip_suffix("_panel") {
+        id.parse().ok().filter(|id| *id > 0).map(PodWindow::Panel)
+    } else {
+        value.parse().ok().filter(|id| *id > 0).map(PodWindow::Bar)
+    }
+}
+
+/// Deliver an item mutation only to the two WebViews owned by the affected pod.
+/// Missing windows are normal for disabled pods and during settings transitions.
+pub fn emit_items_changed(app: &AppHandle, pod_id: u64) {
+    let payload = serde_json::json!({ "podId": pod_id });
+    for label in [pod_bar_label(pod_id), pod_panel_label(pod_id)] {
+        if app.get_webview_window(&label).is_some() {
+            let _ = app.emit_to(label, ITEMS_CHANGED, payload.clone());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pod_window_labels_round_trip_without_cross_talk() {
+        for pod_id in [1, 2, u32::MAX as u64 + 1] {
+            let bar = pod_bar_label(pod_id);
+            let panel = pod_panel_label(pod_id);
+            assert_eq!(pod_window(&bar), Some(PodWindow::Bar(pod_id)));
+            assert_eq!(pod_window(&panel), Some(PodWindow::Panel(pod_id)));
+            assert_ne!(bar, pod_bar_label(pod_id + 1));
+            assert_ne!(panel, pod_panel_label(pod_id + 1));
+        }
+    }
+
+    #[test]
+    fn rejects_settings_malformed_and_zero_pod_labels() {
+        for label in [
+            "settings",
+            "pod_0",
+            "pod_0_panel",
+            "pod_-1",
+            "pod_1_extra",
+            "pod_1_panel_extra",
+        ] {
+            assert_eq!(pod_window(label), None, "{label}");
+        }
+    }
+}

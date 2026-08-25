@@ -88,11 +88,11 @@ fn pod_of(app: &AppHandle, id: u64) -> Option<Pod> {
 }
 
 pub fn pod_bar(app: &AppHandle, id: u64) -> Option<WebviewWindow> {
-    app.get_webview_window(&format!("pod_{id}"))
+    app.get_webview_window(&events::pod_bar_label(id))
 }
 
 pub fn pod_panel(app: &AppHandle, id: u64) -> Option<WebviewWindow> {
-    app.get_webview_window(&format!("pod_{id}_panel"))
+    app.get_webview_window(&events::pod_panel_label(id))
 }
 
 fn pods_guard<'a>(
@@ -327,8 +327,8 @@ fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
         .entry(pod.id)
         .or_default();
 
-    let bar_label = format!("pod_{}", pod.id);
-    let panel_label = format!("pod_{}_panel", pod.id);
+    let bar_label = events::pod_bar_label(pod.id);
+    let panel_label = events::pod_panel_label(pod.id);
     if app.get_webview_window(&bar_label).is_none() {
         if let Err(err) =
             WebviewWindowBuilder::new(app, &bar_label, tauri::WebviewUrl::App("index.html".into()))
@@ -383,7 +383,7 @@ fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
 }
 
 fn destroy_pod_windows(app: &AppHandle, id: u64) {
-    let labels = [format!("pod_{id}"), format!("pod_{id}_panel")];
+    let labels = [events::pod_bar_label(id), events::pod_panel_label(id)];
     for l in labels {
         if let Some(w) = app.get_webview_window(&l) {
             let _ = w.destroy();
@@ -489,7 +489,7 @@ fn emit_panel_snapshot(app: &AppHandle, id: u64) {
     if pod_panel(app, id).is_none() {
         return;
     }
-    let label = format!("pod_{id}_panel");
+    let label = events::pod_panel_label(id);
     let _ = app.emit_to(
         &label,
         events::PANEL_MODE,
@@ -683,7 +683,7 @@ fn show_panel_locked(app: &AppHandle, id: u64, pod: &Pod, pin_on_show: bool) -> 
         }
     }
     if !was_visible {
-        let _ = app.emit_to(format!("pod_{id}_panel"), events::PANEL_SHOWN, ());
+        let _ = app.emit_to(events::pod_panel_label(id), events::PANEL_SHOWN, ());
     }
     emit_panel_snapshot(app, id);
     true

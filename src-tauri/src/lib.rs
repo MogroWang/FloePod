@@ -84,14 +84,10 @@ pub fn run() {
                         api.prevent_close();
                         let _ = window.hide();
                     }
-                    label if label.starts_with("pod_") => {
+                    label if events::pod_window(label).is_some() => {
                         api.prevent_close();
                         // 面板被请求关闭（如 Alt+F4）-> 收起该匣面板
-                        if let Some(id) = label
-                            .strip_prefix("pod_")
-                            .and_then(|s| s.strip_suffix("_panel"))
-                            .and_then(|s| s.parse::<u64>().ok())
-                        {
+                        if let Some(events::PodWindow::Panel(id)) = events::pod_window(label) {
                             let app = window.app_handle().clone();
                             tauri::async_runtime::spawn(async move {
                                 manager::hide_panel(&app, id);

@@ -290,17 +290,21 @@ pub(crate) fn is_reparse_or_symlink(meta: &fs::Metadata) -> bool {
 }
 
 fn copy_all(src: &Path, dst: &Path) -> std::io::Result<()> {
-    // 安全检查：防止目标位于源目录内部导致无限递归复制。
-    // 目标尚不存在时无法规范化，直接放行；目录复制只写入 dst 子树，不会回写 src。
-    let src_canonical = src.canonicalize().unwrap_or_else(|_| src.to_path_buf());
-    let dst_canonical = dst.canonicalize().unwrap_or_else(|_| dst.to_path_buf());
-    if dst_canonical.starts_with(&src_canonical) {
+    let meta = fs::symlink_metadata(src)?;
+    let resolve = |path: &Path| {
+        settings::resolve_path(path)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
+    };
+    let src_resolved = resolve(src)?;
+    let dst_resolved = resolve(dst)?;
+    if settings::paths_equal(&src_resolved, &dst_resolved)
+        || (meta.is_dir() && settings::path_is_within(&dst_resolved, &src_resolved))
+    {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("目标不能位于源目录内部: {}", dst.display()),
         ));
     }
-    let meta = fs::symlink_metadata(src)?;
     if is_reparse_or_symlink(&meta) {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -2089,17 +2093,7 @@ fn read_thumbnail_blocking(
 /* ---------- 窗口编排（按匣） ---------- */
 
 fn emit_items_changed(app: &AppHandle, pod_id: u64) {
-    let payload = serde_json::json!({ "podId": pod_id });
-    if manager::pod_panel(app, pod_id).is_some() {
-        let _ = app.emit_to(
-            format!("pod_{pod_id}_panel"),
-            events::ITEMS_CHANGED,
-            payload.clone(),
-        );
-    }
-    if manager::pod_bar(app, pod_id).is_some() {
-        let _ = app.emit_to(format!("pod_{pod_id}"), events::ITEMS_CHANGED, payload);
-    }
+    events::emit_items_changed(app, pod_id);
 }
 
 #[tauri::command]
@@ -2232,6 +2226,36 @@ mod tests {
 
         assert!(copy_all(&source, &target).is_err());
         assert_eq!(fs::read(&target).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn copy_all_copies_a_recursive_directory_without_merging() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let nested = source.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(source.join("root.txt"), b"root").unwrap();
+        fs::write(nested.join("child.bin"), b"child").unwrap();
+        let target = tmp.path().join("target");
+
+        copy_all(&source, &target).unwrap();
+        assert_eq!(fs::read(target.join("root.txt")).unwrap(), b"root");
+        assert_eq!(fs::read(target.join("nested/child.bin")).unwrap(), b"child");
+
+        fs::write(target.join("keep.txt"), b"keep").unwrap();
+        assert!(copy_all(&source, &target).is_err());
+        assert_eq!(fs::read(target.join("keep.txt")).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn copy_relation_rejects_equal_and_descendant_targets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        fs::create_dir(&source).unwrap();
+
+        assert!(ensure_copy_relation(&source, &source).is_err());
+        assert!(ensure_copy_relation(&source, &source.join("nested")).is_err());
+        assert!(copy_all(&source, &source.join("nested")).is_err());
     }
 
     #[test]

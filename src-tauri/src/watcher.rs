@@ -6,11 +6,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use notify::{RecursiveMode, Watcher};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use crate::db::StagedItem;
 use crate::events;
-use crate::manager;
 use crate::settings::{self, Settings};
 use crate::state::AppState;
 
@@ -330,17 +329,7 @@ fn reconcile_all(app: &AppHandle) -> Result<(), String> {
             .iter()
             .filter(|p| p.enabled && changed_pods.contains(&p.id))
         {
-            let payload = serde_json::json!({ "podId": pod.id });
-            if manager::pod_panel(app, pod.id).is_some() {
-                let _ = app.emit_to(
-                    format!("pod_{}_panel", pod.id),
-                    events::ITEMS_CHANGED,
-                    payload.clone(),
-                );
-            }
-            if manager::pod_bar(app, pod.id).is_some() {
-                let _ = app.emit_to(format!("pod_{}", pod.id), events::ITEMS_CHANGED, payload);
-            }
+            events::emit_items_changed(app, pod.id);
         }
     }
     if folder_errors.is_empty() {

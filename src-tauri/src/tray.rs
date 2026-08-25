@@ -86,7 +86,7 @@ fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         "collect_clipboard" => {
             if let Some(id) = crate::hotkeys::collect_into_first_pod(app) {
                 let _ = app.emit_to(
-                    format!("pod_{id}"),
+                    events::pod_bar_label(id),
                     events::COLLECT_CLIPBOARD,
                     serde_json::json!({ "podId": id }),
                 );
