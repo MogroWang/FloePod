@@ -17,4 +17,3 @@ export function normalizeWindowsPathKey(input: string): string {
   else if (driveRoot && /^[a-zA-Z]:$/.test(normalized)) normalized += "\\";
   return normalized.toLowerCase();
 }
-

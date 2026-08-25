@@ -37,4 +37,3 @@ export const Commands = {
 } as const;
 
 export type CommandName = (typeof Commands)[keyof typeof Commands];
-

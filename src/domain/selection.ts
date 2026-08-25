@@ -31,4 +31,3 @@ export function updateSelection(
   for (const selectedId of orderedIds.slice(low, high + 1)) next.add(selectedId);
   return { selected: next, anchor };
 }
-

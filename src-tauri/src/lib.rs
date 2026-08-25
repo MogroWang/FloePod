@@ -74,7 +74,7 @@ pub fn run() {
                 .watcher_dirty
                 .store(true, std::sync::atomic::Ordering::Relaxed);
             if let Err(e) = hotkeys::register(app.handle(), &settings) {
-                eprintln!("[hotkeys] {e}");
+                logging::write(&format!("[hotkeys] {e}"));
             }
             manager::spawn_watchdog(app.handle().clone());
 

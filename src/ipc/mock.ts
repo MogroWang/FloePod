@@ -127,7 +127,6 @@ function panelState(podId: number): PanelState {
   }
   return state;
 }
-
 export async function mockInvoke<T>(command: CommandName, args?: Record<string, unknown>): Promise<T> {
   const result = (value: unknown) => value as T;
   switch (command) {
@@ -324,4 +323,3 @@ export async function mockInvoke<T>(command: CommandName, args?: Record<string, 
       return result(undefined);
   }
 }
-

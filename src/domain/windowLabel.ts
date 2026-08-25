@@ -11,4 +11,3 @@ export function parseWindowLabel(label: string): WindowTarget | null {
   if (!Number.isSafeInteger(podId) || podId <= 0) return null;
   return { kind: panel ? "podPanel" : "podBar", podId };
 }
-

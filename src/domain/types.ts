@@ -116,4 +116,3 @@ export interface PanelState {
   visible: boolean;
   draggingOut: boolean;
 }
-

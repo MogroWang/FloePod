@@ -6,7 +6,7 @@
 
 本地优先的 Windows 屏幕边缘文件暂存工具。把文件、图片、文字拖到屏幕边缘的浮匣里集中保管，需要时再拖出去或批量导出。不联网、无遥测，所有数据只存在你自己的电脑上。
 
-当前版本 **0.5.1**（x64 Windows 便携版 / NSIS 安装包）。
+当前版本 **0.6.0**（x64 Windows 便携版 / NSIS 安装包）。
 
 ## 功能
 
@@ -33,8 +33,9 @@
 
 ```bash
 pnpm install          # 安装前端依赖
+pnpm test             # 前端领域 / IPC 契约测试
 pnpm tauri dev        # 开发运行（Rust + Vite 联动）
-cargo test            # Rust 单测（在 src-tauri/ 下）
+cargo test --manifest-path src-tauri/Cargo.toml --locked
 pnpm build            # 前端类型检查 + 产物构建
 pnpm tauri build      # 发布构建（NSIS 安装包 + 裸 exe）
 pnpm tauri icon app-icon.png             # 由源图生成全套图标
@@ -44,16 +45,21 @@ pnpm tauri icon app-icon.png             # 由源图生成全套图标
 
 ```
 src/                    # Vue 前端（按窗口 label 分发视图，无需路由）
+  domain/               # IPC 模型与可独立测试的选择、主题、窗口和拖放规则
+  ipc/                  # 命令 / 事件契约、Tauri 客户端与浏览器预览 mock
   windows/              # PodBar（胶囊条）/ PodPanel（面板）/ SettingsWindow（设置与 OOBE）
-  components/           # 文件图形、缩略图、拖入询问、冲突解决、分段选择、品牌标…
-  stores/               # pinia：settings（设置 + 主题）/ staging（条目 + 选中态）
-  lib/                  # ipc 封装、事件常量（含定向监听）、弹簧动画、格式化
+  components/           # 文件图形、缩略图、拖入询问、冲突解决与表单控件
+  stores/               # Pinia：settings（设置 + 主题）/ staging（条目 + 选中态）
+  lib/                  # 弹簧动画、缩略图队列与展示格式化
 src-tauri/src/
   lib.rs                # 应用装配（插件/托盘/首启引导）
   manager.rs            # 窗口编排：几何、面板不抢焦点显隐、单一活动面板看门狗
-  commands.rs           # 全部 Tauri 命令（暂存/导出/匣 CRUD/设置）
+  commands.rs           # 稳定、薄的 Tauri 命令边界
+  pods.rs staging.rs    # 匣 / 设置事务与暂存条目生命周期
+  file_ops.rs export.rs # 安全文件操作、原子导出与失败结果
+  drag_out.rs thumbnail.rs # OLE 剪切确认与受限缩略图解码
   db.rs settings.rs state.rs   # SQLite 持久化与运行态
-  watcher.rs            # 暂存文件夹监听对账（notify）
+  watcher.rs            # 暂存文件夹监听与可测试的按匣对账（notify）
   win.rs lnk.rs paths.rs       # Win32 辅助、.lnk 快捷方式、路径探测
   tray.rs hotkeys.rs          # 托盘与全局快捷键
 ```
@@ -68,7 +74,8 @@ node scripts/package-portable.mjs
 
 ## 版本
 
-- **0.5.1**（当前）：多匣事件定向化消除串扰；文字暂存支持文件标题；文件名截断放宽至 48 字符；启动预置主题防白闪 + 原生主题同步；面板 Windows 11 系统圆角
+- **0.6.0**（当前）：强化文件复制 / 移动 / 导出回滚与剪切拖出身份检查；修复面板状态竞态、首启幂等、多显示器缩放和安装版 / 便携版路径隔离；增加自动审计、Windows 构建与 Release 流水线
+- **0.5.1**：多匣事件定向化消除串扰；文字暂存支持文件标题；文件名截断放宽至 48 字符；启动预置主题防白闪 + 原生主题同步；面板 Windows 11 系统圆角
 - **0.5.0**：单一活动面板，看门狗改为直接隐藏避免重叠闪烁；暂存文件夹启动/变更对账；面板尺寸防抖；材质只应用一次减少重绘闪烁
 - **0.4.0**：引入多匣体系取代「场景」，每个匣独立配置位置、显示器与暂存文件夹
 

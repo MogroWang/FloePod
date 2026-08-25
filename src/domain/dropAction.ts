@@ -11,4 +11,3 @@ export function dropActionFor(
   if (modifiers.alt) return "shortcut";
   return configured === "ask" ? null : configured;
 }
-

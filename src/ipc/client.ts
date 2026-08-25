@@ -125,4 +125,3 @@ export const ipc = {
 };
 
 export type Ipc = typeof ipc;
-

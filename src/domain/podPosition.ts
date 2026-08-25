@@ -12,4 +12,3 @@ export function offsetAfterDrag(start: number, delta: number, span: number): num
   if (!Number.isFinite(span) || span <= 0) return Math.min(1, Math.max(0, start));
   return Math.min(1, Math.max(0, start + delta / span));
 }
-

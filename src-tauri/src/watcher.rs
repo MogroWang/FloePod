@@ -62,7 +62,7 @@ pub fn spawn(app: AppHandle) {
                     }
                 }
                 Err(error) => {
-                    eprintln!("[watcher] 对账部分失败: {error}");
+                    crate::logging::write(&format!("[watcher] 对账部分失败: {error}"));
                     recovering_unavailable_folder = true;
                     std::thread::sleep(Duration::from_secs(4));
                     state.watcher_dirty.store(true, Ordering::Relaxed);
@@ -80,7 +80,7 @@ pub fn restart_all(app: &AppHandle) {
     let current = match current_settings(app) {
         Ok(current) => current,
         Err(error) => {
-            eprintln!("[watcher] 配置无效，已停止目录监听: {error}");
+            crate::logging::write(&format!("[watcher] 配置无效，已停止目录监听: {error}"));
             watchers.clear();
             INSTALL_RETRY_NEEDED.store(false, Ordering::Relaxed);
             return;
@@ -98,17 +98,17 @@ pub fn restart_all(app: &AppHandle) {
     for (pod_id, folder) in folders {
         let directory = PathBuf::from(folder);
         if let Err(error) = std::fs::create_dir_all(&directory) {
-            eprintln!(
+            crate::logging::write(&format!(
                 "[watcher] 无法创建暂存目录 {}: {error}",
                 directory.display()
-            );
+            ));
             INSTALL_RETRY_NEEDED.store(true, Ordering::Relaxed);
             continue;
         }
         let callback_app = app.clone();
         match notify::recommended_watcher(move |result| {
             if let Err(error) = result {
-                eprintln!("[watcher] 目录监听器运行失败: {error}");
+                crate::logging::write(&format!("[watcher] 目录监听器运行失败: {error}"));
                 INSTALL_RETRY_NEEDED.store(true, Ordering::Relaxed);
             }
             callback_app
@@ -121,18 +121,18 @@ pub fn restart_all(app: &AppHandle) {
                     watchers.insert(pod_id, watcher);
                 }
                 Err(error) => {
-                    eprintln!(
+                    crate::logging::write(&format!(
                         "[watcher] 无法监听暂存目录 {}: {error}",
                         directory.display()
-                    );
+                    ));
                     INSTALL_RETRY_NEEDED.store(true, Ordering::Relaxed);
                 }
             },
             Err(error) => {
-                eprintln!(
+                crate::logging::write(&format!(
                     "[watcher] 无法创建目录监听器 {}: {error}",
                     directory.display()
-                );
+                ));
                 INSTALL_RETRY_NEEDED.store(true, Ordering::Relaxed);
             }
         }

@@ -9,4 +9,3 @@ export const Events = {
   PanelHidden: "floepod://panel-hidden",
   CollectClipboard: "floepod://collect-clipboard",
 } as const;
-

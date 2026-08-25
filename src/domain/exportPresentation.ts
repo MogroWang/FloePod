@@ -33,4 +33,3 @@ export function presentExport(result: ExportResult, mode: ExportMode): ExportPre
   }
   return { selection, message };
 }
-

@@ -83,8 +83,6 @@ pub fn migrate(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-/* ---------- 类型 ---------- */
-
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StagedItem {
@@ -115,8 +113,6 @@ fn item_from_row(row: &Row) -> rusqlite::Result<StagedItem> {
 
 const ITEM_COLS: &str =
     "id, pod_id, kind, staging_path, original_path, name, ext, size, created_at";
-
-/* ---------- items ---------- */
 
 pub fn insert_item(conn: &Connection, it: &StagedItem) -> Result<StagedItem, String> {
     let inserted = conn.execute(
@@ -178,7 +174,7 @@ pub fn find_by_path(conn: &Connection, path: &str) -> Result<Option<StagedItem>,
     .map_err(|e| e.to_string())
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn list_items(conn: &Connection) -> Result<Vec<StagedItem>, String> {
     let mut stmt = conn
         .prepare(&format!(
@@ -249,8 +245,6 @@ pub fn delete_items_by_pod(conn: &Connection, pod_id: i64) -> Result<Vec<StagedI
     Ok(items)
 }
 
-/* ---------- settings kv ---------- */
-
 pub fn kv_get(conn: &Connection, key: &str) -> Result<Option<String>, String> {
     conn.query_row(
         "SELECT value FROM settings WHERE key = ?1",
@@ -270,8 +264,6 @@ pub fn kv_set(conn: &Connection, key: &str, value: &str) -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     Ok(())
 }
-
-/* ---------- tests ---------- */
 
 #[cfg(test)]
 mod tests {

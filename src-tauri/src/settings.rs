@@ -459,8 +459,6 @@ pub fn merge_persist(
     Ok(candidate)
 }
 
-/* ---------- pod 增删改（读写设置并持久化） ---------- */
-
 pub fn next_pod_id(conn: &Connection, data_dir: &str, version: &str) -> Result<u64, String> {
     let s = load(conn, data_dir, version)?;
     let floor = s

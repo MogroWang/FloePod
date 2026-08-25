@@ -72,12 +72,17 @@ fn panel_toggle_action(bars_visible: bool, runtime: Option<&PodRuntime>) -> Pane
 pub fn current_settings(app: &AppHandle) -> Settings {
     let state = app.state::<AppState>();
     let conn = state.db.lock().unwrap();
-    crate::settings::load(
+    match crate::settings::load(
         &conn,
         &state.data_dir.to_string_lossy(),
         env!("CARGO_PKG_VERSION"),
-    )
-    .unwrap_or_default()
+    ) {
+        Ok(settings) => settings,
+        Err(error) => {
+            crate::logging::write(&format!("[settings] 读取当前设置失败: {error}"));
+            Settings::default()
+        }
+    }
 }
 
 fn pod_of(app: &AppHandle, id: u64) -> Option<Pod> {
@@ -350,7 +355,7 @@ fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
                 .visible(false)
                 .build()
         {
-            eprintln!("[window] 创建 {bar_label} 失败: {err}");
+            crate::logging::write(&format!("[window] 创建 {bar_label} 失败: {err}"));
         }
     }
     if app.get_webview_window(&panel_label).is_none() {
@@ -370,7 +375,7 @@ fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
         .visible(false)
         .build()
         {
-            eprintln!("[window] 创建 {panel_label} 失败: {err}");
+            crate::logging::write(&format!("[window] 创建 {panel_label} 失败: {err}"));
         }
     }
     // 胶囊条形状由前端自绘：禁用 Windows 11 系统窗口圆角，
