@@ -375,4 +375,79 @@ mod tests {
             .unwrap();
         assert!(!has_scenes);
     }
+
+    #[test]
+    fn legacy_migration_preserves_settings_and_is_idempotent() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            r#"
+            CREATE TABLE scenes (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+            CREATE TABLE items (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              scene_id INTEGER NOT NULL,
+              kind TEXT NOT NULL,
+              staging_path TEXT NOT NULL UNIQUE,
+              original_path TEXT,
+              name TEXT NOT NULL,
+              ext TEXT,
+              size INTEGER NOT NULL DEFAULT 0,
+              created_at INTEGER NOT NULL
+            );
+            CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO settings (key, value) VALUES
+              ('app', '{"theme":"dark","firstRunDone":true,"stagingFolder":"D:\\stage"}'),
+              ('future_key', 'preserve-me');
+            INSERT INTO items
+              (scene_id, kind, staging_path, original_path, name, ext, size, created_at)
+              VALUES (9, 'text', 'D:\\stage\\note.txt', NULL, 'note.txt', 'txt', 4, 42);
+            "#,
+        )
+        .unwrap();
+
+        migrate(&c).unwrap();
+        migrate(&c).unwrap();
+
+        assert_eq!(
+            kv_get(&c, "future_key").unwrap().as_deref(),
+            Some("preserve-me")
+        );
+        let settings: serde_json::Value =
+            serde_json::from_str(&kv_get(&c, "app").unwrap().unwrap()).unwrap();
+        assert_eq!(settings["theme"], "dark");
+        assert_eq!(settings["stagingFolder"], r"D:\stage");
+        let items = list_items(&c).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].pod_id, 1);
+        assert_eq!(items[0].kind, "text");
+        assert_eq!(items[0].created_at, 42);
+    }
+
+    #[test]
+    fn deleting_more_than_one_sqlite_parameter_batch_is_complete() {
+        let c = conn();
+        for index in 0..1_025 {
+            insert_item(
+                &c,
+                &StagedItem {
+                    id: 0,
+                    pod_id: 1,
+                    kind: "file".into(),
+                    staging_path: format!(r"C:\stage\{index}.txt"),
+                    original_path: None,
+                    name: format!("{index}.txt"),
+                    ext: Some("txt".into()),
+                    size: index,
+                    created_at: index,
+                },
+            )
+            .unwrap();
+        }
+        let ids: Vec<_> = list_items(&c)
+            .unwrap()
+            .into_iter()
+            .map(|item| item.id)
+            .collect();
+        delete_items_by_ids(&c, &ids).unwrap();
+        assert!(list_items(&c).unwrap().is_empty());
+    }
 }
