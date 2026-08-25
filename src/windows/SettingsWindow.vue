@@ -6,7 +6,12 @@
  * 进入/切换动画统一使用出程缓动（--ease-out）。
  */
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
-import { ipc } from "@/lib/ipc";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { ask, open } from "@tauri-apps/plugin-dialog";
+import { openPath } from "@tauri-apps/plugin-opener";
+import { normalizeWindowsPathKey } from "@/domain/settings";
+import type { DropAction, Edge, Material, Pod, ThemeMode } from "@/domain/types";
+import { ipc } from "@/ipc/client";
 import { useSettingsStore } from "@/stores/settings";
 import SegmentedControl from "@/components/SegmentedControl.vue";
 import ToggleSwitch from "@/components/ToggleSwitch.vue";
@@ -15,7 +20,6 @@ import HotkeyRecorder from "@/components/HotkeyRecorder.vue";
 import BrandMark from "@/components/BrandMark.vue";
 import RangeSlider from "@/components/RangeSlider.vue";
 import PodEdgeDiagram from "@/components/PodEdgeDiagram.vue";
-import type { DropAction, Edge, Material, Pod, ThemeMode } from "@/types";
 
 const settingsStore = useSettingsStore();
 const s = computed(() => settingsStore.settings);
@@ -35,7 +39,6 @@ let settingsSaveTail: Promise<void> = Promise.resolve();
 const podSaveTails = new Map<number, Promise<void>>();
 let hotkeySaveRevision = 0;
 
-/* ---------- OOBE ---------- */
 const oobeDone = ref(false);
 const firstRun = computed(
   () =>
@@ -125,7 +128,6 @@ function withTimeout<T>(p: Promise<T>, label: string, ms = 15000): Promise<T> {
   });
 }
 
-/* ---------- 通用 ---------- */
 type SettingsPatch = Parameters<typeof settingsStore.save>[0];
 type SettingsPatchSource = SettingsPatch | (() => SettingsPatch);
 
@@ -167,7 +169,6 @@ async function saveAutostart(enabled: boolean) {
 async function pickFolder(): Promise<string | null> {
   if (!ipc.inTauri) return "D:\\浮匣暂存（浏览器预览）";
   try {
-    const { open } = await import("@tauri-apps/plugin-dialog");
     const dir = await open({ directory: true, multiple: false, title: "选择暂存文件夹" });
     return typeof dir === "string" ? dir : null;
   } catch (err) {
@@ -184,7 +185,6 @@ async function openPodFolder(pod: Pod) {
     return;
   }
   try {
-    const { openPath } = await import("@tauri-apps/plugin-opener");
     await openPath(pod.stagingFolder);
   } catch (err) {
     console.error("open pod folder failed", err);
@@ -326,9 +326,7 @@ async function removePod(pod: Pod) {
   try {
     const message = `删除「${pod.name}」？其中的暂存文件会一并移入回收站。`;
     const ok = ipc.inTauri
-      ? await import("@tauri-apps/plugin-dialog").then(({ ask }) =>
-          ask(message, { title: "删除匣", kind: "warning" }),
-        )
+      ? await ask(message, { title: "删除匣", kind: "warning" })
       : window.confirm(message);
     if (!ok) return;
     await ipc.deletePod(pod.id, true);
@@ -342,7 +340,6 @@ async function removePod(pod: Pod) {
   }
 }
 
-/* ---------- OOBE 完成 ---------- */
 function oobePodConfig(): Omit<Pod, "id"> {
   return {
     name: oobe.value.name || "我的匣",
@@ -357,28 +354,6 @@ function oobePodConfig(): Omit<Pod, "id"> {
     dropAction: "ask",
     enabled: true,
   };
-}
-
-/**
- * Windows 路径身份的前端词法兜底。真实的目录身份仍由 Rust 端负责；这里仅用于
- * OOBE 在“创建已提交、响应或 firstRunDone 保存失败”后的 UI 对账。
- *
- * 统一大小写、分隔符、重复/尾部分隔符和 `.` 组件。刻意保留 `..`，因为前端
- * 无法在不访问文件系统的前提下安全解析一个可能尚不存在的路径。
- */
-function normalizeWindowsPathKey(input: string): string {
-  const source = input.trim().replace(/\//g, "\\");
-  if (!source) return "";
-
-  const isUnc = source.startsWith("\\\\");
-  const isDriveRoot = /^[a-zA-Z]:\\+$/.test(source);
-  const parts = source
-    .split("\\")
-    .filter((part) => part !== "" && part !== ".");
-  let normalized = parts.join("\\");
-  if (isUnc) normalized = `\\\\${normalized}`;
-  else if (isDriveRoot && /^[a-zA-Z]:$/.test(normalized)) normalized += "\\";
-  return normalized.toLowerCase();
 }
 
 function findOobePodByFolder(): Pod | undefined {
@@ -490,7 +465,6 @@ function nextFromStep2() {
   oobeStep.value = 3;
 }
 
-/* ---------- 快捷键 ---------- */
 async function saveHotkey(key: "toggleBar" | "collectClipboard" | "openPanel", combo: string) {
   const revision = ++hotkeySaveRevision;
   hotkeyError.value = "";
@@ -525,11 +499,9 @@ async function resetHotkeys() {
   }
 }
 
-/* ---------- 自绘标题栏 ---------- */
 async function winMinimize() {
   if (!ipc.inTauri) return;
   try {
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
     await getCurrentWindow().minimize();
   } catch (err) {
     console.error("minimize settings failed", err);
@@ -539,7 +511,6 @@ async function winMinimize() {
 async function winClose() {
   if (!ipc.inTauri) return;
   try {
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
     await getCurrentWindow().hide();
   } catch (err) {
     console.error("hide settings failed", err);
@@ -613,7 +584,6 @@ const PAGES = [
 
 <template>
   <div class="settings-root">
-    <!-- 自绘标题栏 -->
     <div class="titlebar" data-tauri-drag-region>
       <div class="titlebar-title" data-tauri-drag-region>浮匣 设置</div>
       <div class="titlebar-controls">
@@ -639,7 +609,6 @@ const PAGES = [
     </div>
 
     <template v-else-if="s">
-    <!-- OOBE 首启引导 -->
     <div v-if="firstRun" class="oobe">
       <div class="oobe-card">
         <template v-if="oobeStep === 1">
@@ -730,7 +699,6 @@ const PAGES = [
       </div>
     </div>
 
-    <!-- 设置主体 -->
     <template v-else>
       <div class="settings-body">
         <aside class="nav">
@@ -771,7 +739,6 @@ const PAGES = [
         <main class="content">
           <Transition name="page" mode="out-in">
             <section :key="page">
-              <!-- 常规 -->
               <template v-if="page === 'general'">
                 <h2 class="page-title">常规</h2>
                 <p class="page-desc">浮匣的整体外观与行为。</p>
@@ -794,7 +761,6 @@ const PAGES = [
                 </div>
               </template>
 
-              <!-- 匣管理 -->
               <template v-else-if="page === 'pods'">
                 <div class="page-head">
                   <div>
@@ -962,7 +928,6 @@ const PAGES = [
                 </TransitionGroup>
               </template>
 
-              <!-- 快捷键 -->
               <template v-else-if="page === 'hotkeys'">
                 <h2 class="page-title">快捷键</h2>
                 <p class="page-desc">全局快捷键，点击后按下新组合即可修改。</p>
@@ -985,7 +950,6 @@ const PAGES = [
                 </div>
               </template>
 
-              <!-- 关于 -->
               <template v-else>
                 <div class="about-hero">
                   <BrandMark :size="48" class="about-brand" />
@@ -1048,7 +1012,6 @@ const PAGES = [
   color: var(--danger);
 }
 
-/* ---------- 自绘标题栏 ---------- */
 .titlebar {
   flex-shrink: 0;
   height: 34px;
@@ -1091,7 +1054,6 @@ const PAGES = [
   color: var(--on-danger);
 }
 
-/* ---------- OOBE ---------- */
 .oobe {
   flex: 1;
   min-height: 0;
@@ -1160,7 +1122,6 @@ const PAGES = [
   margin-top: 6px;
 }
 
-/* ---------- 主体布局 ---------- */
 .settings-body {
   flex: 1;
   display: flex;
@@ -1274,7 +1235,6 @@ const PAGES = [
   padding: 14px 16px;
 }
 
-/* ---------- 页面切换 ---------- */
 .page-enter-active,
 .page-leave-active {
   transition: opacity 170ms ease, transform 240ms var(--ease-out);
@@ -1288,7 +1248,6 @@ const PAGES = [
   transform: translateY(-6px);
 }
 
-/* ---------- 控件 ---------- */
 .btn {
   border: 1px solid var(--line-strong);
   background: var(--surface-raised);
@@ -1375,7 +1334,6 @@ select.input {
   margin-top: 18px;
 }
 
-/* ---------- 匣卡片 ---------- */
 .pod-list {
   display: flex;
   flex-direction: column;
@@ -1491,7 +1449,6 @@ select.input {
   max-width: 460px;
 }
 
-/* ---------- 匣列表过渡 ---------- */
 .pod-enter-active {
   transition: opacity 220ms ease, transform 280ms var(--ease-out);
 }
@@ -1509,7 +1466,6 @@ select.input {
   transition: transform 280ms var(--ease-out);
 }
 
-/* ---------- 关于 ---------- */
 .about-hero {
   display: flex;
   flex-direction: column;

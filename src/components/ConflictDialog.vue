@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 导出冲突解决：覆盖 / 跳过 / 保留两者（自动重命名） */
 import { computed } from "vue";
-import type { ConflictStrategy } from "@/types";
+import type { ConflictStrategy } from "@/domain/types";
 
 const props = withDefaults(
   defineProps<{ names: string[]; mode: "copy" | "move"; busy?: boolean }>(),

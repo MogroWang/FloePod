@@ -57,7 +57,7 @@ pub fn register(app: &AppHandle, s: &Settings) -> Result<(), String> {
         reg(&s.hotkeys.collect_clipboard, |app| {
             if let Some(id) = collect_into_first_pod(app) {
                 let _ = app.emit_to(
-                    format!("pod_{id}"),
+                    events::pod_bar_label(id),
                     events::COLLECT_CLIPBOARD,
                     serde_json::json!({ "podId": id }),
                 );

@@ -6,12 +6,16 @@
  * - 拖入文件时短条变为圆角矩形主动接纳，松手后弹出面板
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { ipc } from "@/lib/ipc";
-import { Events, listenCurrent } from "@/lib/events";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { readText } from "@tauri-apps/plugin-clipboard-manager";
+import { dropActionFor } from "@/domain/dropAction";
+import { monitorLogicalSpan, offsetAfterDrag } from "@/domain/podPosition";
+import type { ModifierState } from "@/domain/types";
+import { ipc } from "@/ipc/client";
+import { Events, listenCurrent } from "@/ipc/events";
 import { springValue, type SpringHandle } from "@/lib/spring";
 import { useSettingsStore } from "@/stores/settings";
 import { useStagingStore } from "@/stores/staging";
-import type { DropAction, ModifierState } from "@/types";
 
 const props = defineProps<{ podId: number }>();
 const settingsStore = useSettingsStore();
@@ -32,10 +36,8 @@ let modifierSample: Promise<ModifierState> | null = null;
 let modifierSampleSeq = 0;
 let lastModifierSample = 0;
 
-type ConcreteDropAction = Exclude<DropAction, "ask">;
 const NO_MODIFIERS: ModifierState = { ctrl: false, shift: false, alt: false };
 
-/* ---- 边缘拖动 ---- */
 const dragging = ref(false);
 let justDragged = false; // 记录刚刚完成拖动，防止触发点击
 let dragStartPos = 0;
@@ -127,32 +129,24 @@ function onClick() {
   void ipc.togglePanel(props.podId).catch((err) => console.error("toggle panel failed", err));
 }
 
-/* ---- 边缘拖动处理 ---- */
-async function onPointerDown(e: PointerEvent) {
+function onPointerDown(e: PointerEvent) {
   // 只响应主按钮（左键）
   if (e.button !== 0 || !pod.value) return;
 
   // 记录起始位置和当前 offset
-  dragStartPos = vertical.value ? e.clientY : e.clientX;
+  dragStartPos = vertical.value ? e.screenY : e.screenX;
   dragStartOffset = pod.value.offset;
   dragging.value = false;
   justDragged = false;
 
-  // 获取显示器尺寸用于计算 offset
-  try {
-    const monitors = await ipc.getMonitors();
-    const monitorName = pod.value.monitor;
-    const monitor = monitors.find(m => m.name === monitorName);
-    // 使用实际显示器的尺寸，如果没有找到则使用 window.screen
-    if (monitor) {
-      // TODO: 需要从 Rust 端获取显示器实际尺寸
-      dragStartScreenLength = vertical.value ? window.screen.height : window.screen.width;
-    } else {
-      dragStartScreenLength = vertical.value ? window.screen.height : window.screen.width;
-    }
-  } catch {
-    dragStartScreenLength = vertical.value ? window.screen.height : window.screen.width;
-  }
+  const selectedMonitor = pod.value.monitor
+    ? settingsStore.monitors.find((monitor) => monitor.name === pod.value?.monitor)
+    : settingsStore.monitors.find((monitor) => monitor.primary);
+  dragStartScreenLength = selectedMonitor
+    ? monitorLogicalSpan(selectedMonitor, vertical.value)
+    : vertical.value
+      ? window.screen.height
+      : window.screen.width;
 
   // 添加全局监听
   window.addEventListener("pointermove", onPointerMove);
@@ -167,7 +161,7 @@ async function onPointerDown(e: PointerEvent) {
 async function onPointerMove(e: PointerEvent) {
   if (!pod.value) return;
 
-  const currentPos = vertical.value ? e.clientY : e.clientX;
+  const currentPos = vertical.value ? e.screenY : e.screenX;
   const delta = currentPos - dragStartPos;
 
   // 拖动阈值：3px
@@ -183,8 +177,7 @@ async function onPointerMove(e: PointerEvent) {
   }
 
   // 计算新的 offset（0-1 范围）
-  const deltaRatio = delta / dragStartScreenLength;
-  const newOffset = Math.max(0, Math.min(1, dragStartOffset + deltaRatio));
+  const newOffset = offsetAfterDrag(dragStartOffset, delta, dragStartScreenLength);
 
   // 使用轻量级命令实时移动窗口（不写数据库，性能更好）
   await ipc.movePodBar(props.podId, newOffset);
@@ -204,10 +197,9 @@ async function onPointerUp(e: PointerEvent) {
     justDragged = true; // 标记刚刚完成拖动，防止触发点击
     
     // 计算最终的 offset
-    const currentPos = vertical.value ? e.clientY : e.clientX;
+    const currentPos = vertical.value ? e.screenY : e.screenX;
     const delta = currentPos - dragStartPos;
-    const deltaRatio = delta / dragStartScreenLength;
-    const finalOffset = Math.max(0, Math.min(1, dragStartOffset + deltaRatio));
+    const finalOffset = offsetAfterDrag(dragStartOffset, delta, dragStartScreenLength);
     
     // 保存到数据库
     if (pod.value) {
@@ -220,7 +212,6 @@ async function onPointerUp(e: PointerEvent) {
   }
 }
 
-/* ---- 文件拖入（原生） ---- */
 async function handleDrop(paths: string[], sampled: Promise<ModifierState> | null) {
   accepting.value = false;
   setAccept(false);
@@ -229,11 +220,7 @@ async function handleDrop(paths: string[], sampled: Promise<ModifierState> | nul
   // Prefer the last sample requested while the native drag was still over the
   // bar. Reading only after drop races with the user releasing Ctrl/Shift/Alt.
   const mods = sampled ? await sampled : (modifierSnapshot ?? NO_MODIFIERS);
-  let chosen: ConcreteDropAction | null = null;
-  if (mods.ctrl) chosen = "copy";
-  else if (mods.shift) chosen = "move";
-  else if (mods.alt) chosen = "shortcut";
-  else if (action !== "ask") chosen = action as ConcreteDropAction;
+  const chosen = dropActionFor(mods, action);
 
   try {
     if (chosen) {
@@ -256,7 +243,6 @@ async function handleDrop(paths: string[], sampled: Promise<ModifierState> | nul
   }
 }
 
-/* ---- 文字拖入（HTML5 兜底；原生只拦文件） ---- */
 async function onHtmlDrop(e: DragEvent) {
   const dt = e.dataTransfer;
   if (!dt || dt.files?.length) return;
@@ -303,7 +289,6 @@ onMounted(async () => {
   try {
     /* 原生拖放事件（文件路径） */
     if (ipc.inTauri) {
-      const { getCurrentWebview } = await import("@tauri-apps/api/webview");
       retainUnlistener(await getCurrentWebview().onDragDropEvent((event) => {
         const p = event.payload;
         if (p.type === "enter") {
@@ -338,7 +323,6 @@ onMounted(async () => {
       if (!p || (p.podId && p.podId !== props.podId)) return;
       if (!pod.value) return;
       try {
-        const { readText } = await import("@tauri-apps/plugin-clipboard-manager");
         const text = await readText();
         if (text.trim()) {
           await ipc.stageText(props.podId, text);

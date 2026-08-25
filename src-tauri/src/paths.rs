@@ -4,49 +4,56 @@ use std::sync::OnceLock;
 
 const PORTABLE_MARKER: &str = ".floepod-portable";
 
-/// 数据目录解析：便携优先。
-/// 便携包通过 exe 旁的 marker 声明便携模式；已有 `FloePodData` 也继续兼容。
-/// 安装版不会再仅因安装目录偶然可写而把用户数据放到程序目录。
-/// 不依赖 AppHandle，可在 Builder 阶段（窗口创建前）完成状态注册。
 pub fn resolve() -> PathBuf {
     static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
     DATA_DIR.get_or_init(resolve_uncached).clone()
 }
 
 fn resolve_uncached() -> PathBuf {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let portable = dir.join("FloePodData");
-            if portable_requested(dir) && ensure_writable(&portable) {
-                return portable;
-            }
+    resolve_from(
+        std::env::current_exe()
+            .ok()
+            .and_then(|executable| executable.parent().map(Path::to_path_buf)),
+        std::env::var_os("APPDATA").map(PathBuf::from),
+        std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
+        std::env::temp_dir(),
+    )
+}
+
+fn resolve_from(
+    executable_directory: Option<PathBuf>,
+    roaming_app_data: Option<PathBuf>,
+    local_app_data: Option<PathBuf>,
+    temporary_directory: PathBuf,
+) -> PathBuf {
+    if let Some(directory) = executable_directory {
+        let portable = directory.join("FloePodData");
+        if portable_requested(&directory) && ensure_writable(&portable) {
+            return portable;
         }
     }
 
-    let base = std::env::var_os("APPDATA")
-        .map(PathBuf::from)
+    let base = roaming_app_data
         .filter(|path| path.is_absolute())
-        .or_else(|| {
-            std::env::var_os("LOCALAPPDATA")
-                .map(PathBuf::from)
-                .filter(|path| path.is_absolute())
-        })
-        // 极端受限环境下也必须保持绝对路径，不能退化成当前目录下的 `FloePod`。
-        .unwrap_or_else(std::env::temp_dir);
-    let fallback = base.join("FloePod");
-    let _ = fs::create_dir_all(&fallback);
-    fallback
+        .or_else(|| local_app_data.filter(|path| path.is_absolute()))
+        // Even in a restricted environment, never degrade to a relative
+        // `FloePod` directory beside the current working directory.
+        .unwrap_or(temporary_directory);
+    let installed = base.join("FloePod");
+    let _ = fs::create_dir_all(&installed);
+    installed
 }
 
-fn portable_requested(exe_dir: &Path) -> bool {
-    exe_dir.join(PORTABLE_MARKER).is_file() || exe_dir.join("FloePodData").is_dir()
+fn portable_requested(executable_directory: &Path) -> bool {
+    executable_directory.join(PORTABLE_MARKER).is_file()
+        || executable_directory.join("FloePodData").is_dir()
 }
 
-fn ensure_writable(dir: &Path) -> bool {
-    if fs::create_dir_all(dir).is_err() {
+fn ensure_writable(directory: &Path) -> bool {
+    if fs::create_dir_all(directory).is_err() {
         return false;
     }
-    let probe = dir.join(format!(".write-probe-{}", std::process::id()));
+    let probe = directory.join(format!(".write-probe-{}", std::process::id()));
     match fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -66,25 +73,87 @@ mod tests {
     use super::*;
 
     #[test]
-    fn writable_dir_passes_probe() {
-        let tmp = tempfile::tempdir().unwrap();
-        let d = tmp.path().to_path_buf();
-        assert!(ensure_writable(&d));
-        assert!(!d
-            .join(format!(".write-probe-{}", std::process::id()))
-            .exists());
+    fn portable_marker_and_existing_data_preserve_upgrade_paths() {
+        let temporary = tempfile::tempdir().unwrap();
+        let executable = temporary.path().join("portable");
+        let roaming = temporary.path().join("roaming");
+        fs::create_dir_all(&executable).unwrap();
+
+        fs::write(executable.join(PORTABLE_MARKER), b"portable").unwrap();
+        assert_eq!(
+            resolve_from(
+                Some(executable.clone()),
+                Some(roaming.clone()),
+                None,
+                temporary.path().join("temp"),
+            ),
+            executable.join("FloePodData")
+        );
+
+        fs::remove_file(executable.join(PORTABLE_MARKER)).unwrap();
+        assert!(portable_requested(&executable));
+        assert_eq!(
+            resolve_from(
+                Some(executable.clone()),
+                Some(roaming),
+                None,
+                temporary.path().join("temp"),
+            ),
+            executable.join("FloePodData")
+        );
     }
 
     #[test]
-    fn portable_mode_requires_marker_or_existing_data() {
-        let tmp = tempfile::tempdir().unwrap();
-        assert!(!portable_requested(tmp.path()));
+    fn writable_program_directory_without_marker_stays_installed() {
+        let temporary = tempfile::tempdir().unwrap();
+        let executable = temporary.path().join("installed-program");
+        let roaming = temporary.path().join("roaming");
+        fs::create_dir_all(&executable).unwrap();
 
-        fs::write(tmp.path().join(PORTABLE_MARKER), b"").unwrap();
-        assert!(portable_requested(tmp.path()));
+        assert_eq!(
+            resolve_from(
+                Some(executable),
+                Some(roaming.clone()),
+                None,
+                temporary.path().join("temp"),
+            ),
+            roaming.join("FloePod")
+        );
+    }
 
-        fs::remove_file(tmp.path().join(PORTABLE_MARKER)).unwrap();
-        fs::create_dir(tmp.path().join("FloePodData")).unwrap();
-        assert!(portable_requested(tmp.path()));
+    #[test]
+    fn installed_fallbacks_require_absolute_roots() {
+        let temporary = tempfile::tempdir().unwrap();
+        let local = temporary.path().join("local");
+        assert_eq!(
+            resolve_from(
+                None,
+                Some(PathBuf::from("relative-roaming")),
+                Some(local.clone()),
+                temporary.path().join("temp"),
+            ),
+            local.join("FloePod")
+        );
+
+        let fallback = temporary.path().join("temp");
+        assert_eq!(
+            resolve_from(
+                None,
+                Some(PathBuf::from("relative-roaming")),
+                Some(PathBuf::from("relative-local")),
+                fallback.clone(),
+            ),
+            fallback.join("FloePod")
+        );
+    }
+
+    #[test]
+    fn writable_probe_leaves_no_file() {
+        let temporary = tempfile::tempdir().unwrap();
+        assert!(ensure_writable(temporary.path()));
+        assert!(!temporary
+            .path()
+            .join(format!(".write-probe-{}", std::process::id()))
+            .exists());
     }
 }

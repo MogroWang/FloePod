@@ -4,7 +4,7 @@
  * 不用 emoji、不用彩色图标块——层级交给排版。
  */
 import { computed } from "vue";
-import type { ItemKind } from "@/types";
+import type { ItemKind } from "@/domain/types";
 
 const props = withDefaults(
   defineProps<{ kind: ItemKind; ext?: string | null; size?: number }>(),

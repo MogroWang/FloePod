@@ -459,8 +459,6 @@ pub fn merge_persist(
     Ok(candidate)
 }
 
-/* ---------- pod 增删改（读写设置并持久化） ---------- */
-
 pub fn next_pod_id(conn: &Connection, data_dir: &str, version: &str) -> Result<u64, String> {
     let s = load(conn, data_dir, version)?;
     let floor = s
@@ -591,6 +589,69 @@ mod tests {
             serde_json::from_str(&db::kv_get(&c, KEY).unwrap().unwrap()).unwrap();
         assert!(stored.get("version").is_none());
         assert!(stored.get("dataDir").is_none());
+    }
+
+    #[test]
+    fn existing_v040_settings_round_trip_without_losing_fields() {
+        let c = conn();
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path().join("data").to_string_lossy().to_string();
+        let stage_one = tmp.path().join("stage-one").to_string_lossy().to_string();
+        let stage_two = tmp.path().join("stage-two").to_string_lossy().to_string();
+        let fixture = serde_json::json!({
+            "theme": "dark",
+            "firstRunDone": true,
+            "autostart": true,
+            "hotkeys": {
+                "toggleBar": "Ctrl+Alt+KeyF",
+                "collectClipboard": "Ctrl+Alt+KeyS",
+                "openPanel": "Ctrl+Alt+KeyP"
+            },
+            "pods": [
+                {
+                    "id": 7,
+                    "name": "左侧工作匣",
+                    "edge": "left",
+                    "monitor": "DISPLAY-A",
+                    "offset": 0.25,
+                    "stagingFolder": stage_one,
+                    "opacity": 0.72,
+                    "material": "plain",
+                    "panelWidth": 512,
+                    "hoverDelayMs": 600,
+                    "dropAction": "move",
+                    "enabled": true
+                },
+                {
+                    "id": 19,
+                    "name": "离线便携匣",
+                    "edge": "bottom",
+                    "monitor": "",
+                    "offset": 1.0,
+                    "stagingFolder": stage_two,
+                    "opacity": 1.0,
+                    "material": "acrylic",
+                    "panelWidth": 300,
+                    "hoverDelayMs": 0,
+                    "dropAction": "shortcut",
+                    "enabled": false
+                }
+            ]
+        });
+        db::kv_set(&c, KEY, &fixture.to_string()).unwrap();
+
+        let loaded = load(&c, &data_dir, "0.6.0").unwrap();
+        assert_eq!(loaded.pods.len(), 2);
+        assert_eq!(loaded.pods[0].id, 7);
+        assert_eq!(loaded.pods[0].monitor, "DISPLAY-A");
+        assert_eq!(loaded.pods[0].panel_width, 512);
+        assert_eq!(loaded.pods[1].drop_action, "shortcut");
+        assert!(!loaded.pods[1].enabled);
+
+        persist(&c, &loaded).unwrap();
+        let stored: serde_json::Value =
+            serde_json::from_str(&db::kv_get(&c, KEY).unwrap().unwrap()).unwrap();
+        assert_eq!(stored, fixture);
     }
 
     #[test]

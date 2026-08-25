@@ -1,49 +1,47 @@
-//! 暂存文件夹监听：用户在资源管理器手动增删文件时对账数据库（每个匣独立监听）。
+//! Per-pod staging directory watchers and SQLite reconciliation.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use notify::{RecursiveMode, Watcher};
-use tauri::{AppHandle, Emitter, Manager};
+use rusqlite::Connection;
+use tauri::{AppHandle, Manager};
 
-use crate::db::StagedItem;
+use crate::db::{self, StagedItem};
 use crate::events;
-use crate::manager;
+use crate::file_ops;
 use crate::settings::{self, Settings};
 use crate::state::AppState;
 
-const WATCH_INSTALL_RETRY_INTERVAL: Duration = Duration::from_secs(10);
-static WATCH_INSTALL_RETRY_NEEDED: AtomicBool = AtomicBool::new(false);
+const INSTALL_RETRY_INTERVAL: Duration = Duration::from_secs(10);
+static INSTALL_RETRY_NEEDED: AtomicBool = AtomicBool::new(false);
 
 fn current_settings(app: &AppHandle) -> Result<Settings, String> {
     let state = app.state::<AppState>();
-    let settings = {
-        let conn = state.db.lock().unwrap();
+    let current = {
+        let connection = state.db.lock().unwrap();
         settings::load(
-            &conn,
+            &connection,
             &state.data_dir.to_string_lossy(),
             env!("CARGO_PKG_VERSION"),
         )?
     };
-    settings::validate(&settings, &state.data_dir.to_string_lossy())?;
-    Ok(settings)
+    settings::validate(&current, &state.data_dir.to_string_lossy())?;
+    Ok(current)
 }
 
-/// 常驻对账线程：有脏标记且非应用自身写入后，整盘对账。
 pub fn spawn(app: AppHandle) {
     std::thread::spawn(move || {
-        let mut retrying_unavailable_folder = false;
-        let mut last_watch_install_retry = Instant::now();
+        let mut recovering_unavailable_folder = false;
+        let mut last_install_retry = Instant::now();
         loop {
             std::thread::sleep(Duration::from_millis(800));
-            // 安装 watcher 失败时通常不会再有文件事件来唤醒本线程。用独立、低频的
-            // 重试时钟恢复可移动盘、临时权限/句柄耗尽等故障，避免永久失去监听。
-            if WATCH_INSTALL_RETRY_NEEDED.load(Ordering::Relaxed)
-                && last_watch_install_retry.elapsed() >= WATCH_INSTALL_RETRY_INTERVAL
+            if INSTALL_RETRY_NEEDED.load(Ordering::Relaxed)
+                && last_install_retry.elapsed() >= INSTALL_RETRY_INTERVAL
             {
-                last_watch_install_retry = Instant::now();
+                last_install_retry = Instant::now();
                 restart_all(&app);
             }
             let state = app.state::<AppState>();
@@ -51,301 +49,393 @@ pub fn spawn(app: AppHandle) {
                 continue;
             }
             if state.staged_recently() {
-                // 应用自身写入的 notify 事件可以延后，但不能清掉同一窗口内真实的外部变化。
+                // Delay our own notify events without discarding an external
+                // change that arrived in the same suppression window.
                 state.watcher_dirty.store(true, Ordering::Relaxed);
                 continue;
             }
             match reconcile_all(&app) {
                 Ok(()) => {
-                    if retrying_unavailable_folder {
-                        // 可移动盘恢复后，重新安装此前创建失败的目录监听器。
+                    if recovering_unavailable_folder {
                         restart_all(&app);
-                        retrying_unavailable_folder = false;
+                        recovering_unavailable_folder = false;
                     }
                 }
-                Err(e) => {
-                    eprintln!("[watcher] 对账部分失败: {e}");
-                    retrying_unavailable_folder = true;
-                    // 离线盘不应造成 800ms 的日志/磁盘忙循环；仍需周期重试以发现恢复。
+                Err(error) => {
+                    crate::logging::write(&format!("[watcher] 对账部分失败: {error}"));
+                    recovering_unavailable_folder = true;
                     std::thread::sleep(Duration::from_secs(4));
-                    app.state::<AppState>()
-                        .watcher_dirty
-                        .store(true, Ordering::Relaxed);
+                    state.watcher_dirty.store(true, Ordering::Relaxed);
                 }
             }
         }
     });
 }
 
-/// 按当前设置重建所有匣的监听。
 pub fn restart_all(app: &AppHandle) {
-    // Serialize snapshot + replacement as one operation. If a retry reads old settings before a
-    // concurrent update installs new watchers, it must not later clear them and reinstall S1.
+    // Serialize the settings snapshot with watcher replacement. A retry that
+    // read old settings must never clear a newer set installed concurrently.
     let state = app.state::<AppState>();
-    let mut guard = state.watcher.lock().unwrap();
-    let settings = match current_settings(app) {
-        Ok(settings) => settings,
-        Err(e) => {
-            eprintln!("[watcher] 配置无效，已停止目录监听: {e}");
-            guard.clear();
-            WATCH_INSTALL_RETRY_NEEDED.store(false, Ordering::Relaxed);
+    let mut watchers = state.watcher.lock().unwrap();
+    let current = match current_settings(app) {
+        Ok(current) => current,
+        Err(error) => {
+            crate::logging::write(&format!("[watcher] 配置无效，已停止目录监听: {error}"));
+            watchers.clear();
+            INSTALL_RETRY_NEEDED.store(false, Ordering::Relaxed);
             return;
         }
     };
-    let folders: Vec<(u64, String)> = settings
+    let folders: Vec<_> = current
         .pods
         .iter()
-        .filter(|p| p.enabled && !p.staging_folder.is_empty())
-        .map(|p| (p.id, p.staging_folder.clone()))
+        .filter(|pod| pod.enabled && !pod.staging_folder.is_empty())
+        .map(|pod| (pod.id, pod.staging_folder.clone()))
         .collect();
-    WATCH_INSTALL_RETRY_NEEDED.store(false, Ordering::Relaxed);
-    guard.clear();
+    INSTALL_RETRY_NEEDED.store(false, Ordering::Relaxed);
+    watchers.clear();
 
-    for (pod_id, path) in folders {
-        let dir = PathBuf::from(&path);
-        if let Err(e) = std::fs::create_dir_all(&dir) {
-            eprintln!("[watcher] 无法创建暂存目录 {}: {e}", dir.display());
-            WATCH_INSTALL_RETRY_NEEDED.store(true, Ordering::Relaxed);
+    for (pod_id, folder) in folders {
+        let directory = PathBuf::from(folder);
+        if let Err(error) = std::fs::create_dir_all(&directory) {
+            crate::logging::write(&format!(
+                "[watcher] 无法创建暂存目录 {}: {error}",
+                directory.display()
+            ));
+            INSTALL_RETRY_NEEDED.store(true, Ordering::Relaxed);
             continue;
         }
-        let app2 = app.clone();
+        let callback_app = app.clone();
         match notify::recommended_watcher(move |result| {
-            if let Err(e) = result {
-                eprintln!("[watcher] 目录监听器运行失败: {e}");
-                WATCH_INSTALL_RETRY_NEEDED.store(true, Ordering::Relaxed);
+            if let Err(error) = result {
+                crate::logging::write(&format!("[watcher] 目录监听器运行失败: {error}"));
+                INSTALL_RETRY_NEEDED.store(true, Ordering::Relaxed);
             }
-            let st = app2.state::<AppState>();
-            st.watcher_dirty.store(true, Ordering::Relaxed);
+            callback_app
+                .state::<AppState>()
+                .watcher_dirty
+                .store(true, Ordering::Relaxed);
         }) {
-            Ok(mut watcher) => match watcher.watch(&dir, RecursiveMode::NonRecursive) {
+            Ok(mut watcher) => match watcher.watch(&directory, RecursiveMode::NonRecursive) {
                 Ok(()) => {
-                    guard.insert(pod_id, watcher);
+                    watchers.insert(pod_id, watcher);
                 }
-                Err(e) => {
-                    eprintln!("[watcher] 无法监听暂存目录 {}: {e}", dir.display());
-                    WATCH_INSTALL_RETRY_NEEDED.store(true, Ordering::Relaxed);
+                Err(error) => {
+                    crate::logging::write(&format!(
+                        "[watcher] 无法监听暂存目录 {}: {error}",
+                        directory.display()
+                    ));
+                    INSTALL_RETRY_NEEDED.store(true, Ordering::Relaxed);
                 }
             },
-            Err(e) => {
-                eprintln!("[watcher] 无法创建目录监听器 {}: {e}", dir.display());
-                WATCH_INSTALL_RETRY_NEEDED.store(true, Ordering::Relaxed);
+            Err(error) => {
+                crate::logging::write(&format!(
+                    "[watcher] 无法创建目录监听器 {}: {error}",
+                    directory.display()
+                ));
+                INSTALL_RETRY_NEEDED.store(true, Ordering::Relaxed);
             }
         }
     }
 }
 
+struct DirectorySnapshot {
+    root: PathBuf,
+    observed: Vec<StagedItem>,
+    unsafe_keys: HashSet<String>,
+}
+
+fn read_snapshot(pod_id: u64, configured_folder: &Path) -> Result<DirectorySnapshot, String> {
+    let root = settings::resolve_path(configured_folder)?;
+    if !root.is_dir() {
+        return Err(format!("暂存目录不存在或不可用: {}", root.display()));
+    }
+    let entries = std::fs::read_dir(&root)
+        .map_err(|error| format!("无法读取暂存目录 {}: {error}", root.display()))?;
+    let mut observed = Vec::new();
+    let mut unsafe_keys = HashSet::new();
+    for result in entries {
+        let entry = result.map_err(|error| format!("读取目录项失败: {error}"))?;
+        let raw_path = entry.path();
+        let name = entry.file_name();
+        let internal_name = name.to_string_lossy();
+        if internal_name.starts_with(".floepod-inflight-")
+            || internal_name.starts_with(".floepod-move-source-")
+        {
+            unsafe_keys.insert(settings::path_key(&raw_path));
+            continue;
+        }
+        let metadata = std::fs::symlink_metadata(&raw_path)
+            .map_err(|error| format!("读取 {} 元数据失败: {error}", raw_path.display()))?;
+        let direct_path = root.join(&name);
+        if file_ops::is_reparse_or_symlink(&metadata) {
+            unsafe_keys.insert(settings::path_key(&direct_path));
+            continue;
+        }
+        let path = settings::resolve_path(&direct_path)?;
+        if !settings::path_is_within(&path, &root) || settings::paths_equal(&path, &root) {
+            return Err(format!("目录项越出暂存目录: {}", path.display()));
+        }
+        let name = name.to_string_lossy().to_string();
+        let extension = file_ops::extension(&name);
+        let kind = if metadata.is_dir() {
+            "folder"
+        } else if extension.as_deref() == Some("lnk") {
+            "shortcut"
+        } else {
+            "file"
+        };
+        observed.push(StagedItem {
+            id: 0,
+            pod_id: pod_id as i64,
+            kind: kind.into(),
+            staging_path: path.to_string_lossy().to_string(),
+            original_path: None,
+            name,
+            ext: extension,
+            size: if metadata.is_dir() {
+                0
+            } else {
+                metadata.len() as i64
+            },
+            created_at: db::now_ms(),
+        });
+    }
+    Ok(DirectorySnapshot {
+        root,
+        observed,
+        unsafe_keys,
+    })
+}
+
+fn reconcile_pod(
+    connection: &mut Connection,
+    pod_id: u64,
+    snapshot: DirectorySnapshot,
+) -> Result<bool, String> {
+    let known_items = db::items_of_pod(connection, pod_id as i64)?;
+    let mut known = HashMap::new();
+    let mut invalid_ids = Vec::new();
+    for item in known_items {
+        let raw = PathBuf::from(&item.staging_path);
+        let Some(name) = raw.file_name() else {
+            invalid_ids.push(item.id);
+            continue;
+        };
+        let Some(parent) = raw.parent() else {
+            invalid_ids.push(item.id);
+            continue;
+        };
+        let Ok(parent) = settings::resolve_path(parent) else {
+            // Access errors do not prove deletion. Preserve this row until a
+            // complete readable snapshot can compare it safely.
+            continue;
+        };
+        let safe_path = parent.join(name);
+        if !settings::paths_equal(&parent, &snapshot.root) {
+            invalid_ids.push(item.id);
+            continue;
+        }
+        let key = settings::path_key(&safe_path);
+        let unsafe_entry = snapshot.unsafe_keys.contains(&key)
+            || std::fs::symlink_metadata(&raw)
+                .map(|metadata| file_ops::is_reparse_or_symlink(&metadata))
+                .unwrap_or(false);
+        if unsafe_entry {
+            invalid_ids.push(item.id);
+            continue;
+        }
+        if let Some(duplicate) = known.insert(key, item) {
+            invalid_ids.push(duplicate.id);
+        }
+    }
+
+    let mut changed = false;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    for disk in snapshot.observed {
+        let key = settings::path_key(Path::new(&disk.staging_path));
+        if let Some(existing) = known.remove(&key) {
+            let observed_kind = if existing.kind == "text"
+                && disk.kind == "file"
+                && disk.ext.as_deref() == Some("txt")
+            {
+                "text"
+            } else {
+                disk.kind.as_str()
+            };
+            if existing.kind != observed_kind
+                || existing.staging_path != disk.staging_path
+                || existing.name != disk.name
+                || existing.ext != disk.ext
+                || existing.size != disk.size
+            {
+                db::update_item_observed(
+                    &transaction,
+                    existing.id,
+                    observed_kind,
+                    &disk.staging_path,
+                    &disk.name,
+                    disk.ext.as_deref(),
+                    disk.size,
+                )?;
+                changed = true;
+            }
+        } else {
+            db::insert_item(&transaction, &disk)?;
+            changed = true;
+        }
+    }
+    invalid_ids.extend(
+        known
+            .values()
+            .filter(|item| {
+                matches!(
+                    std::fs::symlink_metadata(&item.staging_path),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound
+                )
+            })
+            .map(|item| item.id),
+    );
+    invalid_ids.sort_unstable();
+    invalid_ids.dedup();
+    if !invalid_ids.is_empty() {
+        db::delete_items_by_ids(&transaction, &invalid_ids)?;
+        changed = true;
+    }
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(changed)
+}
+
 fn reconcile_all(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
-    // 与选名、复制/移动和 SQLite 入库共用同一锁，绝不扫描半成品。
-    // 全仓统一锁顺序为 file_ops -> db。
-    let _file_operation = state.file_ops.lock().unwrap();
-    let settings = current_settings(app)?;
-    let folders: Vec<(u64, String)> = settings
+    let _operation = state.file_ops.lock().unwrap();
+    let current = current_settings(app)?;
+    let folders: Vec<_> = current
         .pods
         .iter()
-        .filter(|p| p.enabled)
-        .map(|p| (p.id, p.staging_folder.clone()))
+        .filter(|pod| pod.enabled)
+        .map(|pod| (pod.id, pod.staging_folder.clone()))
         .collect();
-
     let mut changed_pods = HashSet::new();
-    let mut folder_errors = Vec::new();
-
+    let mut errors = Vec::new();
     for (pod_id, folder) in folders {
         if folder.is_empty() {
             continue;
         }
-        let snapshot = (|| -> Result<(PathBuf, Vec<StagedItem>, HashSet<String>), String> {
-            let folder = settings::resolve_path(&PathBuf::from(&folder))?;
-            if !folder.is_dir() {
-                return Err(format!("暂存目录不存在或不可用: {}", folder.display()));
-            }
-
-            // 只有完整、无错误的目录快照才允许做“磁盘没有 -> 删除数据库记录”。
-            let entries = std::fs::read_dir(&folder)
-                .map_err(|e| format!("无法读取暂存目录 {}: {e}", folder.display()))?;
-            let mut observed = Vec::new();
-            let mut unsafe_keys = HashSet::new();
-            for result in entries {
-                let entry = result.map_err(|e| format!("读取目录项失败: {e}"))?;
-                let raw_path = entry.path();
-                let entry_name = entry.file_name();
-                let internal_name = entry_name.to_string_lossy();
-                if internal_name.starts_with(".floepod-inflight-")
-                    || internal_name.starts_with(".floepod-move-source-")
-                {
-                    // Reserved transactional paths are never user-visible items.
-                    // They may survive a denied cleanup and must not be indexed as
-                    // a second staged copy after the operation returns.
-                    unsafe_keys.insert(settings::path_key(&raw_path));
-                    continue;
-                }
-                let meta = std::fs::symlink_metadata(&raw_path)
-                    .map_err(|e| format!("读取 {} 元数据失败: {e}", raw_path.display()))?;
-                let direct_path = folder.join(&entry_name);
-                if crate::commands::is_reparse_or_symlink(&meta) {
-                    // 不跟随 symlink / junction，也不把它作为可删除的暂存条目暴露给 UI。
-                    // 物理目录项原样保留；若旧版本曾索引它，下面只清理数据库记录。
-                    unsafe_keys.insert(settings::path_key(&direct_path));
-                    continue;
-                }
-                let path = settings::resolve_path(&direct_path)?;
-                if !settings::path_is_within(&path, &folder)
-                    || settings::paths_equal(&path, &folder)
-                {
-                    return Err(format!("目录项越出暂存目录: {}", path.display()));
-                }
-                let name = entry_name.to_string_lossy().to_string();
-                let ext = crate::commands::ext_of(&name);
-                let kind = if meta.is_dir() {
-                    "folder"
-                } else if ext.as_deref() == Some("lnk") {
-                    "shortcut"
-                } else {
-                    "file"
-                };
-                observed.push(StagedItem {
-                    id: 0,
-                    pod_id: pod_id as i64,
-                    kind: kind.into(),
-                    staging_path: path.to_string_lossy().to_string(),
-                    original_path: None,
-                    name,
-                    ext,
-                    size: if meta.is_dir() { 0 } else { meta.len() as i64 },
-                    created_at: crate::db::now_ms(),
-                });
-            }
-            Ok((folder, observed, unsafe_keys))
-        })();
-        let (folder, observed, unsafe_keys) = match snapshot {
+        let snapshot = match read_snapshot(pod_id, Path::new(&folder)) {
             Ok(snapshot) => snapshot,
-            Err(e) => {
-                folder_errors.push(format!("匣 {pod_id}: {e}"));
+            Err(error) => {
+                errors.push(format!("匣 {pod_id}: {error}"));
                 continue;
             }
         };
-
-        let known_items = {
-            let conn = state.db.lock().unwrap();
-            crate::db::items_of_pod(&conn, pod_id as i64)?
+        let changed = {
+            let mut connection = state.db.lock().unwrap();
+            reconcile_pod(&mut connection, pod_id, snapshot)?
         };
-        let mut known: HashMap<String, StagedItem> = HashMap::new();
-        let mut invalid_ids = Vec::new();
-        for item in known_items {
-            let raw = PathBuf::from(&item.staging_path);
-            let Some(name) = raw.file_name() else {
-                invalid_ids.push(item.id);
-                continue;
-            };
-            let Some(parent) = raw.parent() else {
-                invalid_ids.push(item.id);
-                continue;
-            };
-            let Ok(parent) = settings::resolve_path(parent) else {
-                // 暂时无法访问时保留索引，不能把权限错误等同于“文件不存在”。
-                continue;
-            };
-            let safe_path = parent.join(name);
-            if !settings::paths_equal(&parent, &folder) {
-                invalid_ids.push(item.id);
-                continue;
-            }
-            let key = settings::path_key(&safe_path);
-            let unsafe_entry = unsafe_keys.contains(&key)
-                || std::fs::symlink_metadata(&raw)
-                    .map(|meta| crate::commands::is_reparse_or_symlink(&meta))
-                    .unwrap_or(false);
-            if unsafe_entry {
-                invalid_ids.push(item.id);
-                continue;
-            }
-            if let Some(duplicate) = known.insert(key, item) {
-                invalid_ids.push(duplicate.id);
-            }
-        }
-
-        let mut changed = false;
-        let mut conn = state.db.lock().unwrap();
-        let tx = conn.transaction().map_err(|e| e.to_string())?;
-        for disk in observed {
-            let key = settings::path_key(PathBuf::from(&disk.staging_path).as_path());
-            if let Some(existing) = known.remove(&key) {
-                let observed_kind = if existing.kind == "text"
-                    && disk.kind == "file"
-                    && disk.ext.as_deref() == Some("txt")
-                {
-                    "text"
-                } else {
-                    disk.kind.as_str()
-                };
-                if existing.kind != observed_kind
-                    || existing.staging_path != disk.staging_path
-                    || existing.name != disk.name
-                    || existing.ext != disk.ext
-                    || existing.size != disk.size
-                {
-                    crate::db::update_item_observed(
-                        &tx,
-                        existing.id,
-                        observed_kind,
-                        &disk.staging_path,
-                        &disk.name,
-                        disk.ext.as_deref(),
-                        disk.size,
-                    )?;
-                    changed = true;
-                }
-            } else {
-                crate::db::insert_item(&tx, &disk)?;
-                changed = true;
-            }
-        }
-
-        invalid_ids.extend(
-            known
-                .values()
-                .filter(|item| {
-                    matches!(
-                        std::fs::symlink_metadata(&item.staging_path),
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound
-                    )
-                })
-                .map(|item| item.id),
-        );
-        invalid_ids.sort_unstable();
-        invalid_ids.dedup();
-        if !invalid_ids.is_empty() {
-            crate::db::delete_items_by_ids(&tx, &invalid_ids)?;
-            changed = true;
-        }
-        tx.commit().map_err(|e| e.to_string())?;
         if changed {
             changed_pods.insert(pod_id);
         }
     }
-
-    if !changed_pods.is_empty() {
-        for pod in settings
-            .pods
-            .iter()
-            .filter(|p| p.enabled && changed_pods.contains(&p.id))
-        {
-            let payload = serde_json::json!({ "podId": pod.id });
-            if manager::pod_panel(app, pod.id).is_some() {
-                let _ = app.emit_to(
-                    format!("pod_{}_panel", pod.id),
-                    events::ITEMS_CHANGED,
-                    payload.clone(),
-                );
-            }
-            if manager::pod_bar(app, pod.id).is_some() {
-                let _ = app.emit_to(format!("pod_{}", pod.id), events::ITEMS_CHANGED, payload);
-            }
-        }
+    for pod_id in changed_pods {
+        events::emit_items_changed(app, pod_id);
     }
-    if folder_errors.is_empty() {
+    if errors.is_empty() {
         Ok(())
     } else {
-        Err(folder_errors.join("；"))
+        Err(errors.join("；"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn connection() -> Connection {
+        let connection = Connection::open_in_memory().unwrap();
+        db::migrate(&connection).unwrap();
+        connection
+    }
+
+    #[test]
+    fn external_add_update_and_delete_reconcile_without_losing_text_identity() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("note.txt");
+        std::fs::write(&path, b"one").unwrap();
+        let mut connection = connection();
+
+        assert!(reconcile_pod(
+            &mut connection,
+            1,
+            read_snapshot(1, temporary.path()).unwrap()
+        )
+        .unwrap());
+        let item = db::items_of_pod(&connection, 1).unwrap().remove(0);
+        assert_eq!(item.kind, "file");
+        db::update_item_observed(
+            &connection,
+            item.id,
+            "text",
+            &item.staging_path,
+            &item.name,
+            item.ext.as_deref(),
+            item.size,
+        )
+        .unwrap();
+
+        std::fs::write(&path, b"a longer text").unwrap();
+        assert!(reconcile_pod(
+            &mut connection,
+            1,
+            read_snapshot(1, temporary.path()).unwrap()
+        )
+        .unwrap());
+        let updated = db::items_of_pod(&connection, 1).unwrap().remove(0);
+        assert_eq!(updated.kind, "text");
+        assert_eq!(updated.created_at, item.created_at);
+        assert_eq!(updated.size, 13);
+
+        std::fs::remove_file(path).unwrap();
+        assert!(reconcile_pod(
+            &mut connection,
+            1,
+            read_snapshot(1, temporary.path()).unwrap()
+        )
+        .unwrap());
+        assert!(db::items_of_pod(&connection, 1).unwrap().is_empty());
+    }
+
+    #[test]
+    fn reconciliation_isolated_by_pod_and_ignores_internal_paths() {
+        let temporary = tempfile::tempdir().unwrap();
+        let first = temporary.path().join("first");
+        let second = temporary.path().join("second");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        std::fs::write(first.join("a.txt"), b"a").unwrap();
+        std::fs::write(first.join(".floepod-inflight-1-1"), b"partial").unwrap();
+        std::fs::write(second.join("b.txt"), b"b").unwrap();
+        let mut connection = connection();
+
+        reconcile_pod(&mut connection, 1, read_snapshot(1, &first).unwrap()).unwrap();
+        assert_eq!(db::items_of_pod(&connection, 1).unwrap().len(), 1);
+        assert!(db::items_of_pod(&connection, 2).unwrap().is_empty());
+        reconcile_pod(&mut connection, 2, read_snapshot(2, &second).unwrap()).unwrap();
+        assert_eq!(db::items_of_pod(&connection, 1).unwrap().len(), 1);
+        assert_eq!(db::items_of_pod(&connection, 2).unwrap().len(), 1);
+
+        std::fs::remove_file(first.join("a.txt")).unwrap();
+        reconcile_pod(&mut connection, 1, read_snapshot(1, &first).unwrap()).unwrap();
+        assert!(db::items_of_pod(&connection, 1).unwrap().is_empty());
+        assert_eq!(db::items_of_pod(&connection, 2).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn unreadable_or_missing_root_never_becomes_an_empty_snapshot() {
+        let temporary = tempfile::tempdir().unwrap();
+        let missing = temporary.path().join("offline");
+        assert!(read_snapshot(1, &missing).is_err());
     }
 }

@@ -3,13 +3,20 @@
 mod autostart;
 mod commands;
 mod db;
+mod drag_out;
 mod events;
+mod export;
+mod file_ops;
 mod hotkeys;
 mod lnk;
+mod logging;
 mod manager;
 mod paths;
+mod pods;
 mod settings;
+mod staging;
 mod state;
+mod thumbnail;
 mod tray;
 mod watcher;
 mod win;
@@ -48,7 +55,7 @@ pub fn run() {
             tray::init(app.handle())?;
             watcher::spawn(app.handle().clone());
 
-            commands::debug_log(&format!(
+            logging::write(&format!(
                 "=== FloePod {VERSION} 启动 | 数据目录 {} | 匣 {} 个 | firstRunDone={} ===",
                 settings.data_dir,
                 settings.pods.len(),
@@ -57,7 +64,7 @@ pub fn run() {
 
             // 启动时显式校准系统自启动状态；失败不妨碍用户手动启动应用，但必须留痕。
             if let Err(e) = manager::sync_autostart(app.handle(), settings.autostart) {
-                commands::debug_log(&format!("[autostart] {e}"));
+                logging::write(&format!("[autostart] {e}"));
             }
 
             // 落地：创建匣窗口 / 应用外观 / 监听 / 托盘
@@ -67,7 +74,7 @@ pub fn run() {
                 .watcher_dirty
                 .store(true, std::sync::atomic::Ordering::Relaxed);
             if let Err(e) = hotkeys::register(app.handle(), &settings) {
-                eprintln!("[hotkeys] {e}");
+                logging::write(&format!("[hotkeys] {e}"));
             }
             manager::spawn_watchdog(app.handle().clone());
 
@@ -84,14 +91,10 @@ pub fn run() {
                         api.prevent_close();
                         let _ = window.hide();
                     }
-                    label if label.starts_with("pod_") => {
+                    label if events::pod_window(label).is_some() => {
                         api.prevent_close();
                         // 面板被请求关闭（如 Alt+F4）-> 收起该匣面板
-                        if let Some(id) = label
-                            .strip_prefix("pod_")
-                            .and_then(|s| s.strip_suffix("_panel"))
-                            .and_then(|s| s.parse::<u64>().ok())
-                        {
+                        if let Some(events::PodWindow::Panel(id)) = events::pod_window(label) {
                             let app = window.app_handle().clone();
                             tauri::async_runtime::spawn(async move {
                                 manager::hide_panel(&app, id);

@@ -30,6 +30,19 @@ struct MonitorGeometry {
     scale_factor: f64,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MonitorInfo {
+    pub name: String,
+    pub label: String,
+    pub primary: bool,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub scale_factor: f64,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PanelSnapshot {
@@ -72,12 +85,17 @@ fn panel_toggle_action(bars_visible: bool, runtime: Option<&PodRuntime>) -> Pane
 pub fn current_settings(app: &AppHandle) -> Settings {
     let state = app.state::<AppState>();
     let conn = state.db.lock().unwrap();
-    crate::settings::load(
+    match crate::settings::load(
         &conn,
         &state.data_dir.to_string_lossy(),
         env!("CARGO_PKG_VERSION"),
-    )
-    .unwrap_or_default()
+    ) {
+        Ok(settings) => settings,
+        Err(error) => {
+            crate::logging::write(&format!("[settings] 读取当前设置失败: {error}"));
+            Settings::default()
+        }
+    }
 }
 
 fn pod_of(app: &AppHandle, id: u64) -> Option<Pod> {
@@ -88,11 +106,11 @@ fn pod_of(app: &AppHandle, id: u64) -> Option<Pod> {
 }
 
 pub fn pod_bar(app: &AppHandle, id: u64) -> Option<WebviewWindow> {
-    app.get_webview_window(&format!("pod_{id}"))
+    app.get_webview_window(&events::pod_bar_label(id))
 }
 
 pub fn pod_panel(app: &AppHandle, id: u64) -> Option<WebviewWindow> {
-    app.get_webview_window(&format!("pod_{id}_panel"))
+    app.get_webview_window(&events::pod_panel_label(id))
 }
 
 fn pods_guard<'a>(
@@ -128,7 +146,7 @@ fn monitor(app: &AppHandle, pod: &Pod) -> Option<MonitorGeometry> {
     })
 }
 
-pub fn list_monitors(app: &AppHandle) -> Vec<serde_json::Value> {
+pub fn list_monitors(app: &AppHandle) -> Vec<MonitorInfo> {
     let Some(monitors) = app.available_monitors().ok() else {
         return vec![];
     };
@@ -146,11 +164,18 @@ pub fn list_monitors(app: &AppHandle) -> Vec<serde_json::Value> {
         } else {
             format!("显示器 {idx}")
         };
-        out.push(serde_json::json!({
-            "name": m.name().map(|s| s.as_str()).unwrap_or(""),
-            "label": label,
-            "primary": is_primary,
-        }));
+        let position = m.position();
+        let size = m.size();
+        out.push(MonitorInfo {
+            name: m.name().map(|name| name.as_str()).unwrap_or("").to_string(),
+            label,
+            primary: is_primary,
+            x: position.x,
+            y: position.y,
+            width: size.width,
+            height: size.height,
+            scale_factor: m.scale_factor(),
+        });
     }
     out
 }
@@ -327,8 +352,8 @@ fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
         .entry(pod.id)
         .or_default();
 
-    let bar_label = format!("pod_{}", pod.id);
-    let panel_label = format!("pod_{}_panel", pod.id);
+    let bar_label = events::pod_bar_label(pod.id);
+    let panel_label = events::pod_panel_label(pod.id);
     if app.get_webview_window(&bar_label).is_none() {
         if let Err(err) =
             WebviewWindowBuilder::new(app, &bar_label, tauri::WebviewUrl::App("index.html".into()))
@@ -343,7 +368,7 @@ fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
                 .visible(false)
                 .build()
         {
-            eprintln!("[window] 创建 {bar_label} 失败: {err}");
+            crate::logging::write(&format!("[window] 创建 {bar_label} 失败: {err}"));
         }
     }
     if app.get_webview_window(&panel_label).is_none() {
@@ -363,7 +388,7 @@ fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
         .visible(false)
         .build()
         {
-            eprintln!("[window] 创建 {panel_label} 失败: {err}");
+            crate::logging::write(&format!("[window] 创建 {panel_label} 失败: {err}"));
         }
     }
     // 胶囊条形状由前端自绘：禁用 Windows 11 系统窗口圆角，
@@ -383,7 +408,7 @@ fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
 }
 
 fn destroy_pod_windows(app: &AppHandle, id: u64) {
-    let labels = [format!("pod_{id}"), format!("pod_{id}_panel")];
+    let labels = [events::pod_bar_label(id), events::pod_panel_label(id)];
     for l in labels {
         if let Some(w) = app.get_webview_window(&l) {
             let _ = w.destroy();
@@ -403,13 +428,9 @@ fn sync_pods_with_settings(app: &AppHandle, s: &Settings) {
     let existing: std::collections::HashSet<u64> = app
         .webview_windows()
         .keys()
-        .filter_map(|l| {
-            if let Some(rest) = l.strip_prefix("pod_") {
-                let id_str = rest.strip_suffix("_panel").unwrap_or(rest);
-                id_str.parse::<u64>().ok()
-            } else {
-                None
-            }
+        .filter_map(|label| match events::pod_window(label) {
+            Some(events::PodWindow::Bar(id) | events::PodWindow::Panel(id)) => Some(id),
+            None => None,
         })
         .collect();
 
@@ -455,8 +476,6 @@ fn apply_material_once(app: &AppHandle, material: &str, id: u64) {
     }
 }
 
-/* ---------- 面板显隐（按匣） ---------- */
-
 fn panel_snapshot(app: &AppHandle, id: u64) -> PanelSnapshot {
     let state = app.state::<AppState>();
     let guard = pods_guard(&state);
@@ -489,7 +508,7 @@ fn emit_panel_snapshot(app: &AppHandle, id: u64) {
     if pod_panel(app, id).is_none() {
         return;
     }
-    let label = format!("pod_{id}_panel");
+    let label = events::pod_panel_label(id);
     let _ = app.emit_to(
         &label,
         events::PANEL_MODE,
@@ -683,7 +702,7 @@ fn show_panel_locked(app: &AppHandle, id: u64, pod: &Pod, pin_on_show: bool) -> 
         }
     }
     if !was_visible {
-        let _ = app.emit_to(format!("pod_{id}_panel"), events::PANEL_SHOWN, ());
+        let _ = app.emit_to(events::pod_panel_label(id), events::PANEL_SHOWN, ());
     }
     emit_panel_snapshot(app, id);
     true
@@ -1075,5 +1094,23 @@ mod tests {
             panel_toggle_action(true, Some(&runtime)),
             PanelToggleAction::Hide
         );
+    }
+
+    #[test]
+    fn monitor_info_keeps_the_frontend_camel_case_contract() {
+        let monitor = MonitorInfo {
+            name: "DISPLAY2".into(),
+            label: "显示器 2".into(),
+            primary: false,
+            x: -1920,
+            y: 0,
+            width: 3840,
+            height: 2160,
+            scale_factor: 2.0,
+        };
+        let value = serde_json::to_value(monitor).unwrap();
+        assert_eq!(value["scaleFactor"], 2.0);
+        assert_eq!(value["width"], 3840);
+        assert!(value.get("scale_factor").is_none());
     }
 }

@@ -1,9 +1,9 @@
 <script setup lang="ts">
 /** 图片缩略图：走 Rust 命令读取字节（仅限暂存文件夹内的图片），非图片回落为图形 */
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { ipc } from "@/lib/ipc";
+import { ipc } from "@/ipc/client";
 import { withThumbnailSlot } from "@/lib/thumbnailQueue";
-import type { ItemKind } from "@/types";
+import type { ItemKind } from "@/domain/types";
 import FileGlyph from "./FileGlyph.vue";
 
 const props = defineProps<{

@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
-import { ipc } from "@/lib/ipc";
-import { Events, listenCurrent } from "@/lib/events";
-import type { ExportMode, ExportResult, StagedItem } from "@/types";
+import type { ExportMode, ExportResult, StagedItem } from "@/domain/types";
+import { ipc } from "@/ipc/client";
+import { Events, listenCurrent } from "@/ipc/events";
 
 /** 暂存数据：条目 + 选中态（按当前匣过滤） */
 export const useStagingStore = defineStore("staging", {

@@ -1,15 +1,13 @@
 import { defineStore } from "pinia";
-import { ipc } from "@/lib/ipc";
-import { Events, listen } from "@/lib/events";
-import type { Pod, Settings, ThemeMode } from "@/types";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { resolveTheme } from "@/domain/settings";
+import type { MonitorInfo, Pod, Settings, ThemeMode } from "@/domain/types";
+import { ipc } from "@/ipc/client";
+import { Events, listen } from "@/ipc/events";
 
 let changesListening = false;
 let changesListenPromise: Promise<void> | null = null;
 let systemThemeWatching = false;
-
-function resolvedTheme(mode: ThemeMode, systemDark: boolean): "light" | "dark" {
-  return mode === "system" ? (systemDark ? "dark" : "light") : mode;
-}
 
 function applyDocumentTheme(theme: "light" | "dark") {
   const root = document.documentElement;
@@ -22,7 +20,6 @@ function applyDocumentTheme(theme: "light" | "dark") {
 async function applyNativeTheme(mode: ThemeMode) {
   if (!("__TAURI_INTERNALS__" in window)) return;
   try {
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
     await getCurrentWindow().setTheme(mode === "system" ? null : mode);
   } catch (err) {
     console.warn("native theme sync failed", err);
@@ -32,7 +29,7 @@ async function applyNativeTheme(mode: ThemeMode) {
 export const useSettingsStore = defineStore("settings", {
   state: () => ({
     settings: null as Settings | null,
-    monitors: [] as import("@/types").MonitorInfo[],
+    monitors: [] as MonitorInfo[],
     systemDark: window.matchMedia("(prefers-color-scheme: dark)").matches,
     dark: window.matchMedia("(prefers-color-scheme: dark)").matches,
     bootstrapSeq: 0,
@@ -54,7 +51,7 @@ export const useSettingsStore = defineStore("settings", {
 
     apply(settings: Settings) {
       this.settings = settings;
-      const theme = resolvedTheme(settings.theme, this.systemDark);
+      const theme = resolveTheme(settings.theme, this.systemDark);
       this.dark = theme === "dark";
       applyDocumentTheme(theme);
       void applyNativeTheme(settings.theme);
@@ -100,7 +97,6 @@ export const useSettingsStore = defineStore("settings", {
       // Tauri 的原生主题事件作为 WebView2 media query 的互补来源。
       if (ipc.inTauri) {
         try {
-          const { getCurrentWindow } = await import("@tauri-apps/api/window");
           const current = getCurrentWindow();
           const initial = await current.theme();
           if (initial && this.settings?.theme === "system") update(initial === "dark");

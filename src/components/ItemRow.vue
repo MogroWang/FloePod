@@ -4,7 +4,7 @@
  * 拖拽（移动超过阈值）发起 OS 拖出；点选 / Ctrl 点选 / Shift 范围选；双击打开。
  */
 import { computed, onBeforeUnmount, ref } from "vue";
-import type { StagedItem } from "@/types";
+import type { StagedItem } from "@/domain/types";
 import { formatSize, formatTime, kindLabel } from "@/lib/format";
 import ThumbImg from "./ThumbImg.vue";
 

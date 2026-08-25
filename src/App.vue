@@ -7,6 +7,7 @@
  * 浏览器开发时用 location.hash（#/settings /#/pod_1 /#/pod_1_panel）。
  */
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { parseWindowLabel } from "@/domain/windowLabel";
 import PodBar from "@/windows/PodBar.vue";
 import PodPanel from "@/windows/PodPanel.vue";
 import SettingsWindow from "@/windows/SettingsWindow.vue";
@@ -23,17 +24,15 @@ function resolveWindowLabel(): string {
 }
 
 const label = resolveWindowLabel();
-const barMatch = label.match(/^pod_(\d+)$/);
-const panelMatch = label.match(/^pod_(\d+)_panel$/);
-const podId = Number((barMatch ?? panelMatch)?.[1]);
-const view = label === "settings"
+const target = parseWindowLabel(label);
+const view = target?.kind === "settings"
   ? SettingsWindow
-  : panelMatch
+  : target?.kind === "podPanel"
     ? PodPanel
-    : barMatch
+    : target?.kind === "podBar"
       ? PodBar
       : null;
-const viewProps = Number.isSafeInteger(podId) && podId > 0 ? { podId } : {};
+const viewProps = target && "podId" in target ? { podId: target.podId } : {};
 </script>
 
 <template>
