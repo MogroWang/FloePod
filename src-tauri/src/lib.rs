@@ -3,13 +3,20 @@
 mod autostart;
 mod commands;
 mod db;
+mod drag_out;
 mod events;
+mod export;
+mod file_ops;
 mod hotkeys;
 mod lnk;
+mod logging;
 mod manager;
 mod paths;
+mod pods;
 mod settings;
+mod staging;
 mod state;
+mod thumbnail;
 mod tray;
 mod watcher;
 mod win;
@@ -48,7 +55,7 @@ pub fn run() {
             tray::init(app.handle())?;
             watcher::spawn(app.handle().clone());
 
-            commands::debug_log(&format!(
+            logging::write(&format!(
                 "=== FloePod {VERSION} 启动 | 数据目录 {} | 匣 {} 个 | firstRunDone={} ===",
                 settings.data_dir,
                 settings.pods.len(),
@@ -57,7 +64,7 @@ pub fn run() {
 
             // 启动时显式校准系统自启动状态；失败不妨碍用户手动启动应用，但必须留痕。
             if let Err(e) = manager::sync_autostart(app.handle(), settings.autostart) {
-                commands::debug_log(&format!("[autostart] {e}"));
+                logging::write(&format!("[autostart] {e}"));
             }
 
             // 落地：创建匣窗口 / 应用外观 / 监听 / 托盘
