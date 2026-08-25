@@ -22,7 +22,7 @@ const emit = defineEmits<{
 const percent = computed(() => {
   const range = props.max - props.min;
   if (range <= 0) return 0;
-  return ((props.value - props.min) / range) * 100;
+  return Math.min(100, Math.max(0, ((props.value - props.min) / range) * 100));
 });
 
 function onInput(e: Event) {
@@ -53,51 +53,65 @@ function onChange(e: Event) {
 .range {
   -webkit-appearance: none;
   appearance: none;
-  width: 150px;
-  height: 18px;
+  width: 190px;
+  max-width: 100%;
+  height: 28px;
   margin: 0;
   background: transparent;
   cursor: pointer;
+  touch-action: none;
 }
-/* 轨道：用渐变在 input 背景上画出「已填充段 + 未填充段」 */
+/* 轨道：更大的命中区域包住 6px 视觉轨道，填充段与空轨道保持清楚对比。 */
 .range::-webkit-slider-runnable-track {
-  height: 4px;
+  height: 6px;
   border-radius: 999px;
   background: linear-gradient(
     to right,
     var(--accent) 0%,
     var(--accent) var(--fill),
-    var(--surface-3) var(--fill),
-    var(--surface-3) 100%
+    color-mix(in oklab, var(--line-strong) 72%, var(--surface-raised)) var(--fill),
+    color-mix(in oklab, var(--line-strong) 72%, var(--surface-raised)) 100%
   );
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--line-strong) 50%, transparent);
 }
 .range::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 15px;
-  height: 15px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
   background: var(--surface-raised);
-  border: 1px solid var(--line-strong);
-  box-shadow: 0 1px 4px oklch(0.2 0.02 230 / 0.22);
-  margin-top: -5.5px; /* (15 - 4) / 2，居中于轨道 */
+  border: 2px solid var(--surface-raised);
+  box-shadow:
+    0 0 0 1px var(--line-strong),
+    0 2px 7px oklch(0.2 0.02 230 / 0.25);
+  margin-top: -6px; /* (18 - 6) / 2，居中于轨道 */
   transition:
     transform 140ms var(--ease-out),
     border-color 140ms var(--ease-out),
     box-shadow 140ms var(--ease-out);
 }
 .range:hover::-webkit-slider-thumb {
-  transform: scale(1.12);
-  border-color: var(--accent);
+  transform: scale(1.08);
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 2px 8px oklch(0.2 0.02 230 / 0.28);
 }
 .range:active::-webkit-slider-thumb {
-  transform: scale(1.18);
-  border-color: var(--accent);
-  box-shadow: 0 0 0 4px var(--accent-soft), 0 1px 4px oklch(0.2 0.02 230 / 0.22);
+  transform: scale(1.12);
+  box-shadow:
+    0 0 0 5px var(--accent-soft),
+    0 0 0 2px var(--accent),
+    0 2px 8px oklch(0.2 0.02 230 / 0.28);
 }
 .range:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 3px;
+  outline: none;
+}
+.range:focus-visible::-webkit-slider-thumb {
+  box-shadow:
+    0 0 0 4px var(--accent-soft),
+    0 0 0 2px var(--accent),
+    0 2px 8px oklch(0.2 0.02 230 / 0.28);
 }
 .range:disabled {
   cursor: default;

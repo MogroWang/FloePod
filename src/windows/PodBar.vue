@@ -46,11 +46,13 @@ const count = computed(
   () => staging.items.filter((i) => i.podId === props.podId).length,
 );
 
-const capsuleStyle = computed(() =>
-  vertical.value
-    ? { width: short.value + "px", height: "100%", opacity: pod.value?.opacity ?? 1 }
-    : { height: short.value + "px", width: "100%", opacity: pod.value?.opacity ?? 1 },
-);
+const capsuleStyle = computed<Record<string, string>>(() => {
+  const opacity = Math.min(1, Math.max(0.1, pod.value?.opacity ?? 1));
+  const appearance = { "--pod-opacity": `${opacity * 100}%` };
+  return vertical.value
+    ? { ...appearance, width: short.value + "px", height: "100%" }
+    : { ...appearance, height: short.value + "px", width: "100%" };
+});
 
 /* 仅在拖入接纳时短条变宽（圆角矩形）；悬停弹出面板不改变形状。
    目标 62 与 Rust 侧 POD_BAR_ACCEPT 一致：胶囊填满窗口，圆角矩形完整显示。 */
@@ -415,7 +417,11 @@ onBeforeUnmount(() => {
   min-width: 44px;
   min-height: 44px;
   will-change: width, height;
-  background: var(--bar-glass);
+  background: color-mix(
+    in srgb,
+    var(--surface) var(--pod-opacity, 100%),
+    transparent
+  );
   box-shadow: inset 0 0 0 1px var(--glass-line);
   display: flex;
   align-items: center;
@@ -448,7 +454,11 @@ onBeforeUnmount(() => {
 }
 
 .capsule.hovering {
-  background: var(--bar-glass-hover);
+  background: color-mix(
+    in srgb,
+    var(--surface-raised) var(--pod-opacity, 100%),
+    transparent
+  );
 }
 .capsule.accepting {
   background: var(--accent);

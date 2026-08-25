@@ -30,6 +30,10 @@ const staging = useStagingStore();
 
 const pod = computed(() => settingsStore.pod(props.podId));
 const edge = computed(() => pod.value?.edge ?? "left");
+const panelStyle = computed<Record<string, string>>(() => {
+  const opacity = Math.min(1, Math.max(0.1, pod.value?.opacity ?? 1));
+  return { "--pod-opacity": `${opacity * 100}%` };
+});
 
 const mode = ref<PanelMode>("list");
 const pendingPaths = ref<string[]>([]);
@@ -783,7 +787,13 @@ async function openSettings() {
 </script>
 
 <template>
-  <div ref="rootEl" class="panel-root" @pointerenter="onPointerEnter" @pointerleave="onPointerLeave">
+  <div
+    ref="rootEl"
+    class="panel-root"
+    :style="panelStyle"
+    @pointerenter="onPointerEnter"
+    @pointerleave="onPointerLeave"
+  >
     <!-- 头部 -->
     <header ref="headEl" class="panel-head">
       <div class="pod-title">
@@ -928,9 +938,10 @@ async function openSettings() {
       </template>
       <template v-else-if="items.length > 0">
         <div class="foot-left">
+          <span class="drag-mode-label">拖出时：</span>
           <SegmentedControl
             :options="[
-              { value: 'copy', label: '拖出：复制' },
+              { value: 'copy', label: '复制' },
               { value: 'move', label: '剪切' },
             ]"
             v-model="dragMode"
@@ -959,7 +970,11 @@ async function openSettings() {
   inset: 0;
   display: flex;
   flex-direction: column;
-  background: var(--glass);
+  background: color-mix(
+    in srgb,
+    var(--surface) var(--pod-opacity, 100%),
+    transparent
+  );
   border-radius: var(--radius-panel);
   border: 1px solid var(--glass-line);
   box-shadow: var(--shadow-panel), inset 0 1px 0 var(--glass-inner);
@@ -1155,6 +1170,19 @@ async function openSettings() {
   display: flex;
   gap: 6px;
   align-items: center;
+}
+.foot-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.drag-mode-label {
+  flex-shrink: 0;
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 550;
+  white-space: nowrap;
 }
 .foot-btn {
   border: 1px solid var(--line-strong);
