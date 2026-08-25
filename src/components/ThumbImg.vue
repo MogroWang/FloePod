@@ -95,11 +95,10 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  background: var(--surface-2);
+  background: var(--surface-raised);
+  border: 1px solid color-mix(in oklab, var(--line) 72%, transparent);
+  box-sizing: border-box;
   overflow: hidden;
-}
-:global(.dark) .thumb-box {
-  background: var(--surface-3);
 }
 .thumb-img {
   width: 100%;

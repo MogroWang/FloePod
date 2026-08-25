@@ -93,10 +93,11 @@ pub struct Settings {
     pub hotkeys: Hotkeys,
     #[serde(default)]
     pub pods: Vec<Pod>,
-    /// 只读：由应用在读取时注入，不持久化
-    #[serde(skip_serializing, skip_deserializing, default)]
+    /// 只读：由应用在读取时注入并返回前端，但不接受数据库中的旧值。
+    /// `persist` 会在写库前显式剔除这两个运行时字段。
+    #[serde(skip_deserializing, default)]
     pub version: String,
-    #[serde(skip_serializing, skip_deserializing, default)]
+    #[serde(skip_deserializing, default)]
     pub data_dir: String,
 }
 
@@ -410,7 +411,15 @@ fn migrate_legacy(s: &mut Settings, v: &serde_json::Value) {
 }
 
 pub fn persist(conn: &Connection, s: &Settings) -> Result<(), String> {
-    let json = serde_json::to_string(s).map_err(|e| e.to_string())?;
+    // version / dataDir 需要出现在 IPC 响应中供设置页展示，但它们是当前
+    // 可执行文件与运行环境的派生值，不能写回数据库成为下次启动的输入。
+    let mut value = serde_json::to_value(s).map_err(|e| e.to_string())?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| "设置序列化结果必须是对象".to_string())?;
+    object.remove("version");
+    object.remove("dataDir");
+    let json = serde_json::to_string(&value).map_err(|e| e.to_string())?;
     db::kv_set(conn, KEY, &json)
 }
 
@@ -562,6 +571,26 @@ mod tests {
         assert_eq!(s.theme, "dark");
         assert!(s.pods.is_empty());
         assert_eq!(s.version, "0.4.0");
+    }
+
+    #[test]
+    fn runtime_metadata_is_serialized_for_ipc_but_not_persisted() {
+        let c = conn();
+        let s = Settings {
+            version: "0.6.0".into(),
+            data_dir: r"C:\Users\tester\AppData\Roaming\FloePod".into(),
+            ..Settings::default()
+        };
+
+        let wire = serde_json::to_value(&s).unwrap();
+        assert_eq!(wire["version"], "0.6.0");
+        assert_eq!(wire["dataDir"], s.data_dir);
+
+        persist(&c, &s).unwrap();
+        let stored: serde_json::Value =
+            serde_json::from_str(&db::kv_get(&c, KEY).unwrap().unwrap()).unwrap();
+        assert!(stored.get("version").is_none());
+        assert!(stored.get("dataDir").is_none());
     }
 
     #[test]

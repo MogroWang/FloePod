@@ -93,10 +93,6 @@ const NAV_ICONS: Record<string, string> = {
   about: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/>',
 };
 
-function edgeLabel(edge: string): string {
-  return edge === "left" ? "左" : edge === "right" ? "右" : edge === "top" ? "上" : "下";
-}
-
 function monitorLabel(pod: Pod): string {
   if (!pod.monitor) return "主显示器";
   return monitors.value.find((m) => m.name === pod.monitor)?.label ?? pod.monitor;
@@ -820,7 +816,6 @@ const PAGES = [
                         @input="(e) => previewPodName(pod.id, e)"
                         @change="(e) => commitPodName(pod, e)"
                       />
-                      <span class="pod-edge-tag">{{ edgeLabel(pod.edge) }}</span>
                       <div class="pod-head-ops">
                         <ToggleSwitch
                           :model-value="pod.enabled"
@@ -1417,14 +1412,6 @@ select.input {
 }
 .pod-name-input:focus {
   background: var(--surface-hover);
-}
-.pod-edge-tag {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--on-accent);
-  background: var(--accent);
-  border-radius: 999px;
-  padding: 2px 8px;
 }
 .pod-head-ops {
   margin-left: auto;
