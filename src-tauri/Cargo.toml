@@ -1,6 +1,6 @@
 [package]
 name = "floe-pod"
-version = "0.6.0"
+version = "1.0.0"
 description = "浮匣 FloePod - 本地优先的屏幕边缘文件暂存工具"
 authors = ["MogroWang Studio"]
 edition = "2021"

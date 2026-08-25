@@ -703,8 +703,7 @@ const PAGES = [
       <div class="settings-body">
         <aside class="nav">
           <div class="nav-brand">
-            <BrandMark :size="20" class="brand-icon" />
-            <span>浮匣</span>
+            <BrandMark :size="22" class="brand-icon" />
           </div>
           <nav class="nav-list">
             <button
@@ -953,7 +952,6 @@ const PAGES = [
               <template v-else>
                 <div class="about-hero">
                   <BrandMark :size="48" class="about-brand" />
-                  <div class="about-name">浮匣 FloePod</div>
                   <div class="about-ver">版本 {{ s.version }}</div>
                 </div>
                 <p class="about-text">

@@ -40,7 +40,7 @@ let settings: Settings = {
       enabled: true,
     },
   ],
-  version: "0.6.0-mock",
+  version: "1.0.0-mock",
   dataDir: "浏览器预览",
 };
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-/** 品牌图形：官方 FP Logo（去白底），按高度等比缩放。 */
-import logoUrl from "@/assets/fp-logo.png";
+/** 品牌图形：FloePod 纯 SVG Logo，按高度等比缩放。 */
+import logoUrl from "@/assets/floepod.svg";
 withDefaults(defineProps<{ size?: number }>(), { size: 24 });
 </script>
 
@@ -9,7 +9,7 @@ withDefaults(defineProps<{ size?: number }>(), { size: 24 });
     :src="logoUrl"
     :style="{ height: size + 'px' }"
     class="brand-logo"
-    alt="浮匣"
+    alt="FloePod"
     draggable="false"
   />
 </template>

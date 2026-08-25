@@ -575,13 +575,13 @@ mod tests {
     fn runtime_metadata_is_serialized_for_ipc_but_not_persisted() {
         let c = conn();
         let s = Settings {
-            version: "0.6.0".into(),
+            version: "1.0.0".into(),
             data_dir: r"C:\Users\tester\AppData\Roaming\FloePod".into(),
             ..Settings::default()
         };
 
         let wire = serde_json::to_value(&s).unwrap();
-        assert_eq!(wire["version"], "0.6.0");
+        assert_eq!(wire["version"], "1.0.0");
         assert_eq!(wire["dataDir"], s.data_dir);
 
         persist(&c, &s).unwrap();
@@ -640,7 +640,7 @@ mod tests {
         });
         db::kv_set(&c, KEY, &fixture.to_string()).unwrap();
 
-        let loaded = load(&c, &data_dir, "0.6.0").unwrap();
+        let loaded = load(&c, &data_dir, "1.0.0").unwrap();
         assert_eq!(loaded.pods.len(), 2);
         assert_eq!(loaded.pods[0].id, 7);
         assert_eq!(loaded.pods[0].monitor, "DISPLAY-A");
