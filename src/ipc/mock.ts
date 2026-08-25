@@ -319,7 +319,7 @@ export async function mockInvoke<T>(command: CommandName, args?: Record<string, 
       cuts.delete(String(args?.token ?? "") as DragCutToken);
       return result(undefined);
     default:
-      // Native window commands are successful no-ops in browser preview.
+      // 浏览器预览没有原生窗口，这些命令直接返回成功。
       return result(undefined);
   }
 }

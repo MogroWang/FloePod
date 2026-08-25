@@ -94,7 +94,7 @@ async function onTogglePinned() {
   if (pinBusy.value) return;
   const previous = pinned.value;
   const next = !previous;
-  // Prevent an older getPanelState response from undoing this local command.
+  // 防止较早的 getPanelState 响应撤销刚执行的本地命令。
   pinRevision += 1;
   pinBusy.value = true;
   pinned.value = next;
@@ -137,9 +137,7 @@ function retainUnlistener(unlisten: () => void) {
 }
 
 function applyPanelMode(nextMode: PanelMode, paths: string[] = []) {
-  // A conflict contains destination/selection context which only exists in this
-  // WebView. If the WebView was recreated mid-conflict, the safest recoverable
-  // state is the list rather than an unusable blank conflict screen.
+  // 冲突目标和选择信息只存在于当前 WebView；若中途重建，只能回到列表。
   if (nextMode === "conflict" && !conflict.value) {
     mode.value = "list";
     pendingPaths.value = [];
@@ -149,9 +147,7 @@ function applyPanelMode(nextMode: PanelMode, paths: string[] = []) {
     return;
   }
 
-  // An ask screen without its pending paths cannot be completed. Recover to a
-  // usable list and repair the backend state rather than rendering a list with
-  // its footer hidden by the stale `ask` mode.
+  // 询问页缺少待处理路径时无法继续，回到列表并同步修复后端状态。
   if (nextMode === "ask" && paths.length === 0) {
     mode.value = "list";
     pendingPaths.value = [];
@@ -178,8 +174,7 @@ async function syncPanelState() {
   try {
     const state = await ipc.getPanelState(props.podId);
     if (!mounted) return;
-    // Events registered before this read are authoritative if they arrived
-    // while the command was in flight; do not overwrite them with an older read.
+    // 读取期间收到的事件更新更晚，不能再用旧响应覆盖。
     if (modeRevision === expectedModeRevision) applyPanelMode(state.mode, state.paths);
     if (pinRevision === expectedPinRevision) pinned.value = state.pinned;
   } catch (err) {
@@ -206,9 +201,7 @@ async function refreshAfterMutation(label: string): Promise<boolean> {
 }
 
 function onSelect(id: number, mode: SelectionMode) {
-  // Long-running export/drag/remove operations apply a result to the current
-  // selection. Freeze row selection meanwhile so their completion cannot erase
-  // a newer user selection made against an older list snapshot.
+  // 导出、拖出和删除会按启动时的选择处理；执行期间锁定选择，避免完成时覆盖新选择。
   if (exportBusy.value || listActionBusy.value || dragBusy.value) return;
   const next = updateSelection(
     staging.selectedIds,
@@ -286,9 +279,7 @@ async function onDragOut(paths: string[]) {
   if (paths.length === 0 || dragBusy.value || exportBusy.value || listActionBusy.value) return;
   const first = staging.items.find((i) => i.stagingPath === paths[0]);
   const icon = makeDragIcon(paths, first?.ext ?? null);
-  // The mode control is reactive and both preparation calls below can wait on
-  // native I/O. One immutable snapshot must drive both the OLE effect and whether
-  // source cleanup is authorised, otherwise move -> copy can delete a copied source.
+  // 准备拖出时固定模式快照，确保 OLE 效果与是否清理源文件使用同一模式。
   const requestedMode = dragMode.value;
   const isCut = requestedMode === "move";
   let cutToken: DragCutToken | null = null;
@@ -402,8 +393,7 @@ async function exportSelected(exportMode: ExportMode) {
   if (!ids.length || exportBusy.value || listActionBusy.value || dragBusy.value) return;
   exportBusy.value = true;
   try {
-    // A native folder picker takes the pointer away from the WebView. Reuse the
-    // runtime's operation guard so the hover watchdog cannot hide this panel.
+    // 原生目录选择器会让指针离开 WebView；操作期间保持面板可见。
     await ipc.setDraggingOut(props.podId, true);
     const dest = await pickDest();
     if (!dest) return;
@@ -608,9 +598,7 @@ function scheduleResize() {
     const head = headEl.value;
     if (!root || !body || !content || !head) return;
 
-    // Observe and measure the intrinsic child, never the flex scroll viewport.
-    // Measuring body.scrollHeight after resizing the native window feeds the
-    // previous viewport height back into the next request and grows repeatedly.
+    // 只测量内容元素；若测量滚动视口，原生窗口高度会被反复回灌而持续增长。
     const bodyStyle = getComputedStyle(body);
     const rootStyle = getComputedStyle(root);
     const bodyPadding = cssPixels(bodyStyle.paddingTop) + cssPixels(bodyStyle.paddingBottom);
@@ -663,9 +651,7 @@ onMounted(async () => {
     }),
     /* 窗口已被隐藏：DOM 置为「待显示」透明态，下次显示第一帧不闪现完整内容 */
     listenCurrent<never>(Events.PanelHidden, () => {
-      // Hidden is also used by the global temporary hide/show flow. Runtime
-      // state is synchronized by PanelState/PanelMode/PanelPinned; mutating it
-      // here would discard an in-progress Ask/conflict during a suspension.
+      // 全局临时隐藏也会触发该事件；运行态由其他定向事件同步，不能在此清空询问或冲突。
       const el = rootEl.value;
       if (!el) return;
       el.classList.remove(

@@ -38,16 +38,14 @@ export const useStagingStore = defineStore("staging", {
       const request = ++this.refreshSeq;
       try {
         const items = await ipc.listPodItems(pid);
-        // ItemsChanged events can overlap. Never let an older response replace a
-        // newer snapshot, and discard selections which no longer exist on disk.
+        // 刷新请求可能重叠；旧响应不能覆盖新快照，同时移除已经不存在的选中项。
         if (request !== this.refreshSeq || pid !== this.activePodId) return;
         this.items = items;
         const existing = new Set(items.map((item) => item.id));
         this.selectedIds = new Set([...this.selectedIds].filter((id) => existing.has(id)));
         this.lastError = "";
       } catch (err) {
-        // A newer request (or a pod switch) has already superseded this read.
-        // Its failure must not surface as the result of the current snapshot.
+        // 当前读取已被新请求或匣切换取代，不再向上抛出它的错误。
         if (request !== this.refreshSeq || pid !== this.activePodId) return;
         this.lastError = err instanceof Error ? err.message : String(err);
         throw err;
@@ -73,8 +71,7 @@ export const useStagingStore = defineStore("staging", {
       const removed = new Set(ids);
       this.selectedIds = new Set([...this.selectedIds].filter((id) => !removed.has(id)));
       this.items = this.items.filter((item) => !removed.has(item.id));
-      // The destructive operation already succeeded. A failed follow-up read
-      // must not make callers retry deletion; ItemsChanged can reconcile later.
+      // 删除已经成功，后续刷新失败不能诱导调用方重复删除；事件会继续触发同步。
       await this.refresh().catch((err) => console.error("post-remove refresh failed", err));
     },
 

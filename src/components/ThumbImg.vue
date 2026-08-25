@@ -33,8 +33,7 @@ async function load() {
   if (!IMAGE_EXTS.includes((props.ext ?? "").toLowerCase())) return;
   try {
     const payload = await withThumbnailSlot(async () => {
-      // A component may leave the viewport or be reused while waiting in the
-      // shared queue; skip the native IPC entirely when that request is stale.
+      // 排队期间组件可能离开视口或被复用；过期请求不再调用原生接口。
       if (sequence !== loadSequence || !visible) return null;
       return ipc.readThumbnail(props.path);
     });
@@ -48,7 +47,7 @@ async function load() {
       replaceUrl(next);
     }
   } catch {
-    // Non-images and unreadable files intentionally fall back to FileGlyph.
+    // 非图片或无法读取的文件回退为文件图形。
   }
 }
 

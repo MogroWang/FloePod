@@ -55,7 +55,7 @@ pub struct DragCutFileIdentity {
     pub size: u64,
     pub is_file: bool,
     pub is_dir: bool,
-    /// Deterministic recursive metadata digest for directories. `None` for files.
+    /// 目录的确定性递归元数据摘要；普通文件为 `None`。
     pub tree_fingerprint: Option<u64>,
 }
 

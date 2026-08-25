@@ -67,8 +67,7 @@ pub fn register(app: &AppHandle, s: &Settings) -> Result<(), String> {
     })();
 
     if let Err(error) = registration {
-        // Do not leave an arbitrary prefix of the new shortcut set active.  The caller can
-        // now safely restore the previous complete set (or startup can continue with none).
+        // 新快捷键必须整组生效；失败时全部清除，由调用方恢复上一组设置。
         return match gs.unregister_all() {
             Ok(()) => Err(error),
             Err(cleanup) => Err(format!("{error}；清理已部分注册的快捷键失败（{cleanup}）")),

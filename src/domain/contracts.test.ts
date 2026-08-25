@@ -10,7 +10,7 @@ import { parseWindowLabel } from "./windowLabel.ts";
 import { Commands } from "../ipc/commands.ts";
 import { Events } from "../ipc/eventNames.ts";
 
-test("window labels select one isolated view", () => {
+test("窗口标签只匹配对应视图", () => {
   assert.deepEqual(parseWindowLabel("settings"), { kind: "settings" });
   assert.deepEqual(parseWindowLabel("pod_7"), { kind: "podBar", podId: 7 });
   assert.deepEqual(parseWindowLabel("pod_7_panel"), { kind: "podPanel", podId: 7 });
@@ -19,7 +19,7 @@ test("window labels select one isolated view", () => {
   }
 });
 
-test("selection preserves additive range behavior and repairs a stale anchor", () => {
+test("多选和范围选择会修复失效锚点", () => {
   const toggled = updateSelection(new Set([2]), [1, 2, 3, 4], 4, "toggle", 2);
   assert.deepEqual([...toggled.selected].sort(), [2, 4]);
   assert.equal(toggled.anchor, 4);
@@ -33,7 +33,7 @@ test("selection preserves additive range behavior and repairs a stale anchor", (
   assert.equal(repaired.anchor, 11);
 });
 
-test("theme and OOBE path transforms keep compatibility semantics", () => {
+test("主题解析和首次设置路径比较保持兼容", () => {
   assert.equal(resolveTheme("system", true), "dark");
   assert.equal(resolveTheme("system", false), "light");
   assert.equal(resolveTheme("dark", false), "dark");
@@ -42,7 +42,7 @@ test("theme and OOBE path transforms keep compatibility semantics", () => {
   assert.equal(normalizeWindowsPathKey("D:\\"), "d:\\");
 });
 
-test("monitor drag math uses the configured monitor scale and clamps offsets", () => {
+test("匣拖动按目标显示器缩放并限制偏移范围", () => {
   const monitor = {
     name: "DISPLAY2",
     label: "显示器 2",
@@ -60,7 +60,7 @@ test("monitor drag math uses the configured monitor scale and clamps offsets", (
   assert.equal(offsetAfterDrag(0.05, -200, 1000), 0);
 });
 
-test("drag-in modifiers retain their established precedence", () => {
+test("拖入修饰键遵循既定优先级", () => {
   assert.equal(dropActionFor({ ctrl: true, shift: true, alt: true }, "ask"), "copy");
   assert.equal(dropActionFor({ ctrl: false, shift: true, alt: true }, "copy"), "move");
   assert.equal(dropActionFor({ ctrl: false, shift: false, alt: true }, "move"), "shortcut");
@@ -68,7 +68,7 @@ test("drag-in modifiers retain their established precedence", () => {
   assert.equal(dropActionFor({ ctrl: false, shift: false, alt: false }, "shortcut"), "shortcut");
 });
 
-test("partial export results select only retryable failures", () => {
+test("部分导出失败后只选中可重试项", () => {
   const result = {
     conflicts: [],
     completedIds: [1, 2],
@@ -87,7 +87,7 @@ test("partial export results select only retryable failures", () => {
   assert.equal(presentExport({ ...result, failed: [], warnings: [] }, "copy").selection, null);
 });
 
-test("IPC command and event values are stable and unique", () => {
+test("IPC 命令和事件名保持稳定且不重复", () => {
   const commands = Object.values(Commands);
   assert.equal(new Set(commands).size, commands.length);
   assert.deepEqual(commands, [

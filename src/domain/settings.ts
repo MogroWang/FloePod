@@ -4,8 +4,7 @@ export function resolveTheme(mode: ThemeMode, systemDark: boolean): "light" | "d
   return mode === "system" ? (systemDark ? "dark" : "light") : mode;
 }
 
-/** Lexical fallback used only to reconcile an OOBE request whose IPC response
- * may have been lost. Rust remains authoritative for filesystem identity. */
+/** 首次设置的 IPC 响应丢失时用于比对路径；文件身份仍以后端结果为准。 */
 export function normalizeWindowsPathKey(input: string): string {
   const source = input.trim().replace(/\//g, "\\");
   if (!source) return "";

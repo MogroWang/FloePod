@@ -64,8 +64,7 @@ pub fn item_path(item: &StagedItem, current: &Settings) -> Result<PathBuf, Strin
     let parent = raw
         .parent()
         .ok_or_else(|| format!("条目「{}」的路径无效", item.name))?;
-    // Resolve the parent first. Canonicalizing a symlink leaf before deletion
-    // would turn a request to remove the link into a request to remove its target.
+    // 只解析父目录；删除前解析符号链接本身会误删它指向的目标。
     let safe_path = settings::resolve_path(parent)?.join(name);
     if !settings::path_is_within(&safe_path, &root) || settings::paths_equal(&safe_path, &root) {
         return Err(format!("条目「{}」已不在当前匣的暂存目录内", item.name));
@@ -149,8 +148,7 @@ pub fn stage_paths(
         sources.push(source);
     }
 
-    // A stale index still reserves its name. Otherwise the file can be created
-    // successfully only for the later UNIQUE insert to fail and remove it again.
+    // 旧索引仍占用文件名，避免先创建成功、再因 UNIQUE 入库失败而回删。
     let mut reserved = indexed_paths(&state, pod_id)?;
     let mut drafts = Vec::new();
     let mut created_paths = Vec::new();

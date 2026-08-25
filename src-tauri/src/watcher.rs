@@ -1,4 +1,4 @@
-//! Per-pod staging directory watchers and SQLite reconciliation.
+//! 按匣监听暂存目录，并与 SQLite 记录保持同步。
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -49,8 +49,7 @@ pub fn spawn(app: AppHandle) {
                 continue;
             }
             if state.staged_recently() {
-                // Delay our own notify events without discarding an external
-                // change that arrived in the same suppression window.
+                // 延后处理应用自身事件，同时保留抑制窗口内到达的外部变更。
                 state.watcher_dirty.store(true, Ordering::Relaxed);
                 continue;
             }
@@ -73,8 +72,7 @@ pub fn spawn(app: AppHandle) {
 }
 
 pub fn restart_all(app: &AppHandle) {
-    // Serialize the settings snapshot with watcher replacement. A retry that
-    // read old settings must never clear a newer set installed concurrently.
+    // 设置快照和监听器替换必须串行，旧重试不能清除并发安装的新监听器。
     let state = app.state::<AppState>();
     let mut watchers = state.watcher.lock().unwrap();
     let current = match current_settings(app) {
@@ -227,8 +225,7 @@ fn reconcile_pod(
             continue;
         };
         let Ok(parent) = settings::resolve_path(parent) else {
-            // Access errors do not prove deletion. Preserve this row until a
-            // complete readable snapshot can compare it safely.
+            // 无法访问不代表文件已删除；取得完整可读快照前保留记录。
             continue;
         };
         let safe_path = parent.join(name);

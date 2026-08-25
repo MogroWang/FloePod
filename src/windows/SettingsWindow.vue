@@ -132,9 +132,7 @@ type SettingsPatch = Parameters<typeof settingsStore.save>[0];
 type SettingsPatchSource = SettingsPatch | (() => SettingsPatch);
 
 function enqueueSettingsSave(source: SettingsPatchSource) {
-  // Producers are evaluated only when their turn starts. This matters for
-  // nested settings such as hotkeys: two rapid edits must merge with the result
-  // of the previous queued save, not both clone the same stale object.
+  // 保存轮到执行时再计算新值，连续编辑才能基于上一次保存结果合并。
   const request = settingsSaveTail.then(() =>
     settingsStore.save(typeof source === "function" ? source() : source),
   );
@@ -260,7 +258,7 @@ function previewPodNumber(id: number, field: PodNumberField, value: number) {
 async function commitPodNumber(pod: Pod, field: PodNumberField, value: number) {
   previewPodNumber(pod.id, field, value);
   await savePod(pod.id, { [field]: value });
-  // Do not clear a newer value entered while this request was queued.
+  // 请求排队期间用户可能已经输入新值，不能把它一起清空。
   if (podNumberDrafts[pod.id]?.[field] === value) {
     delete podNumberDrafts[pod.id]?.[field];
     if (Object.keys(podNumberDrafts[pod.id] ?? {}).length === 0) delete podNumberDrafts[pod.id];
@@ -276,7 +274,7 @@ async function commitPodName(pod: Pod, event: Event) {
   const value = podNameDrafts[pod.id];
   if (value == null) return;
   if (value !== pod.name) await savePod(pod.id, { name: value });
-  // Clearing the controlled draft also restores the persisted value on error.
+  // 清空受控草稿后，保存失败时也能恢复已持久化的值。
   if (podNameDrafts[pod.id] === value) delete podNameDrafts[pod.id];
 }
 
@@ -368,8 +366,7 @@ function ensureOobePod(): Promise<Pod> {
   if (oobeCreatedPod) return Promise.resolve(oobeCreatedPod);
   if (oobeCreatePromise) return oobeCreatePromise;
 
-  // If a previous app session created the pod but timed out before firstRunDone
-  // was persisted, reuse it on the next attempt instead of duplicating it.
+  // 若上次已经创建匣但未及时写入 firstRunDone，重试时复用该匣。
   const existing = findOobePodByFolder();
   if (existing) {
     oobeCreatedPod = existing;
@@ -378,8 +375,7 @@ function ensureOobePod(): Promise<Pod> {
   }
 
   oobeCreateStarted.value = true;
-  // Only OOBE retries are idempotent. The normal “new pod” flow must still report a
-  // duplicate folder instead of claiming that an existing pod was newly created.
+  // 只有首次设置允许幂等重试；普通新建仍需报告目录重复。
   const request = ipc.createPod(oobePodConfig(), true);
   let operation!: Promise<Pod>;
   operation = request.then(
@@ -388,9 +384,7 @@ function ensureOobePod(): Promise<Pod> {
       return pod;
     },
     async (err) => {
-      // A transport rejection does not prove that the backend failed before
-      // committing. Reconcile once before making a retry eligible, otherwise a
-      // completed-but-disconnected create can produce a duplicate pod.
+      // 连接失败不代表后端没有提交；允许重试前先同步一次，避免重复创建。
       await settingsStore.refreshPods().catch((refreshError) => {
         console.error("OOBE create reconciliation failed", refreshError);
       });
@@ -399,8 +393,7 @@ function ensureOobePod(): Promise<Pod> {
         oobeCreatedPod = existingAfterFailure;
         return existingAfterFailure;
       }
-      // A timed-out older operation may finish after the user has already started a
-      // newer retry. It must never clear the newer in-flight promise or busy state.
+      // 较早的超时操作可能晚于重试结束，不能清除新请求的忙碌状态。
       if (oobeCreatePromise === operation) {
         oobeCreatePromise = null;
         oobeCreateStarted.value = false;
@@ -436,9 +429,7 @@ async function finishOobe() {
   } catch (err) {
     console.error("finishOobe failed", err);
     appLog(`finishOobe 失败: ${err}`);
-    // A timeout does not settle the underlying IPC promise. Reconcile first, then make
-    // another click eligible; create_pod's OOBE-only reuseExisting flag makes a late
-    // first response and a retry converge on the same folder instead of duplicating it.
+    // 超时不会终止底层请求；先同步再允许重试，让前后两次请求落到同一个目录。
     if (String(err).includes("createPod 超时")) {
       await settingsStore.refreshPods().catch((refreshError) => {
         console.error("OOBE timeout reconciliation failed", refreshError);
@@ -541,9 +532,7 @@ async function loadSettings() {
       `SettingsWindow mounted | firstRun=${firstRun.value} | pods=${s.value?.pods.length ?? 0} | firstRunDone=${s.value?.firstRunDone}`,
     );
     if (firstRun.value) {
-      // If the previous run committed the first pod but exited before persisting
-      // firstRunDone, resume that pod instead of presenting an empty form that can
-      // create a second, unrelated pod after restart.
+      // 若上次已创建首个匣但未写入 firstRunDone，直接继续该匣，避免重启后重复创建。
       const existing = s.value?.pods[0];
       if (existing) {
         oobeCreatedPod = existing;

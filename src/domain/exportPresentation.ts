@@ -1,7 +1,7 @@
 import type { ExportMode, ExportResult } from "./types.ts";
 
 export interface ExportPresentation {
-  /** `null` preserves the current selection; an array replaces it. */
+  /** `null` 保留当前选择，数组则替换当前选择。 */
   selection: number[] | null;
   message: string;
 }
