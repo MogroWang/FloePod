@@ -8,10 +8,11 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask, open } from "@tauri-apps/plugin-dialog";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { useToast } from "@/composables/useToast";
 import { normalizeWindowsPathKey } from "@/domain/settings";
 import type { DropAction, Edge, Material, Pod, ThemeMode } from "@/domain/types";
 import { ipc } from "@/ipc/client";
+import { BROWSER_PREVIEW_STAGING_ROOT } from "@/lib/env";
 import { useSettingsStore } from "@/stores/settings";
 import SegmentedControl from "@/components/SegmentedControl.vue";
 import ToggleSwitch from "@/components/ToggleSwitch.vue";
@@ -26,7 +27,7 @@ const s = computed(() => settingsStore.settings);
 const monitors = computed(() => settingsStore.monitors);
 
 const page = ref<"general" | "pods" | "hotkeys" | "about">("general");
-const toast = ref("");
+const { toast, showToast, disposeToast } = useToast(2400);
 const hotkeyError = ref("");
 const loading = ref(true);
 const loadError = ref("");
@@ -34,7 +35,6 @@ const addPodBusy = ref(false);
 const autostartBusy = ref(false);
 const deletingPodIds = reactive(new Set<number>());
 const podEnabledBusyIds = reactive(new Set<number>());
-let toastTimer: number | undefined;
 let settingsSaveTail: Promise<void> = Promise.resolve();
 const podSaveTails = new Map<number, Promise<void>>();
 let hotkeySaveRevision = 0;
@@ -86,7 +86,9 @@ const THEMES: { value: ThemeMode; label: string }[] = [
   { value: "dark", label: "深色" },
 ];
 
-/** 侧栏导航图标（单线条，随 currentColor） */
+/** 侧栏导航图标（单线条，随 currentColor）。
+ *  v-html 的内容是这份静态开发者常量，不含任何运行时输入；
+ *  若未来需要动态图标，必须改用组件渲染而非拼接字符串。 */
 const NAV_ICONS: Record<string, string> = {
   general:
     '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M2 14h4M10 8h4M18 16h4"/>',
@@ -99,12 +101,6 @@ const NAV_ICONS: Record<string, string> = {
 function monitorLabel(pod: Pod): string {
   if (!pod.monitor) return "主显示器";
   return monitors.value.find((m) => m.name === pod.monitor)?.label ?? pod.monitor;
-}
-
-function showToast(msg: string) {
-  toast.value = msg;
-  window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => (toast.value = ""), 2400);
 }
 
 function appLog(msg: string) {
@@ -165,7 +161,7 @@ async function saveAutostart(enabled: boolean) {
 }
 
 async function pickFolder(): Promise<string | null> {
-  if (!ipc.inTauri) return "D:\\浮匣暂存（浏览器预览）";
+  if (!ipc.inTauri) return BROWSER_PREVIEW_STAGING_ROOT;
   try {
     const dir = await open({ directory: true, multiple: false, title: "选择暂存文件夹" });
     return typeof dir === "string" ? dir : null;
@@ -183,7 +179,8 @@ async function openPodFolder(pod: Pod) {
     return;
   }
   try {
-    await openPath(pod.stagingFolder);
+    // 打开文件夹走后端校验命令，WebView 不直接持有 openPath 能力。
+    await ipc.openPodFolder(pod.id);
   } catch (err) {
     console.error("open pod folder failed", err);
     showToast("无法打开暂存文件夹");
@@ -561,7 +558,7 @@ async function loadSettings() {
 }
 
 onMounted(() => void loadSettings());
-onBeforeUnmount(() => window.clearTimeout(toastTimer));
+onBeforeUnmount(() => disposeToast());
 
 const PAGES = [
   { id: "general", label: "常规" },

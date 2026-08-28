@@ -61,9 +61,35 @@ pub fn is_reparse_or_symlink(metadata: &fs::Metadata) -> bool {
     }
 }
 
+/// watcher 对账必须跳过的应用内部临时名（半成品副本 / 覆盖备份 / 跨盘移动源）。
+/// 清理失败的残留一旦被索引，就会永久变成"幽灵条目"，因此前缀必须集中在这里。
+pub fn is_internal_temp_name(name: &str) -> bool {
+    name.starts_with(".floepod-inflight-")
+        || name.starts_with(".floepod-move-source-")
+        || name.starts_with(".floepod-export-")
+        || name.starts_with(".floepod-overwrite-backup-")
+}
+
+/// 目录复制的深度上限：文件系统路径长度本身已经限制了合理深度，
+/// 这里只是防御病态构造的目录树耗尽线程栈。
+const MAX_COPY_DEPTH: usize = 512;
+
 /// 复制时不合并目录、不覆盖文件。源路径经 `canonicalize` 后可能带有 `\\?\` 前缀，
 /// 尚未创建的目标路径无法用同样方式规范化，因此需要单独处理 Windows 路径。
 pub fn copy_path(source: &Path, target: &Path) -> io::Result<()> {
+    copy_path_inner(source, target, 0)
+}
+
+fn copy_path_inner(source: &Path, target: &Path, depth: usize) -> io::Result<()> {
+    if depth > MAX_COPY_DEPTH {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "目录嵌套超过 {MAX_COPY_DEPTH} 层，拒绝复制: {}",
+                source.display()
+            ),
+        ));
+    }
     let metadata = fs::symlink_metadata(source)?;
     let resolve = |path: &Path| {
         settings::resolve_path(path)
@@ -90,7 +116,7 @@ pub fn copy_path(source: &Path, target: &Path) -> io::Result<()> {
         fs::create_dir(&target)?;
         for entry in fs::read_dir(&source)? {
             let entry = entry?;
-            copy_path(&entry.path(), &target.join(entry.file_name()))?;
+            copy_path_inner(&entry.path(), &target.join(entry.file_name()), depth + 1)?;
         }
         fs::set_permissions(&target, metadata.permissions())
     } else {
@@ -325,6 +351,11 @@ pub fn rollback_staged_moves(records: &[StagedMove]) -> Vec<String> {
 }
 
 /// 发布移动结果时，避免留下已经复制完成但尚未入库的跨盘文件。
+///
+/// 已知取舍：Windows 上 `fs::rename` 等价于 `MOVEFILE_REPLACE_EXISTING`，
+/// `unique_target` 检查与最终 rename 之间存在极窄的覆盖窗口（仅本机其他
+/// 进程在同目录恰好创建同名文件时可触发）。改用非覆盖原语的语义改动远大于
+/// 收益，故接受此风险。
 pub fn move_into_staging(source: &Path, target: &Path) -> Result<StagedMove, String> {
     match fs::rename(source, target) {
         Ok(()) => Ok(StagedMove {
@@ -433,5 +464,19 @@ mod tests {
         assert_eq!(extension(".gitignore"), None);
         assert_eq!(extension("noext"), None);
         assert_eq!(extension("arch.tar.gz").as_deref(), Some("gz"));
+    }
+
+    #[test]
+    fn internal_temp_names_cover_every_internal_prefix() {
+        for name in [
+            ".floepod-inflight-1-0000000000000001",
+            ".floepod-move-source-1-0000000000000002",
+            ".floepod-export-1-1",
+            ".floepod-overwrite-backup-1-1",
+        ] {
+            assert!(is_internal_temp_name(name), "{name}");
+        }
+        assert!(!is_internal_temp_name(".floepod-unrelated"));
+        assert!(!is_internal_temp_name("notes.txt"));
     }
 }

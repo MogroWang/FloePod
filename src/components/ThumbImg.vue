@@ -3,6 +3,7 @@
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ipc } from "@/ipc/client";
 import { withThumbnailSlot } from "@/lib/thumbnailQueue";
+import { THUMBNAIL_IMAGE_EXTS } from "@/lib/format";
 import type { ItemKind } from "@/domain/types";
 import FileGlyph from "./FileGlyph.vue";
 
@@ -19,8 +20,6 @@ let loadSequence = 0;
 let visible = false;
 let observer: IntersectionObserver | null = null;
 
-const IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"];
-
 function replaceUrl(next: string | null) {
   if (url.value) URL.revokeObjectURL(url.value);
   url.value = next;
@@ -30,7 +29,7 @@ async function load() {
   const sequence = ++loadSequence;
   replaceUrl(null);
   if (!visible) return;
-  if (!IMAGE_EXTS.includes((props.ext ?? "").toLowerCase())) return;
+  if (!THUMBNAIL_IMAGE_EXTS.includes((props.ext ?? "").toLowerCase())) return;
   try {
     const payload = await withThumbnailSlot(async () => {
       // 排队期间组件可能离开视口或被复用；过期请求不再调用原生接口。

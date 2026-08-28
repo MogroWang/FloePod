@@ -5,8 +5,10 @@
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
-import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { presentExport } from "@/domain/exportPresentation";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { useUnlisteners } from "@/composables/useUnlisteners";
+import { useToast } from "@/composables/useToast";
+import { exportVerb, presentExport } from "@/domain/exportPresentation";
 import { updateSelection, type SelectionMode } from "@/domain/selection";
 import type {
   ConflictStrategy,
@@ -20,6 +22,8 @@ import type {
 } from "@/domain/types";
 import { ipc } from "@/ipc/client";
 import { Events, listenCurrent } from "@/ipc/events";
+import { BROWSER_PREVIEW_EXPORT_ROOT } from "@/lib/env";
+import { clampOpacity } from "@/lib/format";
 import { useSettingsStore } from "@/stores/settings";
 import { useStagingStore } from "@/stores/staging";
 import ItemRow from "@/components/ItemRow.vue";
@@ -35,7 +39,7 @@ const staging = useStagingStore();
 const pod = computed(() => settingsStore.pod(props.podId));
 const edge = computed(() => pod.value?.edge ?? "left");
 const panelStyle = computed<Record<string, string>>(() => {
-  const opacity = Math.min(1, Math.max(0.1, pod.value?.opacity ?? 1));
+  const opacity = clampOpacity(pod.value?.opacity);
   return { "--pod-opacity": `${opacity * 100}%` };
 });
 
@@ -45,11 +49,9 @@ const dragMode = ref<"copy" | "move">("copy");
 const textOpen = ref(false);
 const textTitle = ref("");
 const textValue = ref("");
-const toast = ref("");
-let toastTimer: number | undefined;
 let anchorId: number | null = null;
 let confirmClearTimer: number | undefined;
-let mounted = true;
+const { retainUnlistener, disposeUnlisteners, isMounted } = useUnlisteners();
 
 const pinned = ref(false);
 const pinBusy = ref(false);
@@ -58,15 +60,17 @@ const listActionBusy = ref(false);
 const dragBusy = ref(false);
 const askBusy = ref(false);
 const textBusy = ref(false);
+/** 导出 / 删除 / 拖出都会按启动时的选择或文件状态处理；三者任一进行中即视为忙碌。 */
+const anyBusy = computed(() => exportBusy.value || listActionBusy.value || dragBusy.value);
 const rootEl = ref<HTMLElement | null>(null);
 const headEl = ref<HTMLElement | null>(null);
 const listEl = ref<HTMLElement | null>(null);
 const contentEl = ref<HTMLElement | null>(null);
 const footEl = ref<HTMLElement | null>(null);
 let lastSlideIn = Number.NEGATIVE_INFINITY;
-const unlisteners: Array<() => void> = [];
 let modeRevision = 0;
 let pinRevision = 0;
+const { toast, showToast, disposeToast } = useToast(2200, isMounted);
 
 function slideDir(): string {
   return edge.value;
@@ -131,11 +135,6 @@ function selectAll() {
   anchorId = items.value[0]?.id ?? null;
 }
 
-function retainUnlistener(unlisten: () => void) {
-  if (mounted) unlisteners.push(unlisten);
-  else unlisten();
-}
-
 function applyPanelMode(nextMode: PanelMode, paths: string[] = []) {
   // 冲突目标和选择信息只存在于当前 WebView；若中途重建，只能回到列表。
   if (nextMode === "conflict" && !conflict.value) {
@@ -173,20 +172,13 @@ async function syncPanelState() {
   const expectedPinRevision = pinRevision;
   try {
     const state = await ipc.getPanelState(props.podId);
-    if (!mounted) return;
+    if (!isMounted()) return;
     // 读取期间收到的事件更新更晚，不能再用旧响应覆盖。
     if (modeRevision === expectedModeRevision) applyPanelMode(state.mode, state.paths);
     if (pinRevision === expectedPinRevision) pinned.value = state.pinned;
   } catch (err) {
     console.error("panel state snapshot failed", err);
   }
-}
-
-function showToast(msg: string) {
-  if (!mounted) return;
-  toast.value = msg;
-  window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => (toast.value = ""), 2200);
 }
 
 async function refreshAfterMutation(label: string): Promise<boolean> {
@@ -202,7 +194,7 @@ async function refreshAfterMutation(label: string): Promise<boolean> {
 
 function onSelect(id: number, mode: SelectionMode) {
   // 导出、拖出和删除会按启动时的选择处理；执行期间锁定选择，避免完成时覆盖新选择。
-  if (exportBusy.value || listActionBusy.value || dragBusy.value) return;
+  if (anyBusy.value) return;
   const next = updateSelection(
     staging.selectedIds,
     items.value.map((item) => item.id),
@@ -276,7 +268,7 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
 }
 
 async function onDragOut(paths: string[]) {
-  if (paths.length === 0 || dragBusy.value || exportBusy.value || listActionBusy.value) return;
+  if (paths.length === 0 || anyBusy.value) return;
   const first = staging.items.find((i) => i.stagingPath === paths[0]);
   const icon = makeDragIcon(paths, first?.ext ?? null);
   // 准备拖出时固定模式快照，确保 OLE 效果与是否清理源文件使用同一模式。
@@ -322,7 +314,8 @@ async function onDragOut(paths: string[]) {
 
 async function openItem(item: StagedItem) {
   try {
-    await openPath(item.stagingPath);
+    // 打开动作走后端校验命令：路径按条目 id 重新解析，WebView 无法打开任意路径。
+    await ipc.openStagedItem(item.id);
   } catch (err) {
     console.error("open item failed", err);
     showToast("无法打开此项目");
@@ -339,7 +332,7 @@ async function revealItem(item: StagedItem) {
 }
 
 async function removeItem(item: StagedItem) {
-  if (listActionBusy.value || exportBusy.value || dragBusy.value) return;
+  if (anyBusy.value) return;
   listActionBusy.value = true;
   try {
     await staging.removeItems([item.id], true);
@@ -354,7 +347,7 @@ async function removeItem(item: StagedItem) {
 }
 
 async function removeSelected() {
-  if (!selectedCount.value || listActionBusy.value || exportBusy.value || dragBusy.value) return;
+  if (!selectedCount.value || anyBusy.value) return;
   const n = selectedCount.value;
   listActionBusy.value = true;
   try {
@@ -370,13 +363,13 @@ async function removeSelected() {
 }
 
 async function pickDest(): Promise<string | null> {
-  if (!ipc.inTauri) return "D:\\浮匣导出（浏览器预览）";
+  if (!ipc.inTauri) return BROWSER_PREVIEW_EXPORT_ROOT;
   const dir = await open({ directory: true, multiple: false, title: "选择目标文件夹" });
   return typeof dir === "string" ? dir : null;
 }
 
 async function applyExportResult(result: ExportResult, exportMode: ExportMode) {
-  const verb = exportMode === "move" ? "移动" : "复制";
+  const verb = exportVerb(exportMode);
   const presentation = presentExport(result, exportMode);
   if (presentation.selection !== null) {
     staging.setSelection(presentation.selection);
@@ -390,7 +383,7 @@ async function applyExportResult(result: ExportResult, exportMode: ExportMode) {
 
 async function exportSelected(exportMode: ExportMode) {
   const ids = currentSelectedIds();
-  if (!ids.length || exportBusy.value || listActionBusy.value || dragBusy.value) return;
+  if (!ids.length || anyBusy.value) return;
   exportBusy.value = true;
   try {
     // 原生目录选择器会让指针离开 WebView；操作期间保持面板可见。
@@ -465,7 +458,7 @@ async function chooseAction(action: DropAction, remember: boolean) {
   askBusy.value = true;
   try {
     const result = await ipc.stagePaths(props.podId, paths, action);
-    const verb = action === "copy" ? "复制" : action === "move" ? "移动" : "快捷方式";
+    const verb = action === "shortcut" ? "快捷方式" : exportVerb(action);
     pendingPaths.value = [];
     mode.value = "list";
     const modeSynced = await ipc.setPanelMode(props.podId, "list").then(
@@ -526,7 +519,7 @@ async function stashText() {
 
 const confirmClear = ref(false);
 async function clearAll() {
-  if (listActionBusy.value || exportBusy.value || dragBusy.value) return;
+  if (anyBusy.value) return;
   if (!confirmClear.value) {
     confirmClear.value = true;
     window.clearTimeout(confirmClearTimer);
@@ -564,14 +557,7 @@ function onKeydown(e: KeyboardEvent) {
     }
   } else if (e.ctrlKey && e.key.toLowerCase() === "a") {
     e.preventDefault();
-    if (
-      mode.value === "list" &&
-      !textOpen.value &&
-      !exportBusy.value &&
-      !listActionBusy.value &&
-      !dragBusy.value
-    )
-      selectAll();
+    if (mode.value === "list" && !textOpen.value && !anyBusy.value) selectAll();
   } else if (e.key === "Delete" && mode.value === "list" && !textOpen.value && selectedCount.value) {
     void removeSelected();
   }
@@ -591,7 +577,7 @@ function scheduleResize() {
   const sequence = ++resizeSequence;
   sizeTimer = window.setTimeout(async () => {
     await nextTick();
-    if (sequence !== resizeSequence || !mounted) return;
+    if (sequence !== resizeSequence || !isMounted()) return;
     const root = rootEl.value;
     const body = listEl.value;
     const content = contentEl.value;
@@ -607,7 +593,7 @@ function scheduleResize() {
     const bodyHeight = mode.value === "list" ? Math.min(intrinsicBody, 560) : intrinsicBody;
     const chromeHeight = head.offsetHeight + (footEl.value?.offsetHeight ?? 0) + rootBorder;
     await ipc
-      .setPanelSize(props.podId, pod.value?.panelWidth ?? 380, Math.ceil(bodyHeight + chromeHeight))
+      .setPanelSize(props.podId, Math.ceil(bodyHeight + chromeHeight))
       .catch((err) => console.error("panel resize failed", err));
   }, 110);
 }
@@ -654,13 +640,6 @@ onMounted(async () => {
       // 全局临时隐藏也会触发该事件；运行态由其他定向事件同步，不能在此清空询问或冲突。
       const el = rootEl.value;
       if (!el) return;
-      el.classList.remove(
-        "slide-out",
-        "slide-out-left",
-        "slide-out-right",
-        "slide-out-top",
-        "slide-out-bottom",
-      );
       el.classList.remove("slide-in", ...slideDirs());
       el.classList.add("pre-show");
     }),
@@ -669,7 +648,7 @@ onMounted(async () => {
     if (result.status === "fulfilled") retainUnlistener(result.value);
     else console.error("panel listener registration failed", result.reason);
   }
-  if (!mounted) return;
+  if (!isMounted()) return;
 
   await syncPanelState();
   try {
@@ -682,7 +661,7 @@ onMounted(async () => {
     console.error("pod panel initialization failed", err);
     showToast("面板内容加载失败，请重新打开");
   }
-  if (!mounted) return;
+  if (!isMounted()) return;
 
   window.addEventListener("keydown", onKeydown);
 
@@ -695,14 +674,13 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
-  mounted = false;
+  disposeUnlisteners();
+  disposeToast();
   window.removeEventListener("keydown", onKeydown);
   ro?.disconnect();
-  window.clearTimeout(toastTimer);
   window.clearTimeout(confirmClearTimer);
   window.clearTimeout(sizeTimer);
   resizeSequence += 1;
-  unlisteners.splice(0).forEach((unlisten) => unlisten());
 });
 
 function onPointerEnter() {
@@ -859,16 +837,16 @@ async function openSettings() {
       <template v-if="selectedCount > 0">
         <span class="sel-count">已选 {{ selectedCount }} 项</span>
         <div class="foot-actions">
-          <button type="button" class="foot-btn" :disabled="exportBusy || listActionBusy || dragBusy" @click="exportSelected('copy')">
+          <button type="button" class="foot-btn" :disabled="anyBusy" @click="exportSelected('copy')">
             复制到…
           </button>
-          <button type="button" class="foot-btn" :disabled="exportBusy || listActionBusy || dragBusy" @click="exportSelected('move')">
+          <button type="button" class="foot-btn" :disabled="anyBusy" @click="exportSelected('move')">
             移动到…
           </button>
-          <button type="button" class="foot-btn danger" :disabled="listActionBusy || exportBusy || dragBusy" @click="removeSelected">
+          <button type="button" class="foot-btn danger" :disabled="anyBusy" @click="removeSelected">
             移出
           </button>
-          <button type="button" class="foot-btn ghost" :disabled="exportBusy || listActionBusy || dragBusy" @click="clearSelection">
+          <button type="button" class="foot-btn ghost" :disabled="anyBusy" @click="clearSelection">
             取消
           </button>
         </div>
@@ -882,12 +860,12 @@ async function openSettings() {
               { value: 'move', label: '剪切' },
             ]"
             v-model="dragMode"
-            :disabled="dragBusy || exportBusy || listActionBusy"
+            :disabled="anyBusy"
           />
         </div>
         <div class="foot-right">
-          <button type="button" class="foot-btn ghost" :disabled="listActionBusy || exportBusy || dragBusy" @click="selectAll">全选</button>
-          <button type="button" class="foot-btn ghost danger" :disabled="listActionBusy || exportBusy || dragBusy" @click="clearAll">
+          <button type="button" class="foot-btn ghost" :disabled="anyBusy" @click="selectAll">全选</button>
+          <button type="button" class="foot-btn ghost danger" :disabled="anyBusy" @click="clearAll">
             {{ confirmClear ? "确认清空？" : "清空" }}
           </button>
         </div>

@@ -1,5 +1,3 @@
-@import "tailwindcss";
-
 /*
  * 浮匣设计令牌
  * 原则：单一冰蓝强调色、中性冷灰表面、层级靠字号字重与留白、
@@ -34,10 +32,6 @@
   --glass-line: oklch(1 0 0 / 0.55);
   --glass-inner: oklch(1 0 0 / 0.5);
 
-  /* 胶囊条（贴在屏幕边缘的短条）玻璃 */
-  --bar-glass: rgb(238 243 248 / 0.55);
-  --bar-glass-hover: rgb(238 243 248 / 0.7);
-
   /* 统一缓动：进入/位移动画用出程缓动（苹果式平滑收尾） */
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
@@ -46,6 +40,14 @@
     oklch(0.2 0.02 230 / 0.18);
   --shadow-pop: 0 10px 30px -10px oklch(0.2 0.02 230 / 0.3), 0 2px 8px -4px
     oklch(0.2 0.02 230 / 0.15);
+
+  --font-sans:
+    "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans SC",
+    system-ui, sans-serif;
+
+  --radius-card: 10px;
+  /* Windows 11 顶层窗口的标准逻辑圆角，与 DWM 原生窗口对齐 */
+  --radius-panel: 8px;
 }
 
 .dark {
@@ -71,46 +73,49 @@
   --glass-line: oklch(1 0 0 / 0.12);
   --glass-inner: oklch(1 0 0 / 0.06);
 
-  --bar-glass: rgb(255 255 255 / 0.08);
-  --bar-glass-hover: rgb(255 255 255 / 0.13);
-
   --shadow-panel: 0 18px 50px -12px oklch(0 0 0 / 0.6), 0 4px 14px -6px oklch(0 0 0 / 0.4);
   --shadow-pop: 0 10px 30px -10px oklch(0 0 0 / 0.55), 0 2px 8px -4px oklch(0 0 0 / 0.35);
 }
 
-@theme inline {
-  --color-accent: var(--accent);
-  --color-accent-hover: var(--accent-hover);
-  --color-accent-soft: var(--accent-soft);
-  --color-on-accent: var(--on-accent);
-
-  --color-ink: var(--ink);
-  --color-ink-2: var(--ink-2);
-  --color-ink-3: var(--ink-3);
-  --color-surface: var(--surface);
-  --color-surface-2: var(--surface-2);
-  --color-surface-3: var(--surface-3);
-  --color-surface-raised: var(--surface-raised);
-  --color-surface-hover: var(--surface-hover);
-  --color-line: var(--line);
-  --color-line-strong: var(--line-strong);
-  --color-danger: var(--danger);
-
-  --color-glass: var(--glass);
-  --color-glass-strong: var(--glass-strong);
-  --color-glass-line: var(--glass-line);
-  --color-glass-inner: var(--glass-inner);
-
-  --shadow-panel: var(--shadow-panel);
-  --shadow-pop: var(--shadow-pop);
-
-  --font-sans:
-    "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans SC",
-    system-ui, sans-serif;
-
-  --radius-card: 10px;
-  /* Windows 11 顶层窗口的标准逻辑圆角，与 DWM 原生窗口对齐 */
-  --radius-panel: 8px;
+/* 问答页 / 冲突对话框共用的动作按钮（.act） */
+.act {
+  border: 1px solid var(--line-strong);
+  background: var(--surface-raised);
+  color: var(--ink);
+  border-radius: 10px;
+  padding: 9px 11px;
+  font-size: 13px;
+  font-weight: 550;
+  cursor: pointer;
+  font-family: inherit;
+  transition: transform 100ms ease, background 130ms ease, border-color 130ms ease;
+}
+.act:active {
+  transform: scale(0.98);
+}
+.act:disabled {
+  cursor: wait;
+  opacity: 0.58;
+  transform: none;
+}
+.act:hover {
+  background: var(--surface-2);
+  border-color: var(--accent);
+}
+.act.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+.act.primary:hover {
+  background: var(--accent-hover);
+}
+.act.ghost {
+  border-color: transparent;
+  color: var(--ink-2);
+}
+.act.ghost:hover {
+  border-color: var(--line-strong);
 }
 
 /* 基础排版：系统字体，正文行高宽松，小字号微正字距 */
@@ -119,6 +124,29 @@ html {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   background: transparent;
+}
+
+/* 移除 Tailwind preflight 后需要保留的基线重置 */
+*,
+::before,
+::after {
+  box-sizing: border-box;
+}
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p,
+ul,
+ol,
+figure {
+  margin: 0;
+}
+img,
+svg {
+  vertical-align: middle;
 }
 
 body {
@@ -152,20 +180,6 @@ textarea:focus-visible,
 select:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-}
-
-/* 大字标题：负字距 */
-.text-display {
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: -0.015em;
-}
-
-/* 小字号辅助文字：微正字距 */
-.text-caption {
-  font-size: 11.5px;
-  color: var(--ink-3);
-  letter-spacing: 0.012em;
 }
 
 /* 细滚动条 */

@@ -42,21 +42,6 @@ pub fn get_bootstrap(app: AppHandle) -> Result<Bootstrap, String> {
 }
 
 #[tauri::command]
-pub fn get_pod(app: AppHandle, pod_id: u64) -> Result<Option<Pod>, String> {
-    Ok(
-        staging::load_settings(&app.state::<crate::state::AppState>())?
-            .pods
-            .into_iter()
-            .find(|pod| pod.id == pod_id),
-    )
-}
-
-#[tauri::command]
-pub fn get_monitors(app: AppHandle) -> Vec<manager::MonitorInfo> {
-    manager::list_monitors(&app)
-}
-
-#[tauri::command]
 pub fn get_modifier_state() -> crate::win::ModifierState {
     crate::win::modifier_state()
 }
@@ -228,7 +213,7 @@ pub async fn set_pod_accept(app: AppHandle, pod_id: u64, accepting: bool) {
 }
 
 #[tauri::command]
-pub async fn set_panel_size(app: AppHandle, pod_id: u64, _width: u32, height: u32) {
+pub async fn set_panel_size(app: AppHandle, pod_id: u64, height: u32) {
     manager::set_panel_size(&app, pod_id, height);
 }
 
@@ -239,20 +224,24 @@ pub async fn move_pod_bar(app: AppHandle, pod_id: u64, offset: f64) -> Result<()
 }
 
 #[tauri::command]
-pub async fn toggle_all_bars(app: AppHandle) {
-    let visible = manager::current_settings(&app)
-        .pods
-        .into_iter()
-        .find(|pod| pod.enabled)
-        .and_then(|pod| manager::pod_bar(&app, pod.id))
-        .map(|bar| bar.is_visible().unwrap_or(false))
-        .unwrap_or(false);
-    manager::set_all_bars(&app, !visible);
+pub fn open_settings(app: AppHandle) {
+    manager::open_settings(&app);
 }
 
 #[tauri::command]
-pub fn open_settings(app: AppHandle) {
-    manager::open_settings(&app);
+pub async fn open_staged_item(app: AppHandle, item_id: i64) -> Result<(), String> {
+    blocking("打开文件", move || {
+        staging::open_staged_item(&app, item_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn open_pod_folder(app: AppHandle, pod_id: u64) -> Result<(), String> {
+    blocking("打开文件夹", move || {
+        staging::open_pod_folder(&app, pod_id)
+    })
+    .await
 }
 
 #[tauri::command]

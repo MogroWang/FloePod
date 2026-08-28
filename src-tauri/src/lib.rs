@@ -49,9 +49,25 @@ pub fn run() {
             let settings = {
                 let state = app.state::<state::AppState>();
                 let conn = state.db.lock().unwrap();
-                settings::load(&conn, &state.data_dir.to_string_lossy(), VERSION)?
+                match settings::load(&conn, &state.data_dir.to_string_lossy(), VERSION) {
+                    Ok(settings) => settings,
+                    Err(error) => {
+                        // 损坏的设置不能让应用无法启动：留痕原始值并回退默认设置
+                        //（表现为重新走首次引导），运行中的读取路径仍保持严格报错。
+                        let raw = db::kv_get(&conn, settings::KEY)
+                            .ok()
+                            .flatten()
+                            .unwrap_or_default();
+                        crate::logging::write(&format!(
+                            "[settings] 启动读取设置失败，已回退默认设置: {error}；原始值: {raw}"
+                        ));
+                        settings::Settings::default()
+                    }
+                }
             };
 
+            // 先恢复被中断的跨盘移动，再启动 watcher，避免对账抢在恢复之前。
+            staging::recover_pending_moves(app.handle());
             tray::init(app.handle())?;
             watcher::spawn(app.handle().clone());
 
@@ -107,8 +123,6 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_bootstrap,
-            commands::get_pod,
-            commands::get_monitors,
             commands::get_modifier_state,
             commands::get_hotkey_defaults,
             commands::create_pod,
@@ -136,8 +150,9 @@ pub fn run() {
             commands::set_pod_accept,
             commands::set_panel_size,
             commands::move_pod_bar,
-            commands::toggle_all_bars,
             commands::open_settings,
+            commands::open_staged_item,
+            commands::open_pod_folder,
             commands::log_frontend,
             commands::app_log,
             commands::quit_app,

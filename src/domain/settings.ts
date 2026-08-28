@@ -9,7 +9,8 @@ export function normalizeWindowsPathKey(input: string): string {
   const source = input.trim().replace(/\//g, "\\");
   if (!source) return "";
   const unc = source.startsWith("\\\\");
-  const driveRoot = /^[a-zA-Z]:\\+$/.test(source);
+  // "D:" 与 "D:\" 是同一个盘根；尾随反斜杠可有可无。
+  const driveRoot = /^[a-zA-Z]:(\\+)?$/.test(source);
   const parts = source.split("\\").filter((part) => part !== "" && part !== ".");
   let normalized = parts.join("\\");
   if (unc) normalized = `\\\\${normalized}`;

@@ -82,6 +82,19 @@ fn panel_toggle_action(bars_visible: bool, runtime: Option<&PodRuntime>) -> Pane
     }
 }
 
+/// 严格版设置读取：加载 + 完整校验，供 watcher 等必须拿到可信配置的路径使用。
+pub fn load_validated_settings(app: &AppHandle) -> Result<Settings, String> {
+    let state = app.state::<AppState>();
+    let conn = state.db.lock().unwrap();
+    let settings = crate::settings::load(
+        &conn,
+        &state.data_dir.to_string_lossy(),
+        env!("CARGO_PKG_VERSION"),
+    )?;
+    crate::settings::validate(&settings, &state.data_dir.to_string_lossy())?;
+    Ok(settings)
+}
+
 pub fn current_settings(app: &AppHandle) -> Settings {
     let state = app.state::<AppState>();
     let conn = state.db.lock().unwrap();
@@ -553,6 +566,13 @@ pub fn hold_pending_drop(app: &AppHandle, id: u64, paths: Vec<String>) -> Result
     if paths.is_empty() {
         return Ok(());
     }
+    // 面板会把这些路径原样展示；提前挡掉相对路径等畸形输入，
+    // 真正的文件校验仍由 stage_paths 完成。
+    for path in &paths {
+        if !std::path::Path::new(path).is_absolute() {
+            return Err(format!("待暂存路径必须是绝对路径: {path}"));
+        }
+    }
     let pod = pod_of(app, id).ok_or_else(|| format!("匣 {id} 不存在或已停用"))?;
     let state = app.state::<AppState>();
     let _operation = state.panel_ops.lock().unwrap();
@@ -622,8 +642,10 @@ where
 
     // 运行态转换与原生副作用由 panel_ops 串行化；不会再出现旧 show 在新 hide 后补显。
     hide_panel_window(app, id);
-    if let Some(panel) = pod_panel(app, id) {
-        let _ = panel.emit(events::PANEL_HIDDEN, ());
+    // 必须用 emit_to 定向发送：`emit` 是全局广播，会让其他仍可见的面板
+    // 也收到 PANEL_HIDDEN 并把 DOM 置为透明（pre-show）。
+    if pod_panel(app, id).is_some() {
+        let _ = app.emit_to(events::pod_panel_label(id), events::PANEL_HIDDEN, ());
     }
     emit_panel_snapshot(app, id);
     true

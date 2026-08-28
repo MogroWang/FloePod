@@ -12,6 +12,7 @@ use tauri::{AppHandle, Manager};
 use crate::db::{self, StagedItem};
 use crate::events;
 use crate::file_ops;
+use crate::manager;
 use crate::settings::{self, Settings};
 use crate::state::AppState;
 
@@ -19,17 +20,7 @@ const INSTALL_RETRY_INTERVAL: Duration = Duration::from_secs(10);
 static INSTALL_RETRY_NEEDED: AtomicBool = AtomicBool::new(false);
 
 fn current_settings(app: &AppHandle) -> Result<Settings, String> {
-    let state = app.state::<AppState>();
-    let current = {
-        let connection = state.db.lock().unwrap();
-        settings::load(
-            &connection,
-            &state.data_dir.to_string_lossy(),
-            env!("CARGO_PKG_VERSION"),
-        )?
-    };
-    settings::validate(&current, &state.data_dir.to_string_lossy())?;
-    Ok(current)
+    manager::load_validated_settings(app)
 }
 
 pub fn spawn(app: AppHandle) {
@@ -90,7 +81,9 @@ pub fn restart_all(app: &AppHandle) {
         .filter(|pod| pod.enabled && !pod.staging_folder.is_empty())
         .map(|pod| (pod.id, pod.staging_folder.clone()))
         .collect();
-    INSTALL_RETRY_NEEDED.store(false, Ordering::Relaxed);
+    // 不在安装前清除标志：本次安装期间回调记录的失败不能被自己的清除操作抹掉。
+    // 仅当本次完整安装且无失败时，才在结尾把标志收敛为 false。
+    let mut failed_this_run = false;
     watchers.clear();
 
     for (pod_id, folder) in folders {
@@ -100,7 +93,7 @@ pub fn restart_all(app: &AppHandle) {
                 "[watcher] 无法创建暂存目录 {}: {error}",
                 directory.display()
             ));
-            INSTALL_RETRY_NEEDED.store(true, Ordering::Relaxed);
+            failed_this_run = true;
             continue;
         }
         let callback_app = app.clone();
@@ -123,7 +116,7 @@ pub fn restart_all(app: &AppHandle) {
                         "[watcher] 无法监听暂存目录 {}: {error}",
                         directory.display()
                     ));
-                    INSTALL_RETRY_NEEDED.store(true, Ordering::Relaxed);
+                    failed_this_run = true;
                 }
             },
             Err(error) => {
@@ -131,10 +124,11 @@ pub fn restart_all(app: &AppHandle) {
                     "[watcher] 无法创建目录监听器 {}: {error}",
                     directory.display()
                 ));
-                INSTALL_RETRY_NEEDED.store(true, Ordering::Relaxed);
+                failed_this_run = true;
             }
         }
     }
+    INSTALL_RETRY_NEEDED.store(failed_this_run, Ordering::Relaxed);
 }
 
 struct DirectorySnapshot {
@@ -157,9 +151,7 @@ fn read_snapshot(pod_id: u64, configured_folder: &Path) -> Result<DirectorySnaps
         let raw_path = entry.path();
         let name = entry.file_name();
         let internal_name = name.to_string_lossy();
-        if internal_name.starts_with(".floepod-inflight-")
-            || internal_name.starts_with(".floepod-move-source-")
-        {
+        if file_ops::is_internal_temp_name(&internal_name) {
             unsafe_keys.insert(settings::path_key(&raw_path));
             continue;
         }

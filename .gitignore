@@ -1,25 +1,25 @@
-# 依赖
-node_modules
+# 依赖（锚定到仓库根，避免误忽略 src/ 下同名目录）
+/node_modules
 
 # pnpm 虚拟商店缓存（本地生成）
 .pnpm-store
 
 # 前端构建产物
-dist
-dist-ssr
+/dist
+/dist-ssr
 *.local
 .vite
 
 # Tauri / Rust 构建产物
-src-tauri/target
-src-tauri/gen
+/src-tauri/target
+/src-tauri/gen
 
 # 发布产物（便携 zip / 裸 exe / 解包目录）
-release
+/release
 
 # 运行时生成
 # 便携版数据目录（exe 旁）
-FloePodData
+/FloePodData
 *.log
 
 # 编辑器 / 工具 / 系统

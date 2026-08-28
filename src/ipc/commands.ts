@@ -1,7 +1,5 @@
 export const Commands = {
   GetBootstrap: "get_bootstrap",
-  GetPod: "get_pod",
-  GetMonitors: "get_monitors",
   GetModifierState: "get_modifier_state",
   GetHotkeyDefaults: "get_hotkey_defaults",
   CreatePod: "create_pod",
@@ -29,8 +27,9 @@ export const Commands = {
   SetPodAccept: "set_pod_accept",
   SetPanelSize: "set_panel_size",
   MovePodBar: "move_pod_bar",
-  ToggleAllBars: "toggle_all_bars",
   OpenSettings: "open_settings",
+  OpenStagedItem: "open_staged_item",
+  OpenPodFolder: "open_pod_folder",
   LogFrontend: "log_frontend",
   AppLog: "app_log",
   QuitApp: "quit_app",

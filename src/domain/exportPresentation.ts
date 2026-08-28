@@ -6,8 +6,13 @@ export interface ExportPresentation {
   message: string;
 }
 
+/** 导出动词的唯一来源：面板、冲突对话框与结果文案共用。 */
+export function exportVerb(mode: ExportMode): string {
+  return mode === "move" ? "移动" : "复制";
+}
+
 export function presentExport(result: ExportResult, mode: ExportMode): ExportPresentation {
-  const verb = mode === "move" ? "移动" : "复制";
+  const verb = exportVerb(mode);
   let selection: number[] | null = null;
   if (result.failed.length || result.warnings.length) {
     selection = result.failed.map((issue) => issue.id);

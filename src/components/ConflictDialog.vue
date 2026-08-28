@@ -1,7 +1,9 @@
 <script setup lang="ts">
 /** 导出冲突解决：覆盖 / 跳过 / 保留两者（自动重命名） */
 import { computed } from "vue";
+import { exportVerb } from "@/domain/exportPresentation";
 import type { ConflictStrategy } from "@/domain/types";
+import { previewSlice } from "@/lib/format";
 
 const props = withDefaults(
   defineProps<{ names: string[]; mode: "copy" | "move"; busy?: boolean }>(),
@@ -12,17 +14,16 @@ const emit = defineEmits<{
   (e: "cancel"): void;
 }>();
 
-const shown = computed(() => props.names.slice(0, 6));
-const extra = computed(() => props.names.length - shown.value.length);
-const verb = computed(() => (props.mode === "move" ? "移动" : "复制"));
+const preview = computed(() => previewSlice(props.names));
+const verb = computed(() => exportVerb(props.mode));
 </script>
 
 <template>
   <div class="conflict">
     <div class="title">{{ verb }}时目标位置已有同名文件</div>
     <ul class="names">
-      <li v-for="(n, i) in shown" :key="i">{{ n }}</li>
-      <li v-if="extra > 0" class="more">以及另外 {{ extra }} 个</li>
+      <li v-for="(n, i) in preview.shown" :key="i">{{ n }}</li>
+      <li v-if="preview.extra > 0" class="more">以及另外 {{ preview.extra }} 个</li>
     </ul>
     <div class="actions">
       <button
@@ -82,34 +83,5 @@ const verb = computed(() => (props.mode === "move" ? "移动" : "复制"));
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
-}
-.act {
-  border: 1px solid var(--line-strong);
-  background: var(--surface-raised);
-  color: var(--ink);
-  border-radius: 10px;
-  padding: 9px 10px;
-  font-size: 13px;
-  font-weight: 550;
-  cursor: pointer;
-  font-family: inherit;
-  transition: transform 100ms ease, background 130ms ease;
-}
-.act:active {
-  transform: scale(0.98);
-}
-.act:disabled {
-  cursor: wait;
-  opacity: 0.58;
-  transform: none;
-}
-.act.primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--on-accent);
-}
-.act.ghost {
-  border-color: transparent;
-  color: var(--ink-2);
 }
 </style>

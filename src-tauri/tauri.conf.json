@@ -11,7 +11,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "withGlobalTauri": true,
+    "withGlobalTauri": false,
     "windows": [
       {
         "label": "settings",
@@ -29,7 +29,9 @@
       }
     ],
     "security": {
-      "capabilities": ["settings", "pods"]
+      "capabilities": ["settings", "pods"],
+      "csp": "default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost",
+      "devCsp": "default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost ws://localhost:5173"
     }
   },
   "bundle": {

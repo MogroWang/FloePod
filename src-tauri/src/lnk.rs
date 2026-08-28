@@ -41,8 +41,21 @@ pub fn create_shortcuts(pairs: &[(std::path::PathBuf, std::path::PathBuf)]) -> R
     Ok(())
 }
 
+/// 优先用 System32 的绝对路径启动 PowerShell，避免沿 PATH 搜索（含历史遗留的
+/// "当前目录优先"解析顺序）；环境异常时回退到 PATH 解析。
+fn powershell_program() -> std::path::PathBuf {
+    if let Some(windir) = std::env::var_os("WINDIR") {
+        let absolute = std::path::PathBuf::from(windir)
+            .join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+        if absolute.is_file() {
+            return absolute;
+        }
+    }
+    std::path::PathBuf::from("powershell")
+}
+
 fn run_powershell(script: &str) -> Result<(), String> {
-    let mut cmd = Command::new("powershell");
+    let mut cmd = Command::new(powershell_program());
     cmd.arg("-NoProfile")
         .arg("-NonInteractive")
         .arg("-Command")

@@ -17,6 +17,12 @@ node scripts/package-portable.mjs
 
 确认安装包和便携包各只有一份，便携包内仅包含 `FloePod.exe`、`.floepod-portable` 和 `使用说明.txt`。发布前校验产物的 SHA-256。
 
+## 已知发布决策
+
+- **未做代码签名**：安装包和便携包首次运行会触发 SmartScreen / 未知发布者提示，属当前有意取舍；若未来购买证书，在 `tauri.conf.json` 与 Release 流水线中补充签名步骤。
+- **无自动更新通道**：未集成 `tauri-plugin-updater`，升级依赖用户手动下载新版；如需热更新再引入并配置端点。
+- 第三方 GitHub Actions 均以完整 commit SHA 固定（注释标注版本），升级时更新 SHA 并核对 diff。
+
 ## 安装与数据
 
 - [ ] 全新安装会进入首次设置；便携版会在程序旁创建 `FloePodData`

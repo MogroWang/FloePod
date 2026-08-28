@@ -1,14 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "pods",
-  "description": "浮匣条与面板所需的拖放、剪贴板、文件夹选择和打开路径能力",
+  "description": "浮匣条与面板所需的拖放、剪贴板、文件夹选择和在资源管理器中定位能力（打开文件走后端校验命令）",
   "windows": ["pod_*"],
   "permissions": [
     "core:default",
     "core:window:allow-set-theme",
     "core:window:allow-theme",
     "dialog:allow-open",
-    "opener:allow-open-path",
     "opener:allow-reveal-item-in-dir",
     "clipboard-manager:allow-read-text",
     "drag:default"

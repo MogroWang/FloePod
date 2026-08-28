@@ -9,7 +9,6 @@ import type {
   ExportResult,
   Hotkeys,
   ModifierState,
-  MonitorInfo,
   PanelMode,
   PanelState,
   Pod,
@@ -19,20 +18,23 @@ import type {
   ThumbnailPayload,
 } from "@/domain/types";
 import { Commands, type CommandName } from "./commands";
-import { mockInvoke } from "./mock";
 
 const inTauri = "__TAURI_INTERNALS__" in window;
 
-function invoke<T>(command: CommandName, args?: Record<string, unknown>): Promise<T> {
-  return inTauri ? invokeTauri<T>(command, args) : mockInvoke<T>(command, args);
+/**
+ * 浏览器预览的 mock 按需动态加载：既让 `pnpm dev` 在纯浏览器里可用，
+ * 又保证 mock 代码（含伪造路径）不会被打进 Tauri 生产包。
+ */
+async function invoke<T>(command: CommandName, args?: Record<string, unknown>): Promise<T> {
+  if (inTauri) return invokeTauri<T>(command, args);
+  const { mockInvoke } = await import("./mock");
+  return mockInvoke<T>(command, args);
 }
 
 export const ipc = {
   inTauri,
 
   getBootstrap: (): Promise<Bootstrap> => invoke(Commands.GetBootstrap),
-  getPod: (podId: number): Promise<Pod | null> => invoke(Commands.GetPod, { podId }),
-  getMonitors: (): Promise<MonitorInfo[]> => invoke(Commands.GetMonitors),
   getHotkeyDefaults: (): Promise<Hotkeys> => invoke(Commands.GetHotkeyDefaults),
   getModifierState: (): Promise<ModifierState> => invoke(Commands.GetModifierState),
 
@@ -81,12 +83,16 @@ export const ipc = {
     invoke(Commands.SetDraggingOut, { podId, dragging }),
   setPodAccept: (podId: number, accepting: boolean): Promise<void> =>
     invoke(Commands.SetPodAccept, { podId, accepting }),
-  setPanelSize: (podId: number, width: number, height: number): Promise<void> =>
-    invoke(Commands.SetPanelSize, { podId, width, height }),
+  setPanelSize: (podId: number, height: number): Promise<void> =>
+    invoke(Commands.SetPanelSize, { podId, height }),
   movePodBar: (podId: number, offset: number): Promise<void> =>
     invoke(Commands.MovePodBar, { podId, offset }),
-  toggleAllBars: (): Promise<void> => invoke(Commands.ToggleAllBars),
   openSettings: (): Promise<void> => invoke(Commands.OpenSettings),
+  /** 打开暂存条目：路径由后端按条目 id 重新校验，WebView 无法驱使系统打开任意路径。 */
+  openStagedItem: (itemId: number): Promise<void> =>
+    invoke(Commands.OpenStagedItem, { itemId }),
+  openPodFolder: (podId: number): Promise<void> =>
+    invoke(Commands.OpenPodFolder, { podId }),
   logFrontend: (msg: string): Promise<void> => invoke(Commands.LogFrontend, { msg }),
   appLog: (msg: string): Promise<void> => invoke(Commands.AppLog, { msg }),
   quitApp: (): Promise<void> => invoke(Commands.QuitApp),
@@ -113,6 +119,10 @@ export const ipc = {
       options: { mode },
       onEvent: channel,
     });
+    // 插件若始终不发终止事件，等待必须超时返回，否则面板会永久停留在拖拽占用态。
+    // 时长与后端剪切令牌 TTL（5 分钟）对齐并留余量。
+    const timeout = setTimeout(() => resolveResult(false), 6 * 60_000);
+    void result.finally(() => clearTimeout(timeout));
     return result;
   },
 
@@ -123,5 +133,3 @@ export const ipc = {
   cancelDragCut: (token: DragCutToken): Promise<void> =>
     invoke(Commands.CancelDragCut, { token }),
 };
-
-export type Ipc = typeof ipc;

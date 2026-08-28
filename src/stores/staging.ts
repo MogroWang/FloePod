@@ -9,7 +9,6 @@ export const useStagingStore = defineStore("staging", {
     items: [] as StagedItem[],
     activePodId: 0,
     selectedIds: new Set<number>(),
-    lastError: "" as string,
     refreshSeq: 0,
   }),
 
@@ -43,19 +42,11 @@ export const useStagingStore = defineStore("staging", {
         this.items = items;
         const existing = new Set(items.map((item) => item.id));
         this.selectedIds = new Set([...this.selectedIds].filter((id) => existing.has(id)));
-        this.lastError = "";
       } catch (err) {
         // 当前读取已被新请求或匣切换取代，不再向上抛出它的错误。
         if (request !== this.refreshSeq || pid !== this.activePodId) return;
-        this.lastError = err instanceof Error ? err.message : String(err);
         throw err;
       }
-    },
-
-    toggleSelected(id: number, additive: boolean) {
-      if (!additive) this.selectedIds.clear();
-      if (this.selectedIds.has(id)) this.selectedIds.delete(id);
-      else this.selectedIds.add(id);
     },
 
     selectAll() {
@@ -64,6 +55,14 @@ export const useStagingStore = defineStore("staging", {
 
     clearSelection() {
       this.selectedIds.clear();
+    },
+
+    /** 文字暂存的公共序列（拖入文本 / 剪贴板收集 / 面板收藏共用）。 */
+    async stageTextAndRefresh(podId: number, content: string, title?: string) {
+      await ipc.stageText(podId, content, title);
+      await this.refresh(podId).catch((err) => {
+        console.error("post-text-stage refresh failed", err);
+      });
     },
 
     async removeItems(ids: number[], deleteFiles: boolean) {

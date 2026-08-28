@@ -35,10 +35,6 @@ export const useSettingsStore = defineStore("settings", {
     bootstrapSeq: 0,
   }),
 
-  getters: {
-    configured: (s) => !!s.settings?.pods.length,
-  },
-
   actions: {
     async load() {
       const request = ++this.bootstrapSeq;

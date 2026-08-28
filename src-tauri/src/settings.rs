@@ -458,9 +458,9 @@ pub fn merge_persist(
     Ok(candidate)
 }
 
-pub fn next_pod_id(conn: &Connection, data_dir: &str, version: &str) -> Result<u64, String> {
-    let s = load(conn, data_dir, version)?;
-    let floor = s
+/// 在已加载的设置基础上分配下一个匣 ID 并持久化计数器（避免重复读库）。
+pub fn next_pod_id_from(conn: &Connection, current: &Settings) -> Result<u64, String> {
+    let floor = current
         .pods
         .iter()
         .map(|p| p.id)
@@ -479,21 +479,20 @@ pub fn next_pod_id(conn: &Connection, data_dir: &str, version: &str) -> Result<u
     Ok(next)
 }
 
-pub fn upsert_pod(
+/// 在已加载的设置上插入 / 更新匣，验证后持久化。返回后 `current` 即持久化状态。
+pub fn upsert_pod_from(
     conn: &Connection,
+    current: &mut Settings,
     pod: &Pod,
     data_dir: &str,
-    version: &str,
-) -> Result<Settings, String> {
-    let mut s = load(conn, data_dir, version)?;
-    if let Some(existing) = s.pods.iter_mut().find(|p| p.id == pod.id) {
+) -> Result<(), String> {
+    if let Some(existing) = current.pods.iter_mut().find(|p| p.id == pod.id) {
         *existing = pod.clone();
     } else {
-        s.pods.push(pod.clone());
+        current.pods.push(pod.clone());
     }
-    validate(&s, data_dir)?;
-    persist(conn, &s)?;
-    Ok(s)
+    validate(current, data_dir)?;
+    persist(conn, current)
 }
 
 pub fn delete_pod(
@@ -659,7 +658,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let data_dir = tmp.path().join("data").to_string_lossy().to_string();
         let pod = pod(1, &tmp.path().join("stage"));
-        upsert_pod(&c, &pod, &data_dir, "0.4.0").unwrap();
+        let mut current = load(&c, &data_dir, "0.4.0").unwrap();
+        upsert_pod_from(&c, &mut current, &pod, &data_dir).unwrap();
         assert_eq!(load(&c, &data_dir, "0.4.0").unwrap().pods.len(), 1);
         delete_pod(&c, 1, &data_dir, "0.4.0").unwrap();
         assert!(load(&c, &data_dir, "0.4.0").unwrap().pods.is_empty());
@@ -707,8 +707,9 @@ mod tests {
         let c = conn();
         let tmp = tempfile::tempdir().unwrap();
         let data_dir = tmp.path().join("data").to_string_lossy().to_string();
-        assert_eq!(next_pod_id(&c, &data_dir, "0.4.0").unwrap(), 1);
-        assert_eq!(next_pod_id(&c, &data_dir, "0.4.0").unwrap(), 2);
+        let current = load(&c, &data_dir, "0.4.0").unwrap();
+        assert_eq!(next_pod_id_from(&c, &current).unwrap(), 1);
+        assert_eq!(next_pod_id_from(&c, &current).unwrap(), 2);
     }
 
     #[test]

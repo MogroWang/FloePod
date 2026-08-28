@@ -40,7 +40,14 @@ export function springValue(
   if (reduced) {
     onUpdate(target);
     onComplete?.();
-    return { setTarget: (t) => onUpdate(t), stop: () => undefined };
+    return {
+      // 减少动态模式没有动画帧；setTarget 也必须触发完成回调，与常规路径一致。
+      setTarget: (t) => {
+        onUpdate(t);
+        onComplete?.();
+      },
+      stop: () => undefined,
+    };
   }
 
   const tick = (now: number) => {

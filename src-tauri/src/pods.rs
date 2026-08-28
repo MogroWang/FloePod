@@ -98,7 +98,8 @@ pub fn create(
     let pod = {
         let connection = state.db.lock().unwrap();
         let mut pod = from_config(&config)?;
-        let current = staging::load_settings_from(&connection, &state)?;
+        // 设置只加载一次：复用判断、ID 分配和落库都基于同一份快照。
+        let mut current = staging::load_settings_from(&connection, &state)?;
         let reusable = reuse_existing.then(|| {
             current.pods.iter().find(|existing| {
                 !existing.staging_folder.is_empty()
@@ -112,8 +113,8 @@ pub fn create(
         if let Some(existing) = reusable.flatten() {
             existing.clone()
         } else {
-            pod.id = settings::next_pod_id(&connection, &staging::data_dir(&state), VERSION)?;
-            settings::upsert_pod(&connection, &pod, &staging::data_dir(&state), VERSION)?;
+            pod.id = settings::next_pod_id_from(&connection, &current)?;
+            settings::upsert_pod_from(&connection, &mut current, &pod, &staging::data_dir(&state))?;
             pod
         }
     };
@@ -131,10 +132,13 @@ pub fn update(app: AppHandle, pod_id: u64, patch: serde_json::Value) -> Result<P
     let file_operation = state.file_ops.lock().unwrap();
     let (pod, folder_changed, needs_reconcile) = {
         let mut connection = state.db.lock().unwrap();
-        let mut pod = staging::load_settings_from(&connection, &state)?
+        // 设置只加载一次：补丁直接作用于快照中的匣，落库后快照即持久化状态。
+        let mut current = staging::load_settings_from(&connection, &state)?;
+        let mut pod = current
             .pods
-            .into_iter()
+            .iter()
             .find(|pod| pod.id == pod_id)
+            .cloned()
             .ok_or_else(|| "匣不存在".to_string())?;
         let old_folder = pod.staging_folder.clone();
         let old_enabled = pod.enabled;
@@ -143,7 +147,7 @@ pub fn update(app: AppHandle, pod_id: u64, patch: serde_json::Value) -> Result<P
         let transaction = connection
             .transaction()
             .map_err(|error| error.to_string())?;
-        settings::upsert_pod(&transaction, &pod, &staging::data_dir(&state), VERSION)?;
+        settings::upsert_pod_from(&transaction, &mut current, &pod, &staging::data_dir(&state))?;
         if folder_changed {
             // 更换目录只切换索引根目录，不移动原文件。
             db::delete_items_by_pod(&transaction, pod_id as i64)?;

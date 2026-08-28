@@ -8,11 +8,13 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { readText } from "@tauri-apps/plugin-clipboard-manager";
+import { useUnlisteners } from "@/composables/useUnlisteners";
 import { dropActionFor } from "@/domain/dropAction";
 import { monitorLogicalSpan, offsetAfterDrag } from "@/domain/podPosition";
 import type { ModifierState } from "@/domain/types";
 import { ipc } from "@/ipc/client";
 import { Events, listenCurrent } from "@/ipc/events";
+import { clampOpacity } from "@/lib/format";
 import { springValue, type SpringHandle } from "@/lib/spring";
 import { useSettingsStore } from "@/stores/settings";
 import { useStagingStore } from "@/stores/staging";
@@ -29,8 +31,7 @@ const accepting = ref(false);
 let hoverTimeout: number | undefined;
 let shortSpring: SpringHandle | null = null;
 const short = ref(44);
-const unlisteners: Array<() => void> = [];
-let mounted = true;
+const { retainUnlistener, disposeUnlisteners, isMounted } = useUnlisteners();
 let modifierSnapshot: ModifierState | null = null;
 let modifierSample: Promise<ModifierState> | null = null;
 let modifierSampleSeq = 0;
@@ -39,17 +40,17 @@ let lastModifierSample = 0;
 const NO_MODIFIERS: ModifierState = { ctrl: false, shift: false, alt: false };
 
 const dragging = ref(false);
-let justDragged = false; // 记录刚刚完成拖动，防止触发点击
+// 拖拽刚结束的时间戳；此后一小段时间内的 click 视为拖拽残留，不触发 toggle。
+// 用时间戳而非布尔值：pointerup 落在窗口外时不会留下"永久吞点击"的粘滞状态。
+let justDraggedAt = 0;
 let dragStartPos = 0;
 let dragStartOffset = 0;
 let dragStartScreenLength = 1080; // 拖动开始时的屏幕尺寸
 
-const count = computed(
-  () => staging.items.filter((i) => i.podId === props.podId).length,
-);
+const count = computed(() => staging.activeItems.length);
 
 const capsuleStyle = computed<Record<string, string>>(() => {
-  const opacity = Math.min(1, Math.max(0.1, pod.value?.opacity ?? 1));
+  const opacity = clampOpacity(pod.value?.opacity);
   const appearance = { "--pod-opacity": `${opacity * 100}%` };
   return vertical.value
     ? { ...appearance, width: short.value + "px", height: "100%" }
@@ -63,11 +64,6 @@ watch(accepting, (v) => shortSpring?.setTarget(v ? 62 : 44));
 function clearHoverTimer() {
   window.clearTimeout(hoverTimeout);
   hoverTimeout = undefined;
-}
-
-function retainUnlistener(unlisten: () => void) {
-  if (mounted) unlisteners.push(unlisten);
-  else unlisten();
 }
 
 function reportPresence(inside: boolean) {
@@ -120,10 +116,7 @@ function onPointerLeave() {
 
 function onClick() {
   // 如果刚完成拖动，不触发点击
-  if (justDragged) {
-    justDragged = false;
-    return;
-  }
+  if (performance.now() - justDraggedAt < 300) return;
   // 点击关闭面板后，尚未执行的悬停回调不能把它重新打开。
   clearHoverTimer();
   void ipc.togglePanel(props.podId).catch((err) => console.error("toggle panel failed", err));
@@ -137,7 +130,7 @@ function onPointerDown(e: PointerEvent) {
   dragStartPos = vertical.value ? e.screenY : e.screenX;
   dragStartOffset = pod.value.offset;
   dragging.value = false;
-  justDragged = false;
+  justDraggedAt = 0;
 
   const selectedMonitor = pod.value.monitor
     ? settingsStore.monitors.find((monitor) => monitor.name === pod.value?.monitor)
@@ -158,7 +151,31 @@ function onPointerDown(e: PointerEvent) {
   e.stopPropagation();
 }
 
-async function onPointerMove(e: PointerEvent) {
+// 指针移动事件远快于 IPC 往返：在途只保留一个请求，并始终携带最新 offset，
+// 既避免请求堆积，也避免先发后至的旧 offset 让条来回跳动。
+let moveInFlight = false;
+let latestMoveOffset: number | null = null;
+
+function requestMovePodBar(offset: number) {
+  latestMoveOffset = offset;
+  if (moveInFlight) return;
+  moveInFlight = true;
+  const pump = () => {
+    const current = latestMoveOffset;
+    latestMoveOffset = null;
+    if (current === null) {
+      moveInFlight = false;
+      return;
+    }
+    void ipc
+      .movePodBar(props.podId, current)
+      .catch((err) => console.error("move pod bar failed", err))
+      .finally(() => (latestMoveOffset !== null ? pump() : (moveInFlight = false)));
+  };
+  pump();
+}
+
+function onPointerMove(e: PointerEvent) {
   if (!pod.value) return;
 
   const currentPos = vertical.value ? e.screenY : e.screenX;
@@ -180,7 +197,7 @@ async function onPointerMove(e: PointerEvent) {
   const newOffset = offsetAfterDrag(dragStartOffset, delta, dragStartScreenLength);
 
   // 使用轻量级命令实时移动窗口（不写数据库，性能更好）
-  await ipc.movePodBar(props.podId, newOffset);
+  requestMovePodBar(newOffset);
 
   // 阻止默认行为
   e.preventDefault();
@@ -194,7 +211,7 @@ async function onPointerUp(e: PointerEvent) {
 
   if (dragging.value) {
     dragging.value = false;
-    justDragged = true; // 标记刚刚完成拖动，防止触发点击
+    justDraggedAt = performance.now(); // 标记刚刚完成拖动，防止触发点击
     
     // 计算最终的 offset
     const currentPos = vertical.value ? e.screenY : e.screenX;
@@ -246,17 +263,14 @@ async function onHtmlDrop(e: DragEvent) {
   const dt = e.dataTransfer;
   if (!dt || dt.files?.length) return;
   const text = dt.getData("text/plain");
-  if (text && pod.value) {
-    e.preventDefault();
-    try {
-      await ipc.stageText(props.podId, text);
-      await staging.refresh(props.podId).catch((err) => {
-        console.error("post-text-stage refresh failed", err);
-      });
-      showPanel();
-    } catch (err) {
-      console.error("stage text failed", err);
-    }
+  // 文本拖放（包括空文本）都必须阻止 WebView 默认行为（如导航到拖放内容）。
+  e.preventDefault();
+  if (!text || !pod.value) return;
+  try {
+    await staging.stageTextAndRefresh(props.podId, text);
+    showPanel();
+  } catch (err) {
+    console.error("stage text failed", err);
   }
 }
 
@@ -276,10 +290,10 @@ onMounted(async () => {
       .then(retainUnlistener)
       .catch((err) => console.error("items listener failed", err));
     await settingsStore.load();
-    if (!mounted) return;
+    if (!isMounted()) return;
     staging.setActivePod(props.podId);
     await staging.refresh(props.podId);
-    if (!mounted) return;
+    if (!isMounted()) return;
   } catch (err) {
     console.error("pod bar initialization failed", err);
     return;
@@ -324,10 +338,7 @@ onMounted(async () => {
       try {
         const text = await readText();
         if (text.trim()) {
-          await ipc.stageText(props.podId, text);
-          await staging.refresh(props.podId).catch((err) => {
-            console.error("post-clipboard-stage refresh failed", err);
-          });
+          await staging.stageTextAndRefresh(props.podId, text);
         }
       } catch (err) {
         console.error("collect clipboard failed", err);
@@ -339,7 +350,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
-  mounted = false;
+  disposeUnlisteners();
   clearHoverTimer();
   shortSpring?.stop();
   modifierSampleSeq += 1;
@@ -347,7 +358,6 @@ onBeforeUnmount(() => {
   modifierSample = null;
   setAccept(false);
   reportPresence(false);
-  unlisteners.splice(0).forEach((unlisten) => unlisten());
 });
 </script>
 

@@ -23,7 +23,7 @@
 
 ## 技术栈
 
-- 前端：Vue 3 + TypeScript + Vite + Tailwind CSS v4 + Pinia
+- 前端：Vue 3 + TypeScript + Vite + Pinia（设计令牌走纯 CSS 变量，无 UI 框架运行时）
 - 后端：Rust + Tauri 2（多窗口、原生拖放、托盘、全局快捷键、系统主题）
 - 存储：SQLite（rusqlite bundled，含 WAL）——暂存条目 + 匣配置 + 设置
 - 拖出：`tauri-plugin-drag`（Windows OLE 拖放，剪切模式遵循移动契约回删源文件）
@@ -52,7 +52,7 @@ src/                    # Vue 前端（按窗口 label 分发视图，无需路�
   stores/               # Pinia：settings（设置 + 主题）/ staging（条目 + 选中态）
   lib/                  # 弹簧动画、缩略图队列与展示格式化
 src-tauri/src/
-  lib.rs                # 应用装配（插件/托盘/首启引导）
+  lib.rs                # 应用装配（插件/托盘/首启引导/启动恢复）
   manager.rs            # 窗口位置、面板显隐与单一活动面板管理
   commands.rs           # Tauri 命令入口
   pods.rs staging.rs    # 匣配置与暂存条目管理
@@ -60,6 +60,8 @@ src-tauri/src/
   drag_out.rs thumbnail.rs # OLE 拖出与缩略图读取
   db.rs settings.rs state.rs   # SQLite 持久化与运行态
   watcher.rs            # 暂存文件夹监听与按匣同步（notify）
+  autostart.rs          # 开机自启（HKCU 注册表同步）
+  events.rs logging.rs  # 事件名与定向发送、日志
   win.rs lnk.rs paths.rs       # Win32 辅助、.lnk 快捷方式、路径探测
   tray.rs hotkeys.rs          # 托盘与全局快捷键
 ```

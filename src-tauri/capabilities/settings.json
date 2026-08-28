@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "settings",
-  "description": "设置窗口所需的窗口、文件夹选择和打开路径能力",
+  "description": "设置窗口所需的窗口与文件夹选择能力（打开文件夹走后端校验命令）",
   "windows": ["settings"],
   "permissions": [
     "core:default",
@@ -11,7 +11,6 @@
     "core:window:allow-set-theme",
     "core:window:allow-theme",
     "dialog:allow-open",
-    "dialog:allow-ask",
-    "opener:allow-open-path"
+    "dialog:allow-ask"
   ]
 }

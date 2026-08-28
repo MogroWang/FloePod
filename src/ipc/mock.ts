@@ -12,6 +12,7 @@ import type {
   StagedItem,
 } from "@/domain/types";
 import { Commands, type CommandName } from "./commands";
+import { BROWSER_PREVIEW_STAGING_ROOT } from "@/lib/env";
 
 const HOTKEY_DEFAULTS: Hotkeys = {
   toggleBar: "Alt+Shift+F",
@@ -31,7 +32,7 @@ let settings: Settings = {
       edge: "left",
       monitor: "",
       offset: 0.5,
-      stagingFolder: "D:\\浮匣暂存（浏览器预览）",
+      stagingFolder: BROWSER_PREVIEW_STAGING_ROOT,
       opacity: 1,
       material: "acrylic",
       panelWidth: 380,
@@ -132,10 +133,6 @@ export async function mockInvoke<T>(command: CommandName, args?: Record<string, 
   switch (command) {
     case Commands.GetBootstrap:
       return result({ settings, monitors, version: settings.version });
-    case Commands.GetPod:
-      return result(settings.pods.find((pod) => pod.id === Number(args?.podId)) ?? null);
-    case Commands.GetMonitors:
-      return result(monitors);
     case Commands.GetHotkeyDefaults:
       return result({ ...HOTKEY_DEFAULTS });
     case Commands.GetModifierState:

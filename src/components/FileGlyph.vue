@@ -4,6 +4,7 @@
  * 不用 emoji、不用彩色图标块——层级交给排版。
  */
 import { computed } from "vue";
+import { THUMBNAIL_IMAGE_EXTS } from "@/lib/format";
 import type { ItemKind } from "@/domain/types";
 
 const props = withDefaults(
@@ -26,13 +27,15 @@ type Glyph =
   | "shortcut"
   | "file";
 
+/** 图形层认得的图片扩展名 = 可生成缩略图的集合 + 仅显示图形的 svg/heic。 */
+const IMAGE_GLYPH_EXTS = [...THUMBNAIL_IMAGE_EXTS, "svg", "heic"];
+
 const glyph = computed<Glyph>(() => {
   if (props.kind === "folder") return "folder";
   if (props.kind === "shortcut") return "shortcut";
   if (props.kind === "text") return "text";
   const e = (props.ext ?? "").toLowerCase();
-  if (["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "svg", "heic"].includes(e))
-    return "image";
+  if (IMAGE_GLYPH_EXTS.includes(e)) return "image";
   if (["mp4", "mkv", "mov", "avi", "webm", "wmv", "flv"].includes(e)) return "video";
   if (["mp3", "wav", "flac", "aac", "ogg", "m4a", "wma"].includes(e)) return "audio";
   if (["doc", "docx", "rtf", "odt", "pages"].includes(e)) return "doc";

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { dropActionFor } from "./dropAction.ts";
 import { presentExport } from "./exportPresentation.ts";
+import { formatSize } from "../lib/format.ts";
 import { monitorLogicalSpan, offsetAfterDrag } from "./podPosition.ts";
 import { updateSelection } from "./selection.ts";
 import { normalizeWindowsPathKey, resolveTheme } from "./settings.ts";
@@ -40,6 +41,17 @@ test("主题解析和首次设置路径比较保持兼容", () => {
   assert.equal(normalizeWindowsPathKey(" C:/Stage/./Files/ "), "c:\\stage\\files");
   assert.equal(normalizeWindowsPathKey("\\\\Server\\Share\\Folder\\"), "\\\\server\\share\\folder");
   assert.equal(normalizeWindowsPathKey("D:\\"), "d:\\");
+  // "D:" 与 "D:\" 是同一个盘根，归一化结果必须一致
+  assert.equal(normalizeWindowsPathKey("D:"), "d:\\");
+  assert.equal(normalizeWindowsPathKey("d:/"), "d:\\");
+});
+
+test("文件大小在单位边界上进位而不是显示 1024", () => {
+  assert.equal(formatSize(1023), "1023 B");
+  assert.equal(formatSize(1023.9), "1.0 KB");
+  assert.equal(formatSize(1024), "1.0 KB");
+  assert.equal(formatSize(1536), "1.5 KB");
+  assert.equal(formatSize(0), "");
 });
 
 test("匣拖动按目标显示器缩放并限制偏移范围", () => {
@@ -91,13 +103,13 @@ test("IPC 命令和事件名保持稳定且不重复", () => {
   const commands = Object.values(Commands);
   assert.equal(new Set(commands).size, commands.length);
   assert.deepEqual(commands, [
-    "get_bootstrap", "get_pod", "get_monitors", "get_modifier_state", "get_hotkey_defaults",
+    "get_bootstrap", "get_modifier_state", "get_hotkey_defaults",
     "create_pod", "update_pod", "delete_pod", "save_settings", "hold_pending_drop",
     "stage_paths", "stage_text", "list_pod_items", "remove_items", "export_items",
     "prepare_drag_cut", "finalize_drag_cut", "cancel_drag_cut", "read_thumbnail", "show_panel",
     "toggle_panel", "hide_panel", "set_panel_mode", "get_panel_state", "report_presence",
     "set_panel_pinned", "set_dragging_out", "set_pod_accept", "set_panel_size", "move_pod_bar",
-    "toggle_all_bars", "open_settings", "log_frontend", "app_log", "quit_app",
+    "open_settings", "open_staged_item", "open_pod_folder", "log_frontend", "app_log", "quit_app",
   ]);
   const events = Object.values(Events);
   assert.equal(new Set(events).size, events.length);

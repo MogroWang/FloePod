@@ -2,6 +2,7 @@
 /** 拖入动作询问：复制 / 移动 / 创建快捷方式 / 取消 + 记住选择 */
 import { computed } from "vue";
 import type { DropAction } from "@/domain/types";
+import { previewSlice } from "@/lib/format";
 
 const props = withDefaults(defineProps<{ paths: string[]; busy?: boolean }>(), {
   busy: false,
@@ -14,16 +15,15 @@ const emit = defineEmits<{
 const remember = defineModel<boolean>("remember", { default: false });
 
 const names = computed(() => props.paths.map((p) => p.split(/[\\/]/).pop() ?? p));
-const shown = computed(() => names.value.slice(0, 6));
-const extra = computed(() => names.value.length - shown.value.length);
+const preview = computed(() => previewSlice(names.value));
 </script>
 
 <template>
   <div class="chooser">
     <div class="chooser-title">暂存 {{ paths.length }} 项</div>
     <ul class="chooser-list">
-      <li v-for="(n, i) in shown" :key="i" :title="paths[i]">{{ n }}</li>
-      <li v-if="extra > 0" class="more">以及另外 {{ extra }} 项</li>
+      <li v-for="(n, i) in preview.shown" :key="i" :title="paths[i]">{{ n }}</li>
+      <li v-if="preview.extra > 0" class="more">以及另外 {{ preview.extra }} 项</li>
     </ul>
 
     <div class="chooser-actions">
@@ -93,45 +93,6 @@ const extra = computed(() => names.value.length - shown.value.length);
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
-}
-.act {
-  border: 1px solid var(--line-strong);
-  background: var(--surface-raised);
-  color: var(--ink);
-  border-radius: 10px;
-  padding: 9px 12px;
-  font-size: 13px;
-  font-weight: 550;
-  cursor: pointer;
-  font-family: inherit;
-  transition: transform 100ms ease, background 130ms ease, border-color 130ms ease;
-}
-.act:active {
-  transform: scale(0.98);
-}
-.act:disabled {
-  cursor: wait;
-  opacity: 0.58;
-  transform: none;
-}
-.act:hover {
-  background: var(--surface-2);
-  border-color: var(--accent);
-}
-.act.primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--on-accent);
-}
-.act.primary:hover {
-  background: var(--accent-hover);
-}
-.act.ghost {
-  border-color: transparent;
-  color: var(--ink-2);
-}
-.act.ghost:hover {
-  border-color: var(--line-strong);
 }
 .remember {
   display: flex;

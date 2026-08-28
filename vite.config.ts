@@ -1,7 +1,6 @@
 import { fileURLToPath, URL } from "node:url";
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
-import tailwindcss from "@tailwindcss/vite";
 
 const host = process.env.TAURI_DEV_HOST;
 
@@ -9,7 +8,7 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   // Tauri 生产构建必须使用相对路径，否则 WebView 中资源 404
   base: "./",
-  plugins: [vue(), tailwindcss()],
+  plugins: [vue()],
 
   resolve: {
     alias: {

@@ -76,6 +76,11 @@ pub fn migrate(conn: &Connection) -> Result<(), String> {
           key TEXT PRIMARY KEY,
           value TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS pending_moves (
+          quarantine_path TEXT PRIMARY KEY,
+          original_path TEXT NOT NULL,
+          target_path TEXT NOT NULL
+        );
         "#,
     )
     .map_err(|e| e.to_string())?;
@@ -265,6 +270,59 @@ pub fn kv_set(conn: &Connection, key: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 跨盘移动的隔离台账：源被改名为隔离文件时登记，隔离文件被清理或恢复后删除。
+/// 崩溃后凭此表区分"移动已提交（隔离件是垃圾副本）"与"移动未提交（隔离件是唯一原件）"。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingMove {
+    pub quarantine_path: String,
+    pub original_path: String,
+    pub target_path: String,
+}
+
+pub fn insert_pending_move(conn: &Connection, record: &PendingMove) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO pending_moves (quarantine_path, original_path, target_path)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(quarantine_path) DO UPDATE SET
+           original_path = excluded.original_path,
+           target_path = excluded.target_path",
+        params![
+            record.quarantine_path,
+            record.original_path,
+            record.target_path
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn delete_pending_move(conn: &Connection, quarantine_path: &str) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM pending_moves WHERE quarantine_path = ?1",
+        params![quarantine_path],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn list_pending_moves(conn: &Connection) -> Result<Vec<PendingMove>, String> {
+    let mut stmt = conn
+        .prepare("SELECT quarantine_path, original_path, target_path FROM pending_moves")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(PendingMove {
+                quarantine_path: row.get(0)?,
+                original_path: row.get(1)?,
+                target_path: row.get(2)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -412,6 +470,25 @@ mod tests {
         assert_eq!(items[0].pod_id, 1);
         assert_eq!(items[0].kind, "text");
         assert_eq!(items[0].created_at, 42);
+    }
+
+    #[test]
+    fn pending_moves_round_trip_and_upsert() {
+        let c = conn();
+        let record = PendingMove {
+            quarantine_path: r"C:\src\.floepod-move-source-1-2".into(),
+            original_path: r"C:\src\report.docx".into(),
+            target_path: r"D:\stage\report.docx".into(),
+        };
+        insert_pending_move(&c, &record).unwrap();
+        let mut updated = record.clone();
+        updated.target_path = r"D:\stage\report (2).docx".into();
+        insert_pending_move(&c, &updated).unwrap();
+        assert_eq!(list_pending_moves(&c).unwrap(), vec![updated.clone()]);
+        delete_pending_move(&c, &record.quarantine_path).unwrap();
+        assert!(list_pending_moves(&c).unwrap().is_empty());
+        // 幂等
+        delete_pending_move(&c, &record.quarantine_path).unwrap();
     }
 
     #[test]

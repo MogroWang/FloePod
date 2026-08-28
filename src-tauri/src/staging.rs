@@ -229,10 +229,22 @@ pub fn stage_paths(
                     let target = file_ops::unique_target(&directory, &name, &mut reserved)?;
                     file_ops::ensure_distinct_target(source, &target)?;
                     if operation == "move" {
-                        moves.push(
-                            file_ops::move_into_staging(source, &target)
-                                .map_err(|error| format!("移动 {name} 失败: {error}"))?,
-                        );
+                        let record = file_ops::move_into_staging(source, &target)
+                            .map_err(|error| format!("移动 {name} 失败: {error}"))?;
+                        // 隔离件在入库前登记台账：崩溃后才能区分"移动已提交"与"未提交"。
+                        if let Some(quarantine) = record.quarantine.as_ref() {
+                            let resolved_target = settings::resolve_path(&target)?;
+                            let connection = state.db.lock().unwrap();
+                            db::insert_pending_move(
+                                &connection,
+                                &db::PendingMove {
+                                    quarantine_path: quarantine.to_string_lossy().to_string(),
+                                    original_path: record.original.to_string_lossy().to_string(),
+                                    target_path: resolved_target.to_string_lossy().to_string(),
+                                },
+                            )?;
+                        }
+                        moves.push(record);
                     } else if let Err(error) = file_ops::copy_path(source, &target) {
                         let _ = file_ops::remove_path(&target);
                         return Err(format!("复制 {name} 失败: {error}"));
@@ -283,6 +295,7 @@ pub fn stage_paths(
                 })
                 .collect()
         };
+        drop_pending_moves(&state, &moves);
         return Err(with_rollback(error, rollback));
     }
 
@@ -325,6 +338,7 @@ pub fn stage_paths(
                     })
                     .collect()
             };
+            drop_pending_moves(&state, &moves);
             return Err(with_rollback(error, rollback));
         }
     };
@@ -334,19 +348,29 @@ pub fn stage_paths(
         let Some(quarantine) = record.quarantine.as_ref() else {
             continue;
         };
-        if let Err(error) = file_ops::remove_path(quarantine) {
-            let name = record
-                .original
-                .file_name()
-                .map(|value| value.to_string_lossy().to_string())
-                .unwrap_or_else(|| record.original.display().to_string());
-            warnings.push(StageWarning {
-                name,
-                error: format!(
-                    "目标已暂存，但源卷临时副本 {} 清理失败: {error}",
-                    quarantine.display()
-                ),
-            });
+        match file_ops::remove_path(quarantine) {
+            Ok(()) => {
+                let connection = state.db.lock().unwrap();
+                if let Err(error) =
+                    db::delete_pending_move(&connection, &quarantine.to_string_lossy())
+                {
+                    crate::logging::write(&format!("[pending-move] 清理台账失败: {error}"));
+                }
+            }
+            Err(error) => {
+                let name = record
+                    .original
+                    .file_name()
+                    .map(|value| value.to_string_lossy().to_string())
+                    .unwrap_or_else(|| record.original.display().to_string());
+                warnings.push(StageWarning {
+                    name,
+                    error: format!(
+                        "目标已暂存，但源卷临时副本 {} 清理失败: {error}",
+                        quarantine.display()
+                    ),
+                });
+            }
         }
     }
     state.mark_staged();
@@ -360,6 +384,90 @@ fn with_rollback(error: String, rollback: Vec<String>) -> String {
     } else {
         format!("{error}；回滚未完全成功：{}", rollback.join("；"))
     }
+}
+
+/// 回滚后同步台账：隔离件已恢复（文件消失）才删除台账行；
+/// 恢复失败的行保留，交给下次启动的 `recover_pending_moves` 重试。
+fn drop_pending_moves(state: &AppState, moves: &[StagedMove]) {
+    let connection = state.db.lock().unwrap();
+    for record in moves {
+        let Some(quarantine) = record.quarantine.as_ref() else {
+            continue;
+        };
+        if fs::symlink_metadata(quarantine).is_ok() {
+            continue;
+        }
+        if let Err(error) = db::delete_pending_move(&connection, &quarantine.to_string_lossy()) {
+            crate::logging::write(&format!("[pending-move] 清理台账失败: {error}"));
+        }
+    }
+}
+
+/// 按 id 打开一个暂存条目：路径必须通过 item_path 校验（属于某匣的暂存目录、
+/// 非 reparse 点），不能让 WebView 直接驱使系统打开任意路径。
+pub fn open_staged_item(app: &AppHandle, item_id: i64) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let state = app.state::<AppState>();
+    let (current, item) = {
+        let connection = state.db.lock().unwrap();
+        let item = db::items_by_ids(&connection, &[item_id])?
+            .into_iter()
+            .next()
+            .ok_or_else(|| "条目不存在".to_string())?;
+        (load_settings_from(&connection, &state)?, item)
+    };
+    settings::validate_pod_for_io(&current, &data_dir(&state), item.pod_id as u64)?;
+    let path = item_path(&item, &current)?;
+    app.opener()
+        .open_path(path.to_string_lossy(), None::<&str>)
+        .map_err(|error| format!("打开「{}」失败: {error}", item.name))
+}
+
+/// 打开匣的暂存文件夹（设置页入口）。文件夹经 resolve_path 解析并校验归属。
+pub fn open_pod_folder(app: &AppHandle, pod_id: u64) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let state = app.state::<AppState>();
+    let current = validated_settings(&state, pod_id)?;
+    let pod = current
+        .pods
+        .iter()
+        .find(|pod| pod.id == pod_id)
+        .ok_or_else(|| "匣不存在".to_string())?;
+    let path = settings::resolve_path(Path::new(&pod.staging_folder))?;
+    app.opener()
+        .open_path(path.to_string_lossy(), None::<&str>)
+        .map_err(|error| format!("打开文件夹失败: {error}"))
+}
+
+/// Windows 保留设备名：作为文件名主干时（如 `CON.txt`）会被 Win32 解析到设备，
+/// 导致 `create_new` 以费解的错误失败，这里统一加 `_` 前缀规避。
+fn is_reserved_device_stem(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name);
+    matches!(
+        stem.to_ascii_uppercase().as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
 }
 
 fn sanitize_text_name(raw: &str) -> String {
@@ -378,6 +486,8 @@ fn sanitize_text_name(raw: &str) -> String {
     let trimmed = cleaned.trim();
     if trimmed.is_empty() {
         "文字".to_string()
+    } else if is_reserved_device_stem(trimmed) {
+        format!("_{trimmed}")
     } else {
         trimmed.to_string()
     }
@@ -565,6 +675,124 @@ pub fn remove_items(app: AppHandle, ids: Vec<i64>, delete_files: bool) -> Result
     }
 }
 
+/// 把隔离件恢复为源文件。原路径被占用时在原目录内起一个不冲突的名字。
+fn restore_quarantine(record: &db::PendingMove) -> Result<PathBuf, String> {
+    let quarantine = PathBuf::from(&record.quarantine_path);
+    let original = PathBuf::from(&record.original_path);
+    let parent = original
+        .parent()
+        .ok_or_else(|| format!("恢复路径没有父目录: {}", original.display()))?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("无法重建源目录 {}: {error}", parent.display()))?;
+    let name = original
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .ok_or_else(|| format!("恢复路径无效: {}", original.display()))?;
+    let mut reserved = HashSet::new();
+    let destination = match fs::symlink_metadata(&original) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => original,
+        Ok(_) => file_ops::unique_target(parent, &name, &mut reserved)?,
+        Err(error) => return Err(format!("无法检查原路径 {}: {error}", original.display())),
+    };
+    fs::rename(&quarantine, &destination).map_err(|error| {
+        format!(
+            "无法把隔离件 {} 恢复为 {}: {error}",
+            quarantine.display(),
+            destination.display()
+        )
+    })?;
+    Ok(destination)
+}
+
+/// 启动清扫入口：按台账恢复被跨盘移动中断的源文件。
+pub fn recover_pending_moves(app: &AppHandle) {
+    recover_pending_moves_state(&app.state::<AppState>());
+}
+
+/// 移动已提交 -> 隔离件只是残留副本，删除；移动未提交 -> 隔离件是唯一原件，恢复。
+/// 恢复 / 删除失败时保留台账行，下次启动重试。
+fn recover_pending_moves_state(state: &AppState) {
+    let _operation = state.file_ops.lock().unwrap();
+    let records = {
+        let connection = state.db.lock().unwrap();
+        match db::list_pending_moves(&connection) {
+            Ok(records) => records,
+            Err(error) => {
+                crate::logging::write(&format!("[recovery] 读取跨盘移动台账失败: {error}"));
+                return;
+            }
+        }
+    };
+    for record in records {
+        let quarantine = PathBuf::from(&record.quarantine_path);
+        match fs::symlink_metadata(&quarantine) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let connection = state.db.lock().unwrap();
+                let _ = db::delete_pending_move(&connection, &record.quarantine_path);
+            }
+            Err(error) => {
+                crate::logging::write(&format!(
+                    "[recovery] 无法检查隔离件 {}: {error}",
+                    quarantine.display()
+                ));
+                continue;
+            }
+            Ok(_) => {}
+        }
+        let committed = {
+            let connection = state.db.lock().unwrap();
+            db::find_by_path(&connection, &record.target_path)
+                .map(|found| found.is_some())
+                .unwrap_or(false)
+        };
+        let outcome = if committed {
+            file_ops::remove_path(&quarantine).map(|_| "已清理已提交移动的隔离副本".to_string())
+        } else {
+            restore_quarantine(&record)
+                .map(|restored| format!("已恢复被中断移动的源文件: {}", restored.display()))
+        };
+        match outcome {
+            Ok(message) => {
+                let connection = state.db.lock().unwrap();
+                let _ = db::delete_pending_move(&connection, &record.quarantine_path);
+                crate::logging::write(&format!("[recovery] {message}"));
+            }
+            Err(error) => {
+                crate::logging::write(&format!(
+                    "[recovery] 处理隔离件 {} 失败（保留台账，下次启动重试）: {error}",
+                    quarantine.display()
+                ));
+            }
+        }
+    }
+    scan_legacy_stranded(state);
+}
+
+/// 历史版本（1.0.0 及更早）没有台账，遗留在暂存目录里的内部临时文件
+/// 无法可靠还原（原名已丢失），只留痕提醒用户手动处理。
+fn scan_legacy_stranded(state: &AppState) {
+    let Ok(current) = load_settings(state) else {
+        return;
+    };
+    for pod in current.pods.iter().filter(|pod| pod.enabled) {
+        let Ok(root) = settings::resolve_path(Path::new(&pod.staging_folder)) else {
+            continue;
+        };
+        let Ok(entries) = fs::read_dir(&root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if file_ops::is_internal_temp_name(&name.to_string_lossy()) {
+                crate::logging::write(&format!(
+                    "[recovery] 发现旧版本遗留的内部临时文件（含未还原数据，请手动确认）: {}",
+                    entry.path().display()
+                ));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -578,5 +806,96 @@ mod tests {
         assert_eq!(text_file_base(Some("实验记录"), "正文"), "实验记录");
         assert_eq!(text_file_base(Some("实验记录.txt"), "正文"), "实验记录");
         assert_eq!(text_file_base(Some("  "), "第一行\n第二行"), "第一行");
+    }
+
+    #[test]
+    fn reserved_device_names_are_prefixed_for_win32() {
+        assert_eq!(sanitize_text_name("CON"), "_CON");
+        assert_eq!(text_file_base(Some("nul"), "正文"), "_nul");
+        assert_eq!(text_file_base(Some("com1"), "正文"), "_com1");
+        // 只有“点号前的主干”完全等于保留名才需要规避；
+        // 常规名称、只是包含保留词的名字不受影响
+        assert_eq!(sanitize_text_name("console"), "console");
+        assert_eq!(sanitize_text_name("COM1 调试"), "COM1 调试");
+        assert_eq!(sanitize_text_name("我的 CON 记录"), "我的 CON 记录");
+    }
+
+    #[test]
+    fn interrupted_cross_volume_moves_recover_from_ledger() {
+        let temporary = tempfile::tempdir().unwrap();
+        let pod_root = temporary.path().join("stage");
+        fs::create_dir_all(&pod_root).unwrap();
+        let source_dir = temporary.path().join("src");
+        fs::create_dir_all(&source_dir).unwrap();
+        let original = source_dir.join("报告.docx");
+        fs::write(&original, b"payload").unwrap();
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        let quarantine = source_dir.join(".floepod-move-source-1-0000000000000001");
+        fs::rename(&original, &quarantine).unwrap();
+        db::insert_pending_move(
+            &conn,
+            &db::PendingMove {
+                quarantine_path: quarantine.to_string_lossy().to_string(),
+                original_path: original.to_string_lossy().to_string(),
+                target_path: pod_root.join("报告.docx").to_string_lossy().to_string(),
+            },
+        )
+        .unwrap();
+
+        // 目标未入库 -> 未提交 -> 恢复原文件
+        let state = AppState::new(conn, temporary.path().join("data"));
+        recover_pending_moves_state(&state);
+        assert!(original.is_file());
+        assert!(!quarantine.exists());
+        assert!(load_settings(&state).is_ok());
+    }
+
+    #[test]
+    fn committed_moves_drop_the_quarantine_copy_on_recovery() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source_dir = temporary.path().join("src");
+        fs::create_dir_all(&source_dir).unwrap();
+        let quarantine = source_dir.join(".floepod-move-source-1-0000000000000002");
+        fs::write(&quarantine, b"stale copy").unwrap();
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        let target = quarantine
+            .with_extension("staged")
+            .to_string_lossy()
+            .to_string();
+        db::insert_item(
+            &conn,
+            &StagedItem {
+                id: 0,
+                pod_id: 1,
+                kind: "file".into(),
+                staging_path: target.clone(),
+                original_path: None,
+                name: "a.staged".into(),
+                ext: Some("staged".into()),
+                size: 0,
+                created_at: db::now_ms(),
+            },
+        )
+        .unwrap();
+        db::insert_pending_move(
+            &conn,
+            &db::PendingMove {
+                quarantine_path: quarantine.to_string_lossy().to_string(),
+                original_path: source_dir.join("a.bin").to_string_lossy().to_string(),
+                target_path: target,
+            },
+        )
+        .unwrap();
+
+        // 目标已在库 -> 已提交 -> 删除残留副本
+        let state = AppState::new(conn, temporary.path().join("data"));
+        recover_pending_moves_state(&state);
+        assert!(!quarantine.exists());
+        let connection = state.db.lock().unwrap();
+        assert!(db::list_pending_moves(&connection).unwrap().is_empty());
     }
 }
