@@ -20,6 +20,7 @@ import type {
   PanelState,
   StagedItem,
 } from "@/domain/types";
+import { buildItemMenu, type MenuItemSpec } from "@/domain/menu";
 import { ipc } from "@/ipc/client";
 import { Events, listenCurrent } from "@/ipc/events";
 import { BROWSER_PREVIEW_EXPORT_ROOT } from "@/lib/env";
@@ -29,6 +30,7 @@ import { useStagingStore } from "@/stores/staging";
 import ItemRow from "@/components/ItemRow.vue";
 import ActionChooser from "@/components/ActionChooser.vue";
 import ConflictDialog from "@/components/ConflictDialog.vue";
+import ContextMenu from "@/components/ContextMenu.vue";
 import SegmentedControl from "@/components/SegmentedControl.vue";
 
 const props = defineProps<{ podId: number }>();
@@ -635,6 +637,19 @@ onMounted(async () => {
       pinRevision += 1;
       pinned.value = p.pinned;
     }),
+    /* 右键菜单窗口回传的用户选择 */
+    listenCurrent<{ podId: number; action: MenuItemSpec }>(Events.ContextMenuChoice, (p) => {
+      if (p.podId !== props.podId) return;
+      void runMenuAction(p.action);
+    }),
+    /* 右键菜单已关闭：解除拖出保活 */
+    listenCurrent<{ podId: number }>(Events.ContextMenuClosed, (p) => {
+      if (p.podId !== props.podId || !menuOpen.value) return;
+      menuOpen.value = false;
+      void ipc
+        .setDraggingOut(props.podId, false)
+        .catch((err) => console.error("menu presence restore failed", err));
+    }),
     /* 窗口已被隐藏：DOM 置为「待显示」透明态，下次显示第一帧不闪现完整内容 */
     listenCurrent<never>(Events.PanelHidden, () => {
       // 全局临时隐藏也会触发该事件；运行态由其他定向事件同步，不能在此清空询问或冲突。
@@ -701,6 +716,87 @@ async function openSettings() {
     console.error("open settings failed", err);
     showToast("无法打开设置");
   }
+}
+
+// ---- 右键菜单（文件操作）----
+
+const menuOpen = ref(false);
+const inlineMenu = ref<{ items: MenuItemSpec[]; x: number; y: number } | null>(null);
+
+function onItemContextMenu(item: StagedItem, at: { x: number; y: number }) {
+  if (anyBusy.value || menuOpen.value) return;
+  // 右键未选中的条目：先把选择收敛为该条目，与资源管理器一致。
+  if (!staging.selectedIds.has(item.id)) onSelect(item.id, "set");
+  const specs = buildItemMenu(staging.selectedItems);
+  if (!specs.length) return;
+  menuOpen.value = true;
+  // 菜单窗口会抢走指针：复用拖出保活语义避免面板被看门狗收起，
+  // 菜单关闭后由 CONTEXT_MENU_CLOSED 事件恢复。
+  void ipc
+    .setDraggingOut(props.podId, true)
+    .catch((err) => console.error("menu keep-alive failed", err));
+  if (ipc.inTauri) {
+    ipc.openContextMenu(props.podId, specs).catch((err) => {
+      // 菜单窗口未就绪等异常：降级为面板内渲染，保证右键永远有反馈。
+      console.error("menu window unavailable, using inline fallback", err);
+      inlineMenu.value = { items: specs, x: at.x, y: at.y };
+    });
+  } else {
+    inlineMenu.value = { items: specs, x: at.x, y: at.y };
+  }
+}
+
+async function runMenuAction(spec: MenuItemSpec) {
+  const ids = spec.itemIds ?? [];
+  try {
+    switch (spec.id) {
+      case "open":
+        await ipc.openStagedItem(ids[0]);
+        break;
+      case "reveal":
+        await ipc.revealStagedItems(ids);
+        break;
+      case "copy": {
+        await ipc.copyStagedToClipboard(ids);
+        showToast(ids.length > 1 ? `已复制 ${ids.length} 项到剪贴板` : "已复制到剪贴板");
+        break;
+      }
+      case "copyPath":
+        await ipc.writeClipboardText(spec.text ?? "");
+        showToast("已复制路径");
+        break;
+      case "remove": {
+        await staging.removeItems(ids, true);
+        showToast(ids.length > 1 ? `已移出 ${ids.length} 项（文件进回收站）` : "已移出暂存（文件进回收站）");
+        break;
+      }
+    }
+  } catch (err) {
+    console.error("context menu action failed", err);
+    showToast("操作失败，请重试");
+  }
+}
+
+/** 内嵌降级菜单只在窗口内出现，按窗口边界收敛位置。 */
+const inlineMenuStyle = computed(() => {
+  if (!inlineMenu.value) return {};
+  const x = Math.min(Math.max(4, inlineMenu.value.x), window.innerWidth - 240);
+  const y = Math.min(Math.max(4, inlineMenu.value.y), window.innerHeight - 250);
+  return { left: `${x}px`, top: `${y}px` };
+});
+
+function closeInlineMenu() {
+  inlineMenu.value = null;
+  if (!menuOpen.value) return;
+  menuOpen.value = false;
+  void ipc
+    .setDraggingOut(props.podId, false)
+    .catch((err) => console.error("menu presence restore failed", err));
+}
+
+function executeInlineMenu(spec: MenuItemSpec) {
+  closeInlineMenu();
+  void runMenuAction(spec);
 }
 </script>
 
@@ -826,6 +922,7 @@ async function openSettings() {
               @open="openItem"
               @reveal="revealItem"
               @remove="removeItem"
+              @context-menu="onItemContextMenu"
               @drag-out="onDragOut"
             />
           </TransitionGroup>
@@ -875,6 +972,15 @@ async function openSettings() {
     <Transition name="toast">
       <div v-if="toast" class="toast">{{ toast }}</div>
     </Transition>
+
+    <!-- 菜单窗口不可用时的内嵌降级菜单（浏览器预览 / 就绪前） -->
+    <Teleport to="body">
+      <div v-if="inlineMenu" class="inline-menu-layer" @pointerdown.self="closeInlineMenu">
+        <div class="inline-menu-pos" :style="inlineMenuStyle">
+          <ContextMenu :items="inlineMenu.items" @execute="executeInlineMenu" />
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -1220,5 +1326,15 @@ async function openSettings() {
 .toast-leave-to {
   opacity: 0;
   transform: translateX(-50%) translateY(6px);
+}
+
+/* 内嵌降级菜单：覆盖面板窗口的可视区域，位置由 inlineMenuStyle 收敛 */
+.inline-menu-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+}
+.inline-menu-pos {
+  position: absolute;
 }
 </style>

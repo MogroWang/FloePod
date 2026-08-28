@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "context-menu",
+  "description": "右键菜单窗口：接收菜单内容事件、按内容调整自身尺寸位置并回传用户选择",
+  "windows": ["context_menu"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-theme",
+    "core:window:allow-theme"
+  ]
+}

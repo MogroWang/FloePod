@@ -4,10 +4,12 @@
  * - settings          -> 设置 / OOBE
  * - pod_{id}          -> 匣的胶囊条（贴在屏幕边缘）
  * - pod_{id}_panel    -> 匣的弹出面板
+ * - context_menu      -> 全局右键菜单
  * 浏览器开发时用 location.hash（#/settings /#/pod_1 /#/pod_1_panel）。
  */
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { parseWindowLabel } from "@/domain/windowLabel";
+import ContextMenuWindow from "@/windows/ContextMenuWindow.vue";
 import PodBar from "@/windows/PodBar.vue";
 import PodPanel from "@/windows/PodPanel.vue";
 import SettingsWindow from "@/windows/SettingsWindow.vue";
@@ -31,7 +33,9 @@ const view = target?.kind === "settings"
     ? PodPanel
     : target?.kind === "podBar"
       ? PodBar
-      : null;
+      : target?.kind === "contextMenu"
+        ? ContextMenuWindow
+        : null;
 const viewProps = target && "podId" in target ? { podId: target.podId } : {};
 </script>
 

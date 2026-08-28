@@ -8,4 +8,7 @@ export const Events = {
   PanelState: "floepod://panel-state",
   PanelHidden: "floepod://panel-hidden",
   CollectClipboard: "floepod://collect-clipboard",
+  ContextMenuShow: "floepod://context-menu-show",
+  ContextMenuChoice: "floepod://context-menu-choice",
+  ContextMenuClosed: "floepod://context-menu-closed",
 } as const;

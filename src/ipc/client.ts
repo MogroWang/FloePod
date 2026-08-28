@@ -1,5 +1,6 @@
 import { Channel, invoke as invokeTauri } from "@tauri-apps/api/core";
 
+import type { MenuItemSpec } from "@/domain/menu";
 import type {
   Bootstrap,
   ConflictStrategy,
@@ -93,6 +94,22 @@ export const ipc = {
     invoke(Commands.OpenStagedItem, { itemId }),
   openPodFolder: (podId: number): Promise<void> =>
     invoke(Commands.OpenPodFolder, { podId }),
+  copyStagedToClipboard: (itemIds: number[]): Promise<void> =>
+    invoke(Commands.CopyStagedToClipboard, { itemIds }),
+  revealStagedItems: (itemIds: number[]): Promise<void> =>
+    invoke(Commands.RevealStagedItems, { itemIds }),
+  writeClipboardText: (text: string): Promise<void> =>
+    invoke(Commands.WriteClipboardText, { text }),
+
+  contextMenuReady: (): Promise<void> => invoke(Commands.ContextMenuReady),
+  openContextMenu: (podId: number, items: MenuItemSpec[]): Promise<void> =>
+    invoke(Commands.OpenContextMenu, { podId, items }),
+  resizeContextMenu: (seq: number, width: number, height: number): Promise<void> =>
+    invoke(Commands.ResizeContextMenu, { seq, width, height }),
+  contextMenuChoice: (seq: number, podId: number, action: MenuItemSpec): Promise<void> =>
+    invoke(Commands.ContextMenuChoice, { seq, podId, action }),
+  hideContextMenu: (seq: number, podId: number): Promise<void> =>
+    invoke(Commands.HideContextMenu, { seq, podId }),
   logFrontend: (msg: string): Promise<void> => invoke(Commands.LogFrontend, { msg }),
   appLog: (msg: string): Promise<void> => invoke(Commands.AppLog, { msg }),
   quitApp: (): Promise<void> => invoke(Commands.QuitApp),

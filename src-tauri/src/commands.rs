@@ -245,6 +245,63 @@ pub async fn open_pod_folder(app: AppHandle, pod_id: u64) -> Result<(), String> 
 }
 
 #[tauri::command]
+pub async fn copy_staged_to_clipboard(app: AppHandle, item_ids: Vec<i64>) -> Result<(), String> {
+    blocking("复制到剪贴板", move || {
+        staging::copy_staged_to_clipboard(&app, &item_ids)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn reveal_staged_items(app: AppHandle, item_ids: Vec<i64>) -> Result<(), String> {
+    blocking("打开所在位置", move || {
+        staging::reveal_staged_items(&app, &item_ids)
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn write_clipboard_text(text: String) -> Result<(), String> {
+    crate::clipboard::copy_text(&text)
+}
+
+// ---- 右键菜单窗口 ----
+
+#[tauri::command]
+pub fn context_menu_ready(app: AppHandle) {
+    crate::menu::mark_ready(&app);
+}
+
+#[tauri::command]
+pub async fn open_context_menu(
+    app: AppHandle,
+    pod_id: u64,
+    items: Vec<crate::menu::MenuItemSpec>,
+) -> Result<(), String> {
+    crate::menu::open(&app, pod_id, &items)
+}
+
+#[tauri::command]
+pub async fn resize_context_menu(app: AppHandle, seq: u64, width: f64, height: f64) {
+    crate::menu::resize_and_show(&app, seq, width, height);
+}
+
+#[tauri::command]
+pub async fn context_menu_choice(
+    app: AppHandle,
+    seq: u64,
+    pod_id: u64,
+    action: crate::menu::MenuItemSpec,
+) {
+    crate::menu::choose(&app, seq, pod_id, &action);
+}
+
+#[tauri::command]
+pub async fn hide_context_menu(app: AppHandle, seq: u64, pod_id: u64) {
+    crate::menu::hide(&app, seq, pod_id);
+}
+
+#[tauri::command]
 pub fn log_frontend(msg: String) {
     logging::write(&format!("[frontend] {msg}"));
 }

@@ -1,6 +1,6 @@
 [package]
 name = "floe-pod"
-version = "1.0.0"
+version = "1.1.0"
 description = "浮匣 FloePod - 本地优先的屏幕边缘文件暂存工具"
 authors = ["MogroWang Studio"]
 edition = "2021"
@@ -39,6 +39,9 @@ windows-sys = { version = "0.59", features = [
   "Win32_Graphics_Dwm",
   "Win32_Security",
   "Win32_System_Registry",
+  "Win32_System_DataExchange",
+  "Win32_System_Memory",
+  "Win32_System_Ole",
   "Win32_UI_WindowsAndMessaging",
   "Win32_UI_Input_KeyboardAndMouse",
 ] }

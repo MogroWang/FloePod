@@ -1,6 +1,7 @@
 //! 浮匣 FloePod - 本地优先的屏幕边缘文件暂存工具（多匣版）。
 
 mod autostart;
+mod clipboard;
 mod commands;
 mod db;
 mod drag_out;
@@ -11,6 +12,7 @@ mod hotkeys;
 mod lnk;
 mod logging;
 mod manager;
+mod menu;
 mod paths;
 mod pods;
 mod settings;
@@ -153,6 +155,14 @@ pub fn run() {
             commands::open_settings,
             commands::open_staged_item,
             commands::open_pod_folder,
+            commands::copy_staged_to_clipboard,
+            commands::reveal_staged_items,
+            commands::write_clipboard_text,
+            commands::context_menu_ready,
+            commands::open_context_menu,
+            commands::resize_context_menu,
+            commands::context_menu_choice,
+            commands::hide_context_menu,
             commands::log_frontend,
             commands::app_log,
             commands::quit_app,

@@ -19,6 +19,7 @@ const emit = defineEmits<{
   (e: "open", item: StagedItem): void;
   (e: "reveal", item: StagedItem): void;
   (e: "remove", item: StagedItem): void;
+  (e: "contextMenu", item: StagedItem, at: { x: number; y: number }): void;
   (e: "dragOut", paths: string[]): void;
 }>();
 
@@ -106,6 +107,7 @@ onBeforeUnmount(() => stopPointerTracking?.());
     @pointerdown="onPointerDown"
     @click="onClick"
     @dblclick="emit('open', item)"
+    @contextmenu.prevent.stop="emit('contextMenu', item, { x: $event.clientX, y: $event.clientY })"
     @keydown="onKeydown"
   >
     <div class="check" :class="{ on: selected }">

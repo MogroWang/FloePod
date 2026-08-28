@@ -4,10 +4,12 @@ import test from "node:test";
 import { dropActionFor } from "./dropAction.ts";
 import { presentExport } from "./exportPresentation.ts";
 import { formatSize } from "../lib/format.ts";
+import { buildItemMenu } from "./menu.ts";
 import { monitorLogicalSpan, offsetAfterDrag } from "./podPosition.ts";
 import { updateSelection } from "./selection.ts";
 import { normalizeWindowsPathKey, resolveTheme } from "./settings.ts";
 import { parseWindowLabel } from "./windowLabel.ts";
+import type { StagedItem } from "./types.ts";
 import { Commands } from "../ipc/commands.ts";
 import { Events } from "../ipc/eventNames.ts";
 
@@ -15,9 +17,36 @@ test("窗口标签只匹配对应视图", () => {
   assert.deepEqual(parseWindowLabel("settings"), { kind: "settings" });
   assert.deepEqual(parseWindowLabel("pod_7"), { kind: "podBar", podId: 7 });
   assert.deepEqual(parseWindowLabel("pod_7_panel"), { kind: "podPanel", podId: 7 });
+  assert.deepEqual(parseWindowLabel("context_menu"), { kind: "contextMenu" });
   for (const invalid of ["pod_0", "pod_-1", "pod_7_extra", "pod_7_panel_extra", "other"]) {
     assert.equal(parseWindowLabel(invalid), null, invalid);
   }
+});
+
+test("右键菜单按选择规模与条目类型组装", () => {
+  const file: StagedItem = {
+    id: 11, podId: 1, kind: "file", stagingPath: "D:\\s\\a.png", originalPath: null,
+    name: "a.png", ext: "png", size: 1, createdAt: 1,
+  };
+  const text: StagedItem = {
+    ...file, id: 12, kind: "text", stagingPath: "D:\\s\\a.txt", name: "a.txt", ext: "txt",
+  };
+
+  const single = buildItemMenu([file]);
+  assert.deepEqual(
+    single.filter((item) => !item.separator).map((item) => item.id),
+    ["open", "reveal", "copy", "copyPath", "remove"],
+  );
+  assert.equal(single[single.length - 1]?.danger, true);
+
+  const multiText = buildItemMenu([text, { ...text, id: 13 }]);
+  const copy = multiText.find((item) => item.id === "copy");
+  assert.equal(copy?.label, "复制 2 段文字");
+  const remove = multiText.find((item) => item.id === "remove");
+  assert.equal(remove?.label, "移出 2 项");
+  assert.deepEqual(remove?.itemIds, [12, 13]);
+  const copyPath = multiText.find((item) => item.id === "copyPath");
+  assert.equal(copyPath?.text, "D:\\s\\a.txt\r\nD:\\s\\a.txt");
 });
 
 test("多选和范围选择会修复失效锚点", () => {
@@ -109,7 +138,11 @@ test("IPC 命令和事件名保持稳定且不重复", () => {
     "prepare_drag_cut", "finalize_drag_cut", "cancel_drag_cut", "read_thumbnail", "show_panel",
     "toggle_panel", "hide_panel", "set_panel_mode", "get_panel_state", "report_presence",
     "set_panel_pinned", "set_dragging_out", "set_pod_accept", "set_panel_size", "move_pod_bar",
-    "open_settings", "open_staged_item", "open_pod_folder", "log_frontend", "app_log", "quit_app",
+    "open_settings", "open_staged_item", "open_pod_folder",
+    "copy_staged_to_clipboard", "reveal_staged_items", "write_clipboard_text",
+    "context_menu_ready", "open_context_menu", "resize_context_menu",
+    "context_menu_choice", "hide_context_menu",
+    "log_frontend", "app_log", "quit_app",
   ]);
   const events = Object.values(Events);
   assert.equal(new Set(events).size, events.length);
@@ -117,5 +150,6 @@ test("IPC 命令和事件名保持稳定且不重复", () => {
     "floepod://items-changed", "floepod://settings-changed", "floepod://pods-changed",
     "floepod://panel-mode", "floepod://panel-shown", "floepod://panel-pinned",
     "floepod://panel-state", "floepod://panel-hidden", "floepod://collect-clipboard",
+    "floepod://context-menu-show", "floepod://context-menu-choice", "floepod://context-menu-closed",
   ]);
 });

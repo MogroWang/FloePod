@@ -41,7 +41,7 @@ let settings: Settings = {
       enabled: true,
     },
   ],
-  version: "1.0.0-mock",
+  version: "1.1.0-mock",
   dataDir: "浏览器预览",
 };
 
@@ -315,6 +315,14 @@ export async function mockInvoke<T>(command: CommandName, args?: Record<string, 
     case Commands.CancelDragCut:
       cuts.delete(String(args?.token ?? "") as DragCutToken);
       return result(undefined);
+    case Commands.OpenContextMenu:
+      // 浏览器预览没有菜单窗口：让面板走内嵌降级菜单。
+      throw new Error("浏览器预览使用内嵌右键菜单");
+    case Commands.WriteClipboardText: {
+      const text = String(args?.text ?? "");
+      void navigator.clipboard?.writeText(text).catch(() => {});
+      return result(undefined);
+    }
     default:
       // 浏览器预览没有原生窗口，这些命令直接返回成功。
       return result(undefined);

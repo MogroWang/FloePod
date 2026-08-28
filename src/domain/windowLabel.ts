@@ -1,10 +1,12 @@
 export type WindowTarget =
   | { kind: "settings" }
   | { kind: "podBar"; podId: number }
-  | { kind: "podPanel"; podId: number };
+  | { kind: "podPanel"; podId: number }
+  | { kind: "contextMenu" };
 
 export function parseWindowLabel(label: string): WindowTarget | null {
   if (label === "settings") return { kind: "settings" };
+  if (label === "context_menu") return { kind: "contextMenu" };
   const panel = label.match(/^pod_(\d+)_panel$/);
   const bar = panel ? null : label.match(/^pod_(\d+)$/);
   const podId = Number((panel ?? bar)?.[1]);

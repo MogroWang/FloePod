@@ -439,6 +439,64 @@ pub fn open_pod_folder(app: &AppHandle, pod_id: u64) -> Result<(), String> {
         .map_err(|error| format!("打开文件夹失败: {error}"))
 }
 
+/// 在资源管理器中定位暂存条目（右键菜单）。路径按条目 id 重新校验，
+/// WebView 无法驱使系统定位任意路径。
+pub fn reveal_staged_items(app: &AppHandle, item_ids: &[i64]) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let state = app.state::<AppState>();
+    let (current, items) = {
+        let connection = state.db.lock().unwrap();
+        (
+            load_settings_from(&connection, &state)?,
+            db::items_by_ids(&connection, item_ids)?,
+        )
+    };
+    let item = items
+        .first()
+        .ok_or_else(|| "条目不存在".to_string())?;
+    settings::validate_pod_for_io(&current, &data_dir(&state), item.pod_id as u64)?;
+    let path = item_path(item, &current)?;
+    app.opener()
+        .reveal_item_in_dir(path.as_os_str())
+        .map_err(|error| format!("打开「{}」所在位置失败: {error}", item.name))
+}
+
+/// 把暂存条目复制到系统剪贴板：纯文字条目复制文本内容，其余（含混合选择时
+/// 的文字条目 txt 文件）按文件复制（CF_HDROP，可在资源管理器粘贴）。
+/// 路径按条目 id 重新校验，与 open_staged_item 同一条安全边界。
+pub fn copy_staged_to_clipboard(app: &AppHandle, item_ids: &[i64]) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let (current, items) = {
+        let connection = state.db.lock().unwrap();
+        (
+            load_settings_from(&connection, &state)?,
+            db::items_by_ids(&connection, item_ids)?,
+        )
+    };
+    if items.is_empty() {
+        return Err("条目不存在".to_string());
+    }
+    let mut paths: Vec<PathBuf> = Vec::new();
+    let mut texts: Vec<String> = Vec::new();
+    for item in items {
+        settings::validate_pod_for_io(&current, &data_dir(&state), item.pod_id as u64)?;
+        let path = item_path(&item, &current)?;
+        if item.kind == "text" && paths.is_empty() {
+            let content = fs::read_to_string(&path)
+                .map_err(|error| format!("读取「{}」失败: {error}", item.name))?;
+            texts.push(content);
+        } else {
+            paths.push(path);
+        }
+    }
+    if paths.is_empty() {
+        crate::clipboard::copy_text(&texts.join("\n\n"))
+    } else {
+        let refs: Vec<&Path> = paths.iter().map(|path| path.as_path()).collect();
+        crate::clipboard::copy_files(&refs)
+    }
+}
+
 /// Windows 保留设备名：作为文件名主干时（如 `CON.txt`）会被 Win32 解析到设备，
 /// 导致 `create_new` 以费解的错误失败，这里统一加 `_` 前缀规避。
 fn is_reserved_device_stem(name: &str) -> bool {

@@ -24,4 +24,8 @@ window.addEventListener("unhandledrejection", (e) => {
   reportFrontend(`unhandledrejection: ${String(e.reason)}`);
 });
 
+// 禁用 WebView 默认右键菜单：所有窗口的右键操作由应用内专属菜单接管
+// （文件条目走菜单窗口；输入框等区域不提供菜单，属于预期行为）。
+document.addEventListener("contextmenu", (event) => event.preventDefault());
+
 createApp(App).use(createPinia()).mount("#app");
