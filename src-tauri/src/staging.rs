@@ -451,9 +451,7 @@ pub fn reveal_staged_items(app: &AppHandle, item_ids: &[i64]) -> Result<(), Stri
             db::items_by_ids(&connection, item_ids)?,
         )
     };
-    let item = items
-        .first()
-        .ok_or_else(|| "条目不存在".to_string())?;
+    let item = items.first().ok_or_else(|| "条目不存在".to_string())?;
     settings::validate_pod_for_io(&current, &data_dir(&state), item.pod_id as u64)?;
     let path = item_path(item, &current)?;
     app.opener()

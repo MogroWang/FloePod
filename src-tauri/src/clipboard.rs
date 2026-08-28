@@ -124,10 +124,8 @@ pub fn copy_files(paths: &[&Path]) -> Result<(), String> {
 pub fn copy_text(text: &str) -> Result<(), String> {
     let mut wide: Vec<u16> = text.encode_utf16().collect();
     wide.push(0);
-    let bytes = unsafe {
-        std::slice::from_raw_parts(wide.as_ptr().cast::<u8>(), wide.len() * 2)
-    }
-    .to_vec();
+    let bytes =
+        unsafe { std::slice::from_raw_parts(wide.as_ptr().cast::<u8>(), wide.len() * 2) }.to_vec();
     with_clipboard(|| unsafe {
         EmptyClipboard();
         set_data(CF_UNICODETEXT, &bytes)
@@ -154,11 +152,7 @@ mod tests {
         let buffer = hdrop_buffer(&paths).unwrap();
         let header = size_of::<DROPFILES>();
         // 头部之后紧跟 UTF-16 路径，双 NUL 结尾。
-        let expected: Vec<u16> = r"C:\a.txt"
-            .encode_utf16()
-            .chain([0])
-            .chain([0])
-            .collect();
+        let expected: Vec<u16> = r"C:\a.txt".encode_utf16().chain([0]).chain([0]).collect();
         let expected_bytes: Vec<u8> = expected.iter().flat_map(|u| u.to_le_bytes()).collect();
         assert_eq!(buffer.len(), header + expected_bytes.len());
         assert_eq!(&buffer[header..], expected_bytes.as_slice());
