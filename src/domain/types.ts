@@ -47,6 +47,14 @@ export interface Pod {
   hoverDelayMs: number;
   dropAction: DropAction;
   enabled: boolean;
+  /** 胶囊条短边宽度（逻辑像素）。 */
+  barWidth: number;
+  /** 胶囊条外角圆角半径；CSS 会自动收敛超过半宽的值。 */
+  cornerRadius: number;
+  /** 胶囊条边框颜色（#RGB/#RRGGBB/#RRGGBBAA）；空字符串表示跟随主题。 */
+  borderColor: string;
+  /** 边框不透明度 0-1，作用于 borderColor 或主题默认边框色。 */
+  borderOpacity: number;
 }
 
 export interface MonitorInfo {

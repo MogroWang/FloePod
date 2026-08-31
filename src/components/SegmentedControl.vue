@@ -97,7 +97,8 @@ watch([index, () => props.options], async () => {
   position: relative;
   display: inline-flex;
   padding: 2px;
-  background: var(--surface-2);
+  /* 保持 --surface-2 色相不变，仅降低不透明度让轨道更浅 */
+  background: color-mix(in srgb, var(--surface-2) 40%, transparent);
   border-radius: 9px;
   width: fit-content;
 }

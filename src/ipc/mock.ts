@@ -39,16 +39,20 @@ let settings: Settings = {
       hoverDelayMs: 120,
       dropAction: "ask",
       enabled: true,
+      barWidth: 44,
+      cornerRadius: 22,
+      borderColor: "",
+      borderOpacity: 1,
     },
   ],
-  version: "1.1.0-mock",
+  version: "1.2.0-mock",
   dataDir: "浏览器预览",
 };
 
 const monitors: MonitorInfo[] = [
   {
     name: "\\\\.\\DISPLAY1",
-    label: "主显示器",
+    label: "显示器 1（主）",
     primary: true,
     x: 0,
     y: 0,
@@ -162,6 +166,10 @@ export async function mockInvoke<T>(command: CommandName, args?: Record<string, 
         hoverDelayMs: 120,
         dropAction: "ask",
         enabled: true,
+        barWidth: 44,
+        cornerRadius: 22,
+        borderColor: "",
+        borderOpacity: 1,
         ...(args?.config as object),
       };
       settings = { ...settings, pods: [...settings.pods, pod] };
@@ -259,13 +267,16 @@ export async function mockInvoke<T>(command: CommandName, args?: Record<string, 
       panelState(Number(args?.podId)).visible = true;
       return result(undefined);
     case Commands.TogglePanel: {
+      // 与 Rust 侧 panel_toggle_action 一致：显示中点击即隐藏；未显示则以固定方式弹出。
       const state = panelState(Number(args?.podId));
-      if (!state.visible) Object.assign(state, { visible: true, pinned: true });
-      else if (state.pinned) {
+      if (state.visible) {
         Object.assign(state, {
           mode: "list", paths: [], pinned: false, visible: false, draggingOut: false,
         });
-      } else state.pinned = true;
+      } else {
+        state.visible = true;
+        state.pinned = true;
+      }
       return result(undefined);
     }
     case Commands.HidePanel:

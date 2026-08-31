@@ -5,7 +5,7 @@
  * 排版原则：单一强调色、层级靠字号与留白、分区标题建立可扫视结构、
  * 进入/切换动画统一使用出程缓动（--ease-out）。
  */
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask, open } from "@tauri-apps/plugin-dialog";
 import { useToast } from "@/composables/useToast";
@@ -31,13 +31,25 @@ const { toast, showToast, disposeToast } = useToast(2400);
 const hotkeyError = ref("");
 const loading = ref(true);
 const loadError = ref("");
-const addPodBusy = ref(false);
 const autostartBusy = ref(false);
 const deletingPodIds = reactive(new Set<number>());
 const podEnabledBusyIds = reactive(new Set<number>());
 let settingsSaveTail: Promise<void> = Promise.resolve();
 const podSaveTails = new Map<number, Promise<void>>();
 let hotkeySaveRevision = 0;
+
+/** 匣管理：多个匣时用列表选中要编辑的匣，而不是把所有匣的设置都铺开。 */
+const selectedPodId = ref<number | null>(null);
+const selectedPod = computed<Pod | null>(() => {
+  const pods = s.value?.pods ?? [];
+  return pods.find((pod) => pod.id === selectedPodId.value) ?? pods[0] ?? null;
+});
+/** 单元素列表：模板里 v-for 出的 `pod` 恒为非空，事件回调无需逐处判空。 */
+const selectedPodList = computed<Pod[]>(() => (selectedPod.value ? [selectedPod.value] : []));
+
+function selectPod(id: number) {
+  selectedPodId.value = id;
+}
 
 const oobeDone = ref(false);
 const firstRun = computed(
@@ -239,9 +251,15 @@ async function savePodEnabled(pod: Pod, enabled: boolean) {
   }
 }
 
-type PodNumberField = "offset" | "opacity" | "panelWidth" | "hoverDelayMs";
+type PodNumberField =
+  | "offset"
+  | "opacity"
+  | "panelWidth"
+  | "hoverDelayMs"
+  | "barWidth"
+  | "cornerRadius"
+  | "borderOpacity";
 const podNumberDrafts = reactive<Record<number, Partial<Record<PodNumberField, number>>>>({});
-const podNameDrafts = reactive<Record<number, string>>({});
 
 function podNumberValue(pod: Pod, field: PodNumberField): number {
   return podNumberDrafts[pod.id]?.[field] ?? pod[field];
@@ -262,17 +280,51 @@ async function commitPodNumber(pod: Pod, field: PodNumberField, value: number) {
   }
 }
 
-function previewPodName(id: number, event: Event) {
-  podNameDrafts[id] = (event.target as HTMLInputElement).value;
+/** 重命名：默认只读展示，点编辑图标后输入框才出现。 */
+const renamingPodId = ref<number | null>(null);
+const renameDraft = ref("");
+const renameInput = ref<HTMLInputElement | null>(null);
+
+function startRename(pod: Pod) {
+  renamingPodId.value = pod.id;
+  renameDraft.value = pod.name;
+  void nextTick(() => {
+    const input = renameInput.value;
+    if (!input) return;
+    input.focus();
+    input.select();
+  });
 }
 
-async function commitPodName(pod: Pod, event: Event) {
-  previewPodName(pod.id, event);
-  const value = podNameDrafts[pod.id];
-  if (value == null) return;
-  if (value !== pod.name) await savePod(pod.id, { name: value });
-  // 清空受控草稿后，保存失败时也能恢复已持久化的值。
-  if (podNameDrafts[pod.id] === value) delete podNameDrafts[pod.id];
+function cancelRename() {
+  renamingPodId.value = null;
+}
+
+async function commitRename() {
+  const id = renamingPodId.value;
+  if (id == null) return;
+  renamingPodId.value = null;
+  const pod = settingsStore.pod(id);
+  const value = renameDraft.value.trim();
+  if (!pod || !value || value === pod.name) return;
+  await savePod(id, { name: value });
+}
+
+/** 边框颜色：空字符串表示跟随主题；3 位十六进制展开成 6 位供取色器回显。 */
+const BORDER_COLOR_FALLBACK = "#ffffff";
+
+function podBorderColorValue(pod: Pod): string {
+  const raw = pod.borderColor;
+  const triple = /^#([0-9a-fA-F])([0-9a-fA-F])([0-9a-fA-F])$/.exec(raw);
+  if (triple) {
+    return `#${triple[1]}${triple[1]}${triple[2]}${triple[2]}${triple[3]}${triple[3]}`;
+  }
+  return raw || BORDER_COLOR_FALLBACK;
+}
+
+async function commitPodBorderColor(pod: Pod, event: Event) {
+  const value = (event.target as HTMLInputElement).value;
+  await savePod(pod.id, { borderColor: value });
 }
 
 async function commitPodMonitor(pod: Pod, event: Event) {
@@ -284,16 +336,40 @@ async function commitPodMonitor(pod: Pod, event: Event) {
   }
 }
 
-async function addPod() {
-  if (addPodBusy.value) return;
-  addPodBusy.value = true;
+/** 新建匣弹窗：先询问名称与文件夹位置，确认后才创建。 */
+const addDialogOpen = ref(false);
+const addPodCreating = ref(false);
+const addDraft = reactive({ name: "", folder: "" });
+
+function openAddDialog() {
+  addDraft.name = `匣 ${(s.value?.pods.length ?? 0) + 1}`;
+  addDraft.folder = "";
+  addDialogOpen.value = true;
+}
+
+function cancelAddDialog() {
+  if (addPodCreating.value) return;
+  addDialogOpen.value = false;
+}
+
+async function chooseAddFolder() {
+  const folder = await pickFolder();
+  if (folder) addDraft.folder = folder;
+}
+
+async function confirmAddPod() {
+  if (addPodCreating.value) return;
+  const folder = addDraft.folder.trim();
+  if (!folder) {
+    showToast("请先选择保存文件夹");
+    return;
+  }
+  addPodCreating.value = true;
   try {
-    const folder = await pickFolder();
-    if (!folder) return;
     const n = s.value?.pods.length ?? 0;
     const edge = (["left", "right", "top", "bottom"] as Edge[])[n % 4];
-    await ipc.createPod({
-      name: `匣 ${n + 1}`,
+    const pod = await ipc.createPod({
+      name: addDraft.name.trim() || `匣 ${n + 1}`,
       edge,
       monitor: "",
       offset: 0.5,
@@ -304,14 +380,20 @@ async function addPod() {
       hoverDelayMs: 120,
       dropAction: "ask",
       enabled: true,
+      barWidth: 44,
+      cornerRadius: 22,
+      borderColor: "",
+      borderOpacity: 1,
     });
     await settingsStore.refreshPods();
+    selectedPodId.value = pod.id;
+    addDialogOpen.value = false;
     showToast("已创建新匣");
   } catch (err) {
     console.error(err);
     showToast("创建失败，请重试");
   } finally {
-    addPodBusy.value = false;
+    addPodCreating.value = false;
   }
 }
 
@@ -348,6 +430,10 @@ function oobePodConfig(): Omit<Pod, "id"> {
     hoverDelayMs: 120,
     dropAction: "ask",
     enabled: true,
+    barWidth: 44,
+    cornerRadius: 22,
+    borderColor: "",
+    borderOpacity: 1,
   };
 }
 
@@ -571,7 +657,7 @@ const PAGES = [
 <template>
   <div class="settings-root">
     <div class="titlebar" data-tauri-drag-region>
-      <div class="titlebar-title" data-tauri-drag-region>浮匣 设置</div>
+      <div class="titlebar-title" data-tauri-drag-region>浮匣 FloePod 设置界面</div>
       <div class="titlebar-controls">
         <button type="button" class="tb-btn" title="最小化" @click="winMinimize">
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
@@ -741,7 +827,7 @@ const PAGES = [
                   </SettingsRow>
                   <div class="sep" />
                   <SettingsRow label="退出浮匣" hint="关闭所有匣并退出程序（托盘仍可退出）">
-                    <button type="button" class="btn" @click="quitApp">退出</button>
+                    <button type="button" class="btn danger" @click="quitApp">退出</button>
                   </SettingsRow>
                 </div>
               </template>
@@ -752,165 +838,267 @@ const PAGES = [
                     <h2 class="page-title">匣</h2>
                     <p class="page-desc">每个匣是贴在屏幕边缘的独立暂存点，可分别设置位置、显示器和保存文件夹。</p>
                   </div>
-                  <button type="button" class="btn" :disabled="addPodBusy" @click="addPod">
-                    {{ addPodBusy ? "创建中…" : "+ 新建匣" }}
+                  <button type="button" class="btn" :disabled="addPodCreating" @click="openAddDialog">
+                    + 新建匣
                   </button>
                 </div>
 
-                <TransitionGroup name="pod" tag="div" class="pod-list">
-                  <div v-for="pod in s.pods" :key="pod.id" class="pod-card" :class="{ off: !pod.enabled }">
-                    <div class="pod-head">
+                <div v-if="s.pods.length > 1" class="pod-picker" role="tablist" aria-label="选择要设置的匣">
+                  <button
+                    v-for="pod in s.pods"
+                    :key="pod.id"
+                    type="button"
+                    role="tab"
+                    class="pod-chip"
+                    :class="{ active: selectedPod?.id === pod.id, off: !pod.enabled }"
+                    :aria-selected="selectedPod?.id === pod.id"
+                    @click="selectPod(pod.id)"
+                  >
+                    {{ pod.name }}
+                    <span v-if="!pod.enabled" class="chip-badge">已停用</span>
+                  </button>
+                </div>
+
+                <div v-for="pod in selectedPodList" :key="pod.id" class="pod-card" :class="{ off: !pod.enabled }">
+                  <div class="pod-head">
+                    <template v-if="renamingPodId === pod.id">
                       <input
-                        :value="podNameDrafts[pod.id] ?? pod.name"
+                        ref="renameInput"
+                        v-model="renameDraft"
                         class="pod-name-input"
                         maxlength="12"
-                        @input="(e) => previewPodName(pod.id, e)"
-                        @change="(e) => commitPodName(pod, e)"
+                        aria-label="匣名称"
+                        @keydown.enter.prevent="commitRename"
+                        @keydown.esc.prevent="cancelRename"
+                        @blur="commitRename"
                       />
-                      <div class="pod-head-ops">
-                        <ToggleSwitch
-                          :model-value="pod.enabled"
-                          :disabled="podEnabledBusyIds.has(pod.id)"
-                          @update:model-value="(v) => savePodEnabled(pod, v)"
-                        />
-                        <button
-                          type="button"
-                          class="op-btn danger"
-                          title="删除此匣"
-                          aria-label="删除此匣"
-                          :disabled="deletingPodIds.has(pod.id)"
-                          @click="removePod(pod)"
-                        >
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M5 7h14M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m3 0-1 13a1.5 1.5 0 0 1-1.5 1.4h-7A1.5 1.5 0 0 1 6.5 20L5.5 7" />
-                          </svg>
-                        </button>
+                    </template>
+                    <template v-else>
+                      <span class="pod-name-text" :title="pod.name">{{ pod.name }}</span>
+                      <button
+                        type="button"
+                        class="op-btn"
+                        title="重命名"
+                        aria-label="重命名"
+                        @click="startRename(pod)"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                          <path d="m15 5 4 4" />
+                        </svg>
+                      </button>
+                    </template>
+                    <div class="pod-head-ops">
+                      <ToggleSwitch
+                        :model-value="pod.enabled"
+                        :disabled="podEnabledBusyIds.has(pod.id)"
+                        @update:model-value="(v) => savePodEnabled(pod, v)"
+                      />
+                      <button
+                        type="button"
+                        class="op-btn danger"
+                        title="删除此匣"
+                        aria-label="删除此匣"
+                        :disabled="deletingPodIds.has(pod.id)"
+                        @click="removePod(pod)"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M5 7h14M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m3 0-1 13a1.5 1.5 0 0 1-1.5 1.4h-7A1.5 1.5 0 0 1 6.5 20L5.5 7" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="pod-groups">
+                    <div class="pod-group">
+                      <div class="group-title">位置</div>
+                      <PodEdgeDiagram
+                        :edge="pod.edge"
+                        :offset="podNumberValue(pod, 'offset')"
+                        :monitor-label="monitorLabel(pod)"
+                      />
+                      <div class="frow">
+                        <span class="flabel">屏幕边缘</span>
+                        <div class="fctrl">
+                          <SegmentedControl :options="EDGES" :model-value="pod.edge" @update:model-value="(v) => savePod(pod.id, { edge: v as Edge })" />
+                        </div>
+                      </div>
+                      <div class="frow">
+                        <span class="flabel">显示器</span>
+                        <div class="fctrl">
+                          <select
+                            :value="pod.monitor"
+                            class="input sel"
+                            @change="(e) => commitPodMonitor(pod, e)"
+                          >
+                            <option value="">主显示器</option>
+                            <option v-for="m in monitors" :key="m.name" :value="m.name">{{ m.label }}</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div class="frow">
+                        <span class="flabel">沿边缘位置</span>
+                        <div class="fctrl">
+                          <RangeSlider
+                            :value="podNumberValue(pod, 'offset')"
+                            :min="0"
+                            :max="1"
+                            :step="0.01"
+                            aria-label="沿边缘位置"
+                            @update:value="(v) => previewPodNumber(pod.id, 'offset', v)"
+                            @commit="(v) => commitPodNumber(pod, 'offset', v)"
+                          />
+                          <span class="fval">{{ Math.round(podNumberValue(pod, "offset") * 100) }}%</span>
+                        </div>
                       </div>
                     </div>
 
-                    <div class="pod-groups">
-                      <div class="pod-group">
-                        <div class="group-title">位置</div>
-                        <PodEdgeDiagram
-                          :edge="pod.edge"
-                          :offset="podNumberValue(pod, 'offset')"
-                          :monitor-label="monitorLabel(pod)"
-                        />
-                        <div class="frow">
-                          <span class="flabel">屏幕边缘</span>
-                          <div class="fctrl">
-                            <SegmentedControl :options="EDGES" :model-value="pod.edge" @update:model-value="(v) => savePod(pod.id, { edge: v as Edge })" />
-                          </div>
-                        </div>
-                        <div class="frow">
-                          <span class="flabel">显示器</span>
-                          <div class="fctrl">
-                            <select
-                              :value="pod.monitor"
-                              class="input sel"
-                              @change="(e) => commitPodMonitor(pod, e)"
-                            >
-                              <option value="">主显示器</option>
-                              <option v-for="m in monitors" :key="m.name" :value="m.name">{{ m.label }}</option>
-                            </select>
-                          </div>
-                        </div>
-                        <div class="frow">
-                          <span class="flabel">沿边缘位置</span>
-                          <div class="fctrl">
-                            <RangeSlider
-                              :value="podNumberValue(pod, 'offset')"
-                              :min="0"
-                              :max="1"
-                              :step="0.01"
-                              aria-label="沿边缘位置"
-                              @update:value="(v) => previewPodNumber(pod.id, 'offset', v)"
-                              @commit="(v) => commitPodNumber(pod, 'offset', v)"
-                            />
-                            <span class="fval">{{ Math.round(podNumberValue(pod, "offset") * 100) }}%</span>
-                          </div>
+                    <div class="pod-group">
+                      <div class="group-title">外观</div>
+                      <div class="frow">
+                        <span class="flabel">匣宽度</span>
+                        <div class="fctrl">
+                          <RangeSlider
+                            :value="podNumberValue(pod, 'barWidth')"
+                            :min="28"
+                            :max="96"
+                            :step="2"
+                            aria-label="匣宽度"
+                            @update:value="(v) => previewPodNumber(pod.id, 'barWidth', v)"
+                            @commit="(v) => commitPodNumber(pod, 'barWidth', v)"
+                          />
+                          <span class="fval">{{ podNumberValue(pod, "barWidth") }}px</span>
                         </div>
                       </div>
-
-                      <div class="pod-group">
-                        <div class="group-title">外观</div>
-                        <div class="frow">
-                          <span class="flabel">不透明度</span>
-                          <div class="fctrl">
-                            <RangeSlider
-                              :value="podNumberValue(pod, 'opacity')"
-                              :min="0.1"
-                              :max="1"
-                              :step="0.01"
-                              aria-label="不透明度"
-                              @update:value="(v) => previewPodNumber(pod.id, 'opacity', v)"
-                              @commit="(v) => commitPodNumber(pod, 'opacity', v)"
-                            />
-                            <span class="fval">{{ Math.round(podNumberValue(pod, "opacity") * 100) }}%</span>
-                          </div>
-                        </div>
-                        <div class="frow">
-                          <span class="flabel">材质</span>
-                          <div class="fctrl">
-                            <SegmentedControl :options="MATERIALS" :model-value="pod.material" @update:model-value="(v) => savePod(pod.id, { material: v as Material })" />
-                          </div>
+                      <div class="frow">
+                        <span class="flabel">圆角</span>
+                        <div class="fctrl">
+                          <RangeSlider
+                            :value="podNumberValue(pod, 'cornerRadius')"
+                            :min="0"
+                            :max="32"
+                            :step="1"
+                            aria-label="圆角"
+                            @update:value="(v) => previewPodNumber(pod.id, 'cornerRadius', v)"
+                            @commit="(v) => commitPodNumber(pod, 'cornerRadius', v)"
+                          />
+                          <span class="fval">{{ podNumberValue(pod, "cornerRadius") }}px</span>
                         </div>
                       </div>
-
-                      <div class="pod-group">
-                        <div class="group-title">面板</div>
-                        <div class="frow">
-                          <span class="flabel">面板宽度</span>
-                          <div class="fctrl">
-                            <RangeSlider
-                              :value="podNumberValue(pod, 'panelWidth')"
-                              :min="300"
-                              :max="520"
-                              :step="10"
-                              aria-label="面板宽度"
-                              @update:value="(v) => previewPodNumber(pod.id, 'panelWidth', v)"
-                              @commit="(v) => commitPodNumber(pod, 'panelWidth', v)"
-                            />
-                            <span class="fval">{{ podNumberValue(pod, "panelWidth") }}px</span>
-                          </div>
-                        </div>
-                        <div class="frow">
-                          <span class="flabel">悬停展开延迟</span>
-                          <div class="fctrl">
-                            <RangeSlider
-                              :value="podNumberValue(pod, 'hoverDelayMs')"
-                              :min="0"
-                              :max="400"
-                              :step="20"
-                              aria-label="悬停展开延迟"
-                              @update:value="(v) => previewPodNumber(pod.id, 'hoverDelayMs', v)"
-                              @commit="(v) => commitPodNumber(pod, 'hoverDelayMs', v)"
-                            />
-                            <span class="fval">{{ podNumberValue(pod, "hoverDelayMs") }}ms</span>
-                          </div>
+                      <div class="frow">
+                        <span class="flabel">不透明度</span>
+                        <div class="fctrl">
+                          <RangeSlider
+                            :value="podNumberValue(pod, 'opacity')"
+                            :min="0.1"
+                            :max="1"
+                            :step="0.01"
+                            aria-label="不透明度"
+                            @update:value="(v) => previewPodNumber(pod.id, 'opacity', v)"
+                            @commit="(v) => commitPodNumber(pod, 'opacity', v)"
+                          />
+                          <span class="fval">{{ Math.round(podNumberValue(pod, "opacity") * 100) }}%</span>
                         </div>
                       </div>
-
-                      <div class="pod-group">
-                        <div class="group-title">拖入</div>
-                        <div class="frow">
-                          <span class="flabel">落地动作</span>
-                          <div class="fctrl">
-                            <SegmentedControl :options="DROP_ACTIONS" :model-value="pod.dropAction" @update:model-value="(v) => savePod(pod.id, { dropAction: v as DropAction })" />
-                          </div>
+                      <div class="frow">
+                        <span class="flabel">材质</span>
+                        <div class="fctrl">
+                          <SegmentedControl :options="MATERIALS" :model-value="pod.material" @update:model-value="(v) => savePod(pod.id, { material: v as Material })" />
                         </div>
-                        <div class="frow folder-row">
-                          <span class="flabel">暂存文件夹</span>
-                          <div class="fctrl folder-line">
-                            <input :value="pod.stagingFolder" class="input mono" readonly :title="pod.stagingFolder" placeholder="未选择" />
-                            <button type="button" class="btn" @click="changePodFolder(pod)">选择…</button>
-                            <button v-if="pod.stagingFolder" type="button" class="btn ghost" @click="openPodFolder(pod)">打开</button>
-                          </div>
+                      </div>
+                      <div class="frow">
+                        <span class="flabel">边框颜色</span>
+                        <div class="fctrl">
+                          <label class="color-field">
+                            <input
+                              type="color"
+                              class="color-input"
+                              :value="podBorderColorValue(pod)"
+                              aria-label="边框颜色"
+                              @input="(e) => commitPodBorderColor(pod, e)"
+                            />
+                            <span class="color-text">{{ pod.borderColor || "跟随主题" }}</span>
+                          </label>
+                          <button
+                            v-if="pod.borderColor"
+                            type="button"
+                            class="btn ghost"
+                            @click="savePod(pod.id, { borderColor: '' })"
+                          >
+                            重置
+                          </button>
+                        </div>
+                      </div>
+                      <div class="frow">
+                        <span class="flabel">边框不透明度</span>
+                        <div class="fctrl">
+                          <RangeSlider
+                            :value="podNumberValue(pod, 'borderOpacity')"
+                            :min="0"
+                            :max="1"
+                            :step="0.01"
+                            aria-label="边框不透明度"
+                            @update:value="(v) => previewPodNumber(pod.id, 'borderOpacity', v)"
+                            @commit="(v) => commitPodNumber(pod, 'borderOpacity', v)"
+                          />
+                          <span class="fval">{{ Math.round(podNumberValue(pod, "borderOpacity") * 100) }}%</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="pod-group">
+                      <div class="group-title">面板</div>
+                      <div class="frow">
+                        <span class="flabel">面板宽度</span>
+                        <div class="fctrl">
+                          <RangeSlider
+                            :value="podNumberValue(pod, 'panelWidth')"
+                            :min="300"
+                            :max="520"
+                            :step="10"
+                            aria-label="面板宽度"
+                            @update:value="(v) => previewPodNumber(pod.id, 'panelWidth', v)"
+                            @commit="(v) => commitPodNumber(pod, 'panelWidth', v)"
+                          />
+                          <span class="fval">{{ podNumberValue(pod, "panelWidth") }}px</span>
+                        </div>
+                      </div>
+                      <div class="frow">
+                        <span class="flabel">悬停展开延迟</span>
+                        <div class="fctrl">
+                          <RangeSlider
+                            :value="podNumberValue(pod, 'hoverDelayMs')"
+                            :min="0"
+                            :max="400"
+                            :step="20"
+                            aria-label="悬停展开延迟"
+                            @update:value="(v) => previewPodNumber(pod.id, 'hoverDelayMs', v)"
+                            @commit="(v) => commitPodNumber(pod, 'hoverDelayMs', v)"
+                          />
+                          <span class="fval">{{ podNumberValue(pod, "hoverDelayMs") }}ms</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="pod-group">
+                      <div class="group-title">拖入</div>
+                      <div class="frow">
+                        <span class="flabel">落地动作</span>
+                        <div class="fctrl">
+                          <SegmentedControl :options="DROP_ACTIONS" :model-value="pod.dropAction" @update:model-value="(v) => savePod(pod.id, { dropAction: v as DropAction })" />
+                        </div>
+                      </div>
+                      <div class="frow folder-row">
+                        <span class="flabel">暂存文件夹</span>
+                        <div class="fctrl folder-line">
+                          <input :value="pod.stagingFolder" class="input mono" readonly :title="pod.stagingFolder" placeholder="未选择" />
+                          <button type="button" class="btn" @click="changePodFolder(pod)">选择…</button>
+                          <button v-if="pod.stagingFolder" type="button" class="btn ghost" @click="openPodFolder(pod)">打开</button>
                         </div>
                       </div>
                     </div>
                   </div>
-                </TransitionGroup>
+                </div>
               </template>
 
               <template v-else-if="page === 'hotkeys'">
@@ -941,7 +1129,7 @@ const PAGES = [
                   <div class="about-ver">版本 {{ s.version }}</div>
                 </div>
                 <p class="about-text">
-                  本地优先的屏幕边缘暂存工具：拖进来集中保管，拖出去继续使用。
+                  本地优先的屏幕边缘暂存工具：拖进来集中保管，拖出去继续使用。<br />
                   不联网、不收集数据，所有内容只存在你自己的电脑上。
                 </p>
                 <div class="about-meta">
@@ -961,6 +1149,41 @@ const PAGES = [
       </div>
     </template>
     </template>
+
+    <!-- 新建匣：先询问名称与文件夹位置 -->
+    <Transition name="modal">
+      <div v-if="addDialogOpen" class="modal-layer" @pointerdown.self="cancelAddDialog">
+        <div class="modal-card" role="dialog" aria-modal="true" aria-label="新建匣">
+          <h3 class="modal-title">新建匣</h3>
+          <label class="field">
+            <span>名称</span>
+            <input v-model="addDraft.name" class="input" maxlength="12" placeholder="匣名称" />
+          </label>
+          <div class="field">
+            <span>保存文件夹</span>
+            <div class="folder-line">
+              <input :value="addDraft.folder" class="input mono" readonly placeholder="选择存放暂存文件的文件夹" />
+              <button type="button" class="btn" :disabled="addPodCreating" @click="chooseAddFolder">
+                选择…
+              </button>
+            </div>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn ghost" :disabled="addPodCreating" @click="cancelAddDialog">
+              取消
+            </button>
+            <button
+              type="button"
+              class="btn primary"
+              :disabled="addPodCreating || !addDraft.folder"
+              @click="confirmAddPod"
+            >
+              {{ addPodCreating ? "创建中…" : "创建" }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
 
     <Transition name="toast">
       <div v-if="toast" class="toast">{{ toast }}</div>
@@ -1128,6 +1351,19 @@ const PAGES = [
   font-weight: 650;
   letter-spacing: -0.01em;
   padding: 0 10px 18px;
+  border-radius: 8px;
+  cursor: default;
+  transition: transform 160ms var(--ease-out), filter 160ms var(--ease-out);
+}
+/* Logo 反馈：悬停轻微放大提亮，按下回缩 */
+.nav-brand:hover {
+  transform: scale(1.06);
+  filter: brightness(1.12);
+}
+.nav-brand:active {
+  transform: scale(0.94);
+  filter: brightness(0.96);
+  transition-duration: 80ms;
 }
 .brand-icon {
   color: var(--accent);
@@ -1259,6 +1495,16 @@ const PAGES = [
 .btn.primary:hover {
   background: var(--accent-hover);
 }
+/* 退出等破坏性动作：常态即带红色描边，悬停整块填充 */
+.btn.danger {
+  color: var(--danger);
+  border-color: color-mix(in oklab, var(--danger) 45%, transparent);
+}
+.btn.danger:hover {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: var(--on-danger);
+}
 .btn.ghost {
   border-color: transparent;
   color: var(--ink-2);
@@ -1318,10 +1564,44 @@ select.input {
   margin-top: 18px;
 }
 
-.pod-list {
+.pod-picker {
   display: flex;
-  flex-direction: column;
-  gap: 14px;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.pod-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-raised);
+  color: var(--ink-2);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 150ms var(--ease-out), color 150ms var(--ease-out),
+    border-color 150ms var(--ease-out);
+}
+.pod-chip:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+.pod-chip.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.pod-chip.off {
+  opacity: 0.55;
+}
+.chip-badge {
+  font-size: 10px;
+  color: var(--ink-3);
 }
 .pod-card {
   border: 1px solid var(--line);
@@ -1336,10 +1616,20 @@ select.input {
 .pod-head {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   padding-bottom: 14px;
   border-bottom: 1px solid var(--line);
   margin-bottom: 12px;
+}
+.pod-name-text {
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+  padding: 2px 4px;
 }
 .pod-name-input {
   border: 0;
@@ -1433,21 +1723,81 @@ select.input {
   max-width: 460px;
 }
 
-.pod-enter-active {
-  transition: opacity 220ms ease, transform 280ms var(--ease-out);
+/* 新建匣弹窗 */
+.modal-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: oklch(0 0 0 / 0.35);
 }
-.pod-enter-from {
+.modal-card {
+  width: 380px;
+  max-width: calc(100% - 48px);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: var(--surface-raised);
+  border-radius: 14px;
+  box-shadow: var(--shadow-panel), 0 0 0 1px var(--line);
+  padding: 20px 22px 18px;
+}
+.modal-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 2px;
+}
+.modal-enter-active,
+.modal-leave-active {
+  transition: opacity 160ms ease;
+}
+.modal-enter-active .modal-card,
+.modal-leave-active .modal-card {
+  transition: transform 200ms var(--ease-out), opacity 160ms ease;
+}
+.modal-enter-from,
+.modal-leave-to {
   opacity: 0;
-  transform: translateY(10px);
 }
-.pod-leave-active {
-  transition: opacity 140ms ease;
-}
-.pod-leave-to {
+.modal-enter-from .modal-card,
+.modal-leave-to .modal-card {
+  transform: translateY(10px) scale(0.98);
   opacity: 0;
 }
-.pod-move {
-  transition: transform 280ms var(--ease-out);
+
+.color-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.color-input {
+  width: 32px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  cursor: pointer;
+}
+.color-input::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+.color-input::-webkit-color-swatch {
+  border: none;
+  border-radius: 3px;
+}
+.color-text {
+  font-size: 12px;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
 }
 
 .about-hero {

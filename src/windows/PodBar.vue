@@ -49,17 +49,31 @@ let dragStartScreenLength = 1080; // 拖动开始时的屏幕尺寸
 
 const count = computed(() => staging.activeItems.length);
 
+/** 胶囊条短边；后端校验范围 28-96，加载前回退默认 44。 */
+const barWidth = computed(() => Math.min(96, Math.max(28, pod.value?.barWidth ?? 44)));
+/** 拖入接纳态在匣宽度基础上加宽，与 Rust 侧 POD_BAR_ACCEPT_GROW 一致。 */
+const acceptWidth = computed(() => barWidth.value + 18);
+
 const capsuleStyle = computed<Record<string, string>>(() => {
-  const opacity = clampOpacity(pod.value?.opacity);
-  const appearance = { "--pod-opacity": `${opacity * 100}%` };
+  const borderColor = pod.value?.borderColor || "var(--glass-line)";
+  const borderOpacity = Math.min(1, Math.max(0, pod.value?.borderOpacity ?? 1));
+  const appearance = {
+    "--pod-opacity": `${clampOpacity(pod.value?.opacity) * 100}%`,
+    "--bar-radius": `${pod.value?.cornerRadius ?? 22}px`,
+    "--pod-border": `color-mix(in srgb, ${borderColor} ${borderOpacity * 100}%, transparent)`,
+  };
   return vertical.value
-    ? { ...appearance, width: short.value + "px", height: "100%" }
-    : { ...appearance, height: short.value + "px", width: "100%" };
+    ? { ...appearance, width: short.value + "px", height: "100%", minWidth: barWidth.value + "px" }
+    : { ...appearance, height: short.value + "px", width: "100%", minHeight: barWidth.value + "px" };
 });
 
 /* 仅在拖入接纳时短条变宽（圆角矩形）；悬停弹出面板不改变形状。
-   目标 62 与 Rust 侧 POD_BAR_ACCEPT 一致：胶囊填满窗口，圆角矩形完整显示。 */
-watch(accepting, (v) => shortSpring?.setTarget(v ? 62 : 44));
+   目标宽度 = 匣宽度 + 18，与 Rust 侧 POD_BAR_ACCEPT_GROW 一致：胶囊填满窗口，
+   圆角矩形完整显示。 */
+watch(
+  [accepting, barWidth],
+  ([accept]) => shortSpring?.setTarget(accept ? acceptWidth.value : barWidth.value),
+);
 
 function clearHoverTimer() {
   window.clearTimeout(hoverTimeout);
@@ -407,15 +421,13 @@ onBeforeUnmount(() => {
 
 .capsule {
   position: absolute;
-  min-width: 44px;
-  min-height: 44px;
   will-change: width, height;
   background: color-mix(
     in srgb,
     var(--surface) var(--pod-opacity, 100%),
     transparent
   );
-  box-shadow: inset 0 0 0 1px var(--glass-line);
+  box-shadow: inset 0 0 0 1px var(--pod-border, var(--glass-line));
   display: flex;
   align-items: center;
   justify-content: center;
@@ -425,25 +437,25 @@ onBeforeUnmount(() => {
   left: 0;
   top: 0;
   bottom: 0;
-  border-radius: 0 22px 22px 0;
+  border-radius: 0 var(--bar-radius, 22px) var(--bar-radius, 22px) 0;
 }
 .edge-right .capsule {
   right: 0;
   top: 0;
   bottom: 0;
-  border-radius: 22px 0 0 22px;
+  border-radius: var(--bar-radius, 22px) 0 0 var(--bar-radius, 22px);
 }
 .edge-top .capsule {
   top: 0;
   left: 0;
   right: 0;
-  border-radius: 0 0 22px 22px;
+  border-radius: 0 0 var(--bar-radius, 22px) var(--bar-radius, 22px);
 }
 .edge-bottom .capsule {
   bottom: 0;
   left: 0;
   right: 0;
-  border-radius: 22px 22px 0 0;
+  border-radius: var(--bar-radius, 22px) var(--bar-radius, 22px) 0 0;
 }
 
 .capsule.hovering {

@@ -1054,7 +1054,7 @@ function executeInlineMenu(spec: MenuItemSpec) {
   justify-content: space-between;
   padding: 10px 12px 6px;
   flex-shrink: 0;
-  background: color-mix(in oklab, var(--glass-strong) 72%, transparent);
+  /* 背景与面板主体共用一整块半透明表面，不再单独分割出标题栏底色 */
 }
 .pod-title {
   display: flex;

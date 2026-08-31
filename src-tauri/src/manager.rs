@@ -15,11 +15,10 @@ use crate::settings::{Pod, Settings};
 use crate::state::{AppState, PanelMode, PodRuntime};
 use crate::win;
 
-/// 匣（胶囊条）的短边（贴屏幕边缘一侧）与长边
-const POD_BAR_SHORT: u32 = 44;
+/// 匣（胶囊条）长边；短边（贴屏幕边缘一侧）来自每个匣的 bar_width 设置。
 const POD_BAR_LONG: u32 = 190;
-/// 拖入接纳态：短条变宽为圆角矩形
-const POD_BAR_ACCEPT: u32 = 62;
+/// 拖入接纳态：短条在此基础上加宽为圆角矩形
+const POD_BAR_ACCEPT_GROW: u32 = 18;
 const PANEL_GAP: u32 = 10;
 const PANEL_MARGIN: u32 = 8;
 const PANEL_LEAVE_GRACE: Duration = Duration::from_millis(320);
@@ -59,9 +58,10 @@ enum PanelToggleAction {
     Resume {
         show_target: bool,
     },
+    /// 面板未显示：以固定方式弹出，保持到再次点击匣或主动取消固定。
     ShowPinned,
+    /// 面板已在显示：点击匣直接收起。
     Hide,
-    Pin,
 }
 
 fn panel_toggle_action(bars_visible: bool, runtime: Option<&PodRuntime>) -> PanelToggleAction {
@@ -73,12 +73,10 @@ fn panel_toggle_action(bars_visible: bool, runtime: Option<&PodRuntime>) -> Pane
             show_target: !panel_visible,
         };
     }
-    if !panel_visible {
-        PanelToggleAction::ShowPinned
-    } else if runtime.map(|runtime| runtime.panel_pinned).unwrap_or(false) {
+    if panel_visible {
         PanelToggleAction::Hide
     } else {
-        PanelToggleAction::Pin
+        PanelToggleAction::ShowPinned
     }
 }
 
@@ -164,18 +162,31 @@ pub fn list_monitors(app: &AppHandle) -> Vec<MonitorInfo> {
         return vec![];
     };
     let primary = app.primary_monitor().ok().flatten();
+    let mut entries: Vec<(bool, i32, i32, &tauri::Monitor)> = monitors
+        .iter()
+        .map(|m| {
+            let is_primary = primary
+                .as_ref()
+                .map(|p| p.name() == m.name())
+                .unwrap_or(false);
+            let position = m.position();
+            (is_primary, position.x, position.y, m)
+        })
+        .collect();
+    // 主显示器排第一，其余按从左到右、从上到下排序，保证「显示器 N」编号稳定。
+    entries.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.2.cmp(&b.2))
+    });
     let mut out = Vec::new();
-    let mut idx = 0usize;
-    for m in &monitors {
-        let is_primary = primary
-            .as_ref()
-            .map(|p| p.name() == m.name())
-            .unwrap_or(false);
-        idx += 1;
+    for (idx, (is_primary, _, _, m)) in entries.into_iter().enumerate() {
+        // 下拉里空名称选项已表示「主显示器」，逐个显示器改用带编号的标签，
+        // 避免列表中同时出现两个「主显示器」无法区分。
         let label = if is_primary {
-            "主显示器".to_string()
+            format!("显示器 {}（主）", idx + 1)
         } else {
-            format!("显示器 {idx}")
+            format!("显示器 {}", idx + 1)
         };
         let position = m.position();
         let size = m.size();
@@ -193,20 +204,22 @@ pub fn list_monitors(app: &AppHandle) -> Vec<MonitorInfo> {
     out
 }
 
-/// 胶囊条窗口的几何（长边方向由边缘决定）。
+/// 胶囊条窗口的几何（长边方向由边缘决定）。短边来自匣的 bar_width 设置。
 fn bar_geometry_for_monitor(
     monitor: (i32, i32, i32, i32),
     edge: &str,
     offset: f64,
     accepting: bool,
     scale: f64,
+    bar_width: u32,
 ) -> (i32, i32, i32, i32) {
     let (mx, my, mw, mh) = monitor;
-    let short = if accepting {
-        scale_logical_px(POD_BAR_ACCEPT, scale)
+    let short_value = if accepting {
+        bar_width.saturating_add(POD_BAR_ACCEPT_GROW)
     } else {
-        scale_logical_px(POD_BAR_SHORT, scale)
+        bar_width
     };
+    let short = scale_logical_px(short_value, scale);
     let long = scale_logical_px(POD_BAR_LONG, scale);
     let vertical = matches!(edge, "left" | "right");
     let (w, h) = if vertical {
@@ -242,6 +255,7 @@ fn bar_geometry(app: &AppHandle, pod: &Pod, accepting: bool) -> Option<(i32, i32
         pod.offset,
         accepting,
         target.scale_factor,
+        pod.bar_width,
     ))
 }
 
@@ -342,6 +356,7 @@ fn place_panel(app: &AppHandle, pod: &Pod) {
         pod.offset,
         false,
         target.scale_factor,
+        pod.bar_width,
     );
     let (x, y, width, height) = panel_geometry(
         monitor_rect,
@@ -786,10 +801,6 @@ pub fn toggle_panel(app: &AppHandle, id: u64) {
         PanelToggleAction::Hide => {
             transition_to_hidden_locked(app, id, |_| true);
         }
-        PanelToggleAction::Pin => {
-            pods_guard(&state).entry(id).or_default().panel_pinned = true;
-            emit_panel_snapshot(app, id);
-        }
     }
 }
 
@@ -1073,13 +1084,19 @@ mod tests {
     #[test]
     fn bar_geometry_scales_all_logical_dimensions_for_target_monitor() {
         let monitor = (1920, 0, 3840, 2160);
-        let normal = bar_geometry_for_monitor(monitor, "right", 0.5, false, 2.0);
-        let accepting = bar_geometry_for_monitor(monitor, "right", 0.5, true, 2.0);
+        let normal = bar_geometry_for_monitor(monitor, "right", 0.5, false, 2.0, 44);
+        let accepting = bar_geometry_for_monitor(monitor, "right", 0.5, true, 2.0, 44);
 
         assert_eq!(normal, (5672, 890, 88, 380));
         assert_eq!(accepting, (5636, 890, 124, 380));
         assert_inside_monitor(normal, monitor);
         assert_inside_monitor(accepting, monitor);
+
+        // 自定义匣宽度同样只缩放一次，接纳态在此基础上加宽固定值。
+        let wide = bar_geometry_for_monitor(monitor, "left", 0.5, false, 2.0, 60);
+        assert_eq!(wide, (1920, 890, 120, 380));
+        let wide_accepting = bar_geometry_for_monitor(monitor, "left", 0.5, true, 2.0, 60);
+        assert_eq!(wide_accepting, (1920, 890, 156, 380));
     }
 
     #[test]

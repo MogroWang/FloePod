@@ -1,7 +1,7 @@
 {
   "name": "floepod",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "浮匣 FloePod - 本地优先的屏幕边缘文件暂存工具",
   "type": "module",
   "packageManager": "pnpm@11.22.0",

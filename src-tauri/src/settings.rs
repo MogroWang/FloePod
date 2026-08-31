@@ -59,6 +59,14 @@ pub struct Pod {
     pub hover_delay_ms: u64,
     pub drop_action: String,
     pub enabled: bool,
+    /// 胶囊条短边宽度（CSS 逻辑像素）；面板宽度由 panel_width 控制。
+    pub bar_width: u32,
+    /// 胶囊条外角圆角半径；0 为直角，CSS 会自动把超过半宽的值收敛。
+    pub corner_radius: u32,
+    /// 胶囊条边框颜色（#RGB/#RRGGBB/#RRGGBBAA）；空串 = 跟随主题。
+    pub border_color: String,
+    /// 胶囊条边框不透明度 0.0 - 1.0，作用于 border_color 或主题默认边框色。
+    pub border_opacity: f64,
 }
 
 impl Default for Pod {
@@ -76,6 +84,10 @@ impl Default for Pod {
             hover_delay_ms: 120,
             drop_action: "ask".into(),
             enabled: true,
+            bar_width: 44,
+            corner_radius: 22,
+            border_color: String::new(),
+            border_opacity: 1.0,
         }
     }
 }
@@ -250,6 +262,18 @@ pub fn path_key(path: &Path) -> String {
     }
 }
 
+/// 校验边框颜色：空串（跟随主题）或 #RGB / #RRGGBB / #RRGGBBAA 十六进制色。
+fn valid_border_color(raw: &str) -> bool {
+    let body = match raw.strip_prefix('#') {
+        Some(body) => body,
+        None => return false,
+    };
+    if !matches!(body.len(), 3 | 6 | 8) {
+        return false;
+    }
+    body.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 /// 完整验证将要持久化或用于文件操作的设置。
 pub fn validate(s: &Settings, data_dir: &str) -> Result<(), String> {
     validate_impl(s, data_dir, true)
@@ -308,6 +332,18 @@ fn validate_impl(s: &Settings, data_dir: &str, allow_missing_roots: bool) -> Res
             "ask" | "copy" | "move" | "shortcut"
         ) {
             return Err(format!("匣「{}」的拖入动作无效", pod.name));
+        }
+        if !(28..=96).contains(&pod.bar_width) {
+            return Err(format!("匣「{}」的匣宽度无效", pod.name));
+        }
+        if pod.corner_radius > 64 {
+            return Err(format!("匣「{}」的圆角无效", pod.name));
+        }
+        if !pod.border_color.is_empty() && !valid_border_color(&pod.border_color) {
+            return Err(format!("匣「{}」的边框颜色无效", pod.name));
+        }
+        if !pod.border_opacity.is_finite() || !(0.0..=1.0).contains(&pod.border_opacity) {
+            return Err(format!("匣「{}」的边框不透明度无效", pod.name));
         }
 
         let raw = pod.staging_folder.trim();
@@ -406,6 +442,7 @@ fn migrate_legacy(s: &mut Settings, v: &serde_json::Value) {
             .unwrap_or("ask")
             .into(),
         enabled: true,
+        ..Pod::default()
     });
 }
 
@@ -531,6 +568,7 @@ mod tests {
             hover_delay_ms: 120,
             drop_action: "ask".into(),
             enabled: true,
+            ..Pod::default()
         }
     }
 
@@ -618,7 +656,11 @@ mod tests {
                     "panelWidth": 512,
                     "hoverDelayMs": 600,
                     "dropAction": "move",
-                    "enabled": true
+                    "enabled": true,
+                    "barWidth": 56,
+                    "cornerRadius": 12,
+                    "borderColor": "#80ffaa",
+                    "borderOpacity": 0.4
                 },
                 {
                     "id": 19,
@@ -632,7 +674,11 @@ mod tests {
                     "panelWidth": 300,
                     "hoverDelayMs": 0,
                     "dropAction": "shortcut",
-                    "enabled": false
+                    "enabled": false,
+                    "barWidth": 36,
+                    "cornerRadius": 0,
+                    "borderColor": "",
+                    "borderOpacity": 1.0
                 }
             ]
         });
@@ -643,7 +689,12 @@ mod tests {
         assert_eq!(loaded.pods[0].id, 7);
         assert_eq!(loaded.pods[0].monitor, "DISPLAY-A");
         assert_eq!(loaded.pods[0].panel_width, 512);
+        assert_eq!(loaded.pods[0].bar_width, 56);
+        assert_eq!(loaded.pods[0].corner_radius, 12);
+        assert_eq!(loaded.pods[0].border_color, "#80ffaa");
+        assert_eq!(loaded.pods[0].border_opacity, 0.4);
         assert_eq!(loaded.pods[1].drop_action, "shortcut");
+        assert_eq!(loaded.pods[1].bar_width, 36);
         assert!(!loaded.pods[1].enabled);
 
         persist(&c, &loaded).unwrap();
@@ -727,5 +778,50 @@ mod tests {
         assert_eq!(pod.staging_folder, "D:\\暂存");
         assert_eq!(pod.offset, 0.5); // 来自 Default
         assert!(pod.enabled);
+    }
+
+    #[test]
+    fn bar_appearance_fields_validate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path().join("data").to_string_lossy().to_string();
+
+        let mut pod = pod(1, &tmp.path().join("stage"));
+        pod.bar_width = 44;
+        pod.corner_radius = 22;
+        pod.border_color = String::new();
+        pod.border_opacity = 1.0;
+        let settings = Settings { pods: vec![pod.clone()], ..Settings::default() };
+        assert!(validate(&settings, &data_dir).is_ok());
+
+        for (field, value) in [
+            ("bar_width", serde_json::json!(27u64)),
+            ("bar_width", serde_json::json!(97u64)),
+            ("corner_radius", serde_json::json!(65u64)),
+            ("border_opacity", serde_json::json!(1.5)),
+            ("border_opacity", serde_json::json!(-0.1)),
+        ] {
+            let mut broken = pod.clone();
+            match field {
+                "bar_width" => broken.bar_width = value.as_u64().unwrap() as u32,
+                "corner_radius" => broken.corner_radius = value.as_u64().unwrap() as u32,
+                "border_opacity" => broken.border_opacity = value.as_f64().unwrap(),
+                _ => unreachable!(),
+            }
+            let settings = Settings { pods: vec![broken], ..Settings::default() };
+            assert!(validate(&settings, &data_dir).is_err(), "{field} = {value} 应无效");
+        }
+
+        for good in ["#fff", "#80FFaa", "#11223344", ""] {
+            let mut candidate = pod.clone();
+            candidate.border_color = good.into();
+            let settings = Settings { pods: vec![candidate], ..Settings::default() };
+            assert!(validate(&settings, &data_dir).is_ok(), "边框色 {good} 应有效");
+        }
+        for bad in ["red", "#12", "#12345", "#1234567", "80ffaa", "#80 ffaa"] {
+            let mut candidate = pod.clone();
+            candidate.border_color = bad.into();
+            let settings = Settings { pods: vec![candidate], ..Settings::default() };
+            assert!(validate(&settings, &data_dir).is_err(), "边框色 {bad} 应无效");
+        }
     }
 }
