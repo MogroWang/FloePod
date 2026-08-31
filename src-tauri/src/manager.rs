@@ -55,9 +55,7 @@ pub struct PanelSnapshot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PanelToggleAction {
     /// 全局暂停时，toggle 的首要含义是恢复 UI；若目标原本未打开则同时打开并固定。
-    Resume {
-        show_target: bool,
-    },
+    Resume { show_target: bool },
     /// 面板未显示：以固定方式弹出，保持到再次点击匣或主动取消固定。
     ShowPinned,
     /// 面板已在显示：点击匣直接收起。

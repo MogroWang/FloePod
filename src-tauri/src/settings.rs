@@ -790,7 +790,10 @@ mod tests {
         pod.corner_radius = 22;
         pod.border_color = String::new();
         pod.border_opacity = 1.0;
-        let settings = Settings { pods: vec![pod.clone()], ..Settings::default() };
+        let settings = Settings {
+            pods: vec![pod.clone()],
+            ..Settings::default()
+        };
         assert!(validate(&settings, &data_dir).is_ok());
 
         for (field, value) in [
@@ -807,21 +810,39 @@ mod tests {
                 "border_opacity" => broken.border_opacity = value.as_f64().unwrap(),
                 _ => unreachable!(),
             }
-            let settings = Settings { pods: vec![broken], ..Settings::default() };
-            assert!(validate(&settings, &data_dir).is_err(), "{field} = {value} 应无效");
+            let settings = Settings {
+                pods: vec![broken],
+                ..Settings::default()
+            };
+            assert!(
+                validate(&settings, &data_dir).is_err(),
+                "{field} = {value} 应无效"
+            );
         }
 
         for good in ["#fff", "#80FFaa", "#11223344", ""] {
             let mut candidate = pod.clone();
             candidate.border_color = good.into();
-            let settings = Settings { pods: vec![candidate], ..Settings::default() };
-            assert!(validate(&settings, &data_dir).is_ok(), "边框色 {good} 应有效");
+            let settings = Settings {
+                pods: vec![candidate],
+                ..Settings::default()
+            };
+            assert!(
+                validate(&settings, &data_dir).is_ok(),
+                "边框色 {good} 应有效"
+            );
         }
         for bad in ["red", "#12", "#12345", "#1234567", "80ffaa", "#80 ffaa"] {
             let mut candidate = pod.clone();
             candidate.border_color = bad.into();
-            let settings = Settings { pods: vec![candidate], ..Settings::default() };
-            assert!(validate(&settings, &data_dir).is_err(), "边框色 {bad} 应无效");
+            let settings = Settings {
+                pods: vec![candidate],
+                ..Settings::default()
+            };
+            assert!(
+                validate(&settings, &data_dir).is_err(),
+                "边框色 {bad} 应无效"
+            );
         }
     }
 }
