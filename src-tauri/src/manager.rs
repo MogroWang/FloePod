@@ -1116,7 +1116,8 @@ pub fn spawn_auto_block_watcher(app: AppHandle) {
                 && !apps.is_empty()
                 && win::foreground_exe()
                     .map(|foreground| {
-                        apps.iter().any(|candidate| exe_matches(candidate, &foreground))
+                        apps.iter()
+                            .any(|candidate| exe_matches(candidate, &foreground))
                     })
                     .unwrap_or(false);
             if blocked == was_blocked {

@@ -511,7 +511,9 @@ fn migrate_panel_appearance(s: &mut Settings, v: &serde_json::Value) {
         return;
     };
     for (index, raw) in raw_pods.iter().enumerate() {
-        let Some(pod) = s.pods.get_mut(index) else { break };
+        let Some(pod) = s.pods.get_mut(index) else {
+            break;
+        };
         if raw.get("panelMaterial").is_none() {
             pod.panel_material = pod.material.clone();
         }
