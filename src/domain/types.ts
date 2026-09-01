@@ -1,7 +1,7 @@
 export type ItemKind = "file" | "folder" | "text" | "shortcut";
 export type DropAction = "ask" | "copy" | "move" | "shortcut";
 export type Edge = "top" | "right" | "bottom" | "left";
-export type Material = "acrylic" | "mica" | "blur" | "plain";
+export type Material = "acrylic" | "mica" | "plain";
 export type ThemeMode = "system" | "light" | "dark";
 export type ExportMode = "copy" | "move";
 export type ConflictStrategy = "ask" | "overwrite" | "skip" | "rename";

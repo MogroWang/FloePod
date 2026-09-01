@@ -453,6 +453,9 @@ fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
     if let Some(bar) = pod_bar(app, pod.id) {
         if let Ok(hwnd) = bar.hwnd() {
             win::disable_rounding(hwnd.0 as isize);
+            // 材质需要用窗口区域（region）裁剪成胶囊形状：先清掉样式里残留的
+            // 标题栏位并关闭 DWM 非客户区渲染，否则区域会让系统画出标题栏。
+            win::prepare_shaped_window(hwnd.0 as isize);
         }
     }
     // 面板：请求系统圆角，与 CSS 的 clip-path 圆角轮廓对齐
@@ -507,18 +510,9 @@ fn apply_material(window: &WebviewWindow, material: &str) {
     use tauri::window::{Effect, EffectsBuilder};
     let effect = match material {
         "acrylic" => Some(Effect::Acrylic),
-        // 云母仅在 Windows 11 可用；模糊对应 Win10 的 BlurBehind，
-        // 但 Win11（≥22000）上系统会把 BlurBehind 渲染成整块黑，
-        // 因此在 Win11 上回退为亚克力（观感最接近）。不支持的系统上
-        // set_effects 返回 Err，忽略后表现为普通半透明。
+        // 云母仅在 Windows 11 可用；不支持的系统上 set_effects 返回 Err，
+        // 忽略后表现为普通半透明。
         "mica" => Some(Effect::Mica),
-        "blur" => {
-            if win::windows_build() >= 22_000 {
-                Some(Effect::Acrylic)
-            } else {
-                Some(Effect::Blur)
-            }
-        }
         _ => None,
     };
     match effect {
@@ -529,6 +523,36 @@ fn apply_material(window: &WebviewWindow, material: &str) {
         None => {
             let _ = window.set_effects(None);
         }
+    }
+}
+
+/// Win11 的亚克力在窗口失焦时会被系统移除。聚焦状态变化时按运行态缓存的
+/// 材质重放一次，保证无论窗口是否聚焦都显示底层材质。
+pub fn refresh_window_material(app: &AppHandle, label: &str) {
+    let target = match events::pod_window(label) {
+        Some(events::PodWindow::Bar(id)) => pod_bar(app, id).map(|window| (id, window, true)),
+        Some(events::PodWindow::Panel(id)) => pod_panel(app, id).map(|window| (id, window, false)),
+        None => None,
+    };
+    let Some((id, window, is_bar)) = target else {
+        return;
+    };
+    let material = {
+        let state = app.state::<AppState>();
+        let guard = state.pods.lock().unwrap();
+        match guard.get(&id) {
+            Some(runtime) => {
+                if is_bar {
+                    runtime.bar_material.clone()
+                } else {
+                    runtime.panel_material.clone()
+                }
+            }
+            None => None,
+        }
+    };
+    if let Some(material) = material.filter(|material| material != "plain") {
+        apply_material(&window, &material);
     }
 }
 

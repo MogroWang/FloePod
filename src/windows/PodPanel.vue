@@ -5,6 +5,7 @@
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
+import { readText } from "@tauri-apps/plugin-clipboard-manager";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useUnlisteners } from "@/composables/useUnlisteners";
 import { useToast } from "@/composables/useToast";
@@ -509,7 +510,9 @@ async function stashText() {
   if (!content || textBusy.value) return;
   textBusy.value = true;
   try {
-    await ipc.stageText(props.podId, textValue.value, textTitle.value.trim() || undefined);
+    // 标题留空时自动取正文第一个非空行的前 10 个字。
+    const title = textTitle.value.trim() || autoTextTitle(content);
+    await ipc.stageText(props.podId, textValue.value, title || undefined);
     textTitle.value = "";
     textValue.value = "";
     textOpen.value = false;
@@ -518,6 +521,29 @@ async function stashText() {
     showToast("暂存失败，请重试");
   } finally {
     textBusy.value = false;
+  }
+}
+
+function autoTextTitle(content: string): string {
+  const firstLine = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  return (firstLine ?? "").slice(0, 10);
+}
+
+/** 一键读取剪贴板填入正文：剪贴板有内容时追加，避免覆盖已输入的文字。 */
+async function pasteClipboard() {
+  try {
+    const text = await readText();
+    if (!text.trim()) {
+      showToast("剪贴板里没有文字");
+      return;
+    }
+    textValue.value = textValue.value ? `${textValue.value}\n${text}` : text;
+  } catch (err) {
+    console.error("read clipboard failed", err);
+    showToast("无法读取剪贴板");
   }
 }
 
@@ -577,6 +603,8 @@ function cssPixels(value: string): number {
 }
 
 function scheduleResize() {
+  // 文字暂存视图不参与调高：面板保持打开文字编辑前的尺寸，内容超高时滚动。
+  if (textOpen.value) return;
   window.clearTimeout(sizeTimer);
   const sequence = ++resizeSequence;
   sizeTimer = window.setTimeout(async () => {
@@ -606,7 +634,6 @@ watch(
   () => [
     mode.value,
     items.value.length,
-    textOpen.value,
     selectedCount.value,
     pod.value?.panelWidth,
   ],
@@ -875,21 +902,37 @@ function executeInlineMenu(spec: MenuItemSpec) {
             <input
               v-model="textTitle"
               maxlength="48"
-              placeholder="可选，默认使用正文第一行"
+              placeholder="可选，默认取正文第一行前 10 个字"
               :disabled="textBusy"
               autofocus
               @keydown.enter.prevent
             />
           </label>
-          <label class="text-field">
-            <span>正文</span>
+          <div class="text-field">
+            <div class="text-field-head">
+              <label class="text-field-label" for="stash-text-body">正文</label>
+              <button
+                type="button"
+                class="text-clip-btn"
+                :disabled="textBusy"
+                title="读取剪贴板文字填入正文"
+                @click="pasteClipboard"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="8" y="3" width="8" height="4" rx="1" />
+                  <path d="M16 5h2a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h2" />
+                </svg>
+                获取剪贴板
+              </button>
+            </div>
             <textarea
+              id="stash-text-body"
               v-model="textValue"
               placeholder="粘贴或输入要暂存的文字…"
               rows="5"
               :disabled="textBusy"
             />
-          </label>
+          </div>
           <div class="text-actions">
             <button type="button" class="act primary" :disabled="textBusy" @click="stashText">
               {{ textBusy ? "暂存中…" : "暂存" }}
@@ -1257,6 +1300,39 @@ function executeInlineMenu(spec: MenuItemSpec) {
   color: var(--ink-2);
   font-size: 11.5px;
   font-weight: 600;
+}
+.text-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.text-field-label {
+  color: var(--ink-2);
+}
+.text-clip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--ink-2);
+  border-radius: 7px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 550;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.text-clip-btn:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--accent);
+  color: var(--ink);
+}
+.text-clip-btn:disabled {
+  opacity: 0.58;
+  cursor: wait;
 }
 .text-field input,
 .text-field textarea {

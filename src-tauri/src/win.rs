@@ -132,7 +132,7 @@ pub fn disable_rounding(hwnd: isize) {
 
 /// 把窗口裁剪成「贴屏侧直角、外侧两角按 radius（物理像素）圆角」的胶囊区域。
 ///
-/// 系统材质（亚克力/云母/模糊）绘制在整个窗口矩形上，无法跟随 WebView 里的
+/// 系统材质（亚克力/云母）绘制在整个窗口矩形上，无法跟随 WebView 里的
 /// CSS 圆角：不裁剪时材质会在胶囊圆角外露出直角。region 只在材质 != plain 时设置。
 /// 区域句柄交给系统接管，无需手动释放；radius <= 0 时清除区域恢复矩形。
 /// 贴屏侧通过把圆角矩形延伸出窗口外再由窗口自身裁掉的方式保持直角。
@@ -157,38 +157,48 @@ pub fn set_bar_region(hwnd: isize, width: i32, height: i32, radius: i32, edge: &
     }
 }
 
-/// Windows 构建号（Win10 为 1904x，Win11 ≥ 22000）。读取失败返回 0。
-pub fn windows_build() -> u32 {
-    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
-
-    fn wide(value: &str) -> Vec<u16> {
-        value.encode_utf16().chain(std::iter::once(0)).collect()
-    }
-
-    static CACHE: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *CACHE.get_or_init(|| unsafe {
-        let subkey = wide("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion");
-        let value = wide("CurrentBuildNumber");
-        let mut buf = [0u16; 16];
-        let mut size = (buf.len() * std::mem::size_of::<u16>()) as u32;
-        let status = RegGetValueW(
-            HKEY_LOCAL_MACHINE,
-            subkey.as_ptr(),
-            value.as_ptr(),
-            RRF_RT_REG_SZ,
-            std::ptr::null_mut(),
-            buf.as_mut_ptr().cast(),
-            &mut size,
+/// 准备「按区域成形」的窗口（胶囊条设置材质时用）。
+///
+/// 设置窗口区域（SetWindowRgn）会触发系统重算非客户区：窗口样式里残留的
+/// WS_CAPTION / WS_THICKFRAME 位、以及 DWM 的非客户区渲染，都会在小小的
+/// 胶囊条上画出旧式标题栏 / 边框（表现为诡异的「窗口标题」）。这里在应用
+/// 区域之前把这些来源全部去掉：清除样式位并请求 DWM 停止绘制非客户区。
+pub fn prepare_shaped_window(hwnd: isize) {
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMNCRP_DISABLED, DWMWA_NCRENDERING_POLICY,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, GWL_STYLE, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+        SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_CAPTION, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
+        WS_SYSMENU, WS_THICKFRAME,
+    };
+    unsafe {
+        let hwnd = hwnd as *mut c_void;
+        // DWM 不再绘制任何非客户区内容（标题栏 / 边框 / 系统阴影）。
+        let policy: i32 = DWMNCRP_DISABLED;
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_NCRENDERING_POLICY as u32,
+            &policy as *const i32 as *const c_void,
+            std::mem::size_of::<i32>() as u32,
         );
-        if status != 0 {
-            return 0;
+        // 清掉标题栏相关样式位；胶囊条不可调整大小，移除 WS_THICKFRAME 无副作用。
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+        let cleaned =
+            style & !(WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX);
+        if cleaned != style {
+            SetWindowLongPtrW(hwnd, GWL_STYLE, cleaned as isize);
+            SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                0,
+                0,
+                0,
+                0,
+                SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+            );
         }
-        let len = buf.iter().position(|c| *c == 0).unwrap_or(buf.len());
-        String::from_utf16_lossy(&buf[..len])
-            .trim()
-            .parse()
-            .unwrap_or(0)
-    })
+    }
 }
 
 /// 请求 Windows 11 使用系统圆角（DWMWCP_ROUND）。

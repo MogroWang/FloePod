@@ -105,6 +105,15 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            // Win11 的亚克力在窗口失焦时会被系统移除：聚焦状态变化时重放
+            // 材质，保证无论聚焦与否都显示底层材质。非匣窗口的材质为空，
+            // refresh_window_material 内部会直接返回。
+            if let tauri::WindowEvent::Focused(_) = event {
+                let label = window.label();
+                if events::pod_window(label).is_some() {
+                    manager::refresh_window_material(window.app_handle(), label);
+                }
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 match window.label() {
                     "settings" => {

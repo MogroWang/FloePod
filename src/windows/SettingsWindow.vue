@@ -90,7 +90,6 @@ const DROP_ACTIONS: { value: DropAction; label: string }[] = [
 const MATERIALS: { value: Material; label: string }[] = [
   { value: "acrylic", label: "亚克力" },
   { value: "mica", label: "云母" },
-  { value: "blur", label: "模糊" },
   { value: "plain", label: "普通" },
 ];
 
@@ -328,13 +327,35 @@ function podHexColorValue(raw: string): string {
   return raw || HEX_COLOR_FALLBACK;
 }
 
-async function commitPodHexColor(
-  pod: Pod,
-  field: "borderColor" | "panelColor",
-  event: Event,
-) {
-  const value = (event.target as HTMLInputElement).value;
+/** 颜色草稿：选色过程只更新草稿，点「确定」后才保存并生效。 */
+const colorDrafts = reactive<
+  Record<number, Partial<Record<"borderColor" | "panelColor", string>>>
+>({});
+
+function colorDraftValue(pod: Pod, field: "borderColor" | "panelColor"): string {
+  return colorDrafts[pod.id]?.[field] ?? pod[field];
+}
+
+function previewPodColor(pod: Pod, field: "borderColor" | "panelColor", value: string) {
+  (colorDrafts[pod.id] ??= {})[field] = value;
+}
+
+/** 草稿与已保存值（归一化为 6 位 hex）不同时才显示确认按钮。 */
+function hasColorDraft(pod: Pod, field: "borderColor" | "panelColor"): boolean {
+  const draft = colorDrafts[pod.id]?.[field];
+  return draft != null && draft !== podHexColorValue(pod[field]);
+}
+
+async function confirmPodColor(pod: Pod, field: "borderColor" | "panelColor") {
+  const value = colorDrafts[pod.id]?.[field];
+  if (!value) return;
+  delete colorDrafts[pod.id]?.[field];
   await savePod(pod.id, { [field]: value });
+}
+
+async function clearPodColor(pod: Pod, field: "borderColor" | "panelColor") {
+  delete colorDrafts[pod.id]?.[field];
+  if (pod[field]) await savePod(pod.id, { [field]: "" });
 }
 
 async function commitPodMonitor(pod: Pod, event: Event) {
@@ -1188,17 +1209,25 @@ const PAGES = [
                             <input
                               type="color"
                               class="color-input"
-                              :value="podHexColorValue(pod.borderColor)"
+                              :value="podHexColorValue(colorDraftValue(pod, 'borderColor'))"
                               aria-label="边框颜色"
-                              @change="(e) => commitPodHexColor(pod, 'borderColor', e)"
+                              @input="(e) => previewPodColor(pod, 'borderColor', (e.target as HTMLInputElement).value)"
                             />
-                            <span class="color-text">{{ pod.borderColor || "跟随主题" }}</span>
+                            <span class="color-text">{{ colorDraftValue(pod, 'borderColor') || "跟随主题" }}</span>
                           </label>
+                          <button
+                            v-if="hasColorDraft(pod, 'borderColor')"
+                            type="button"
+                            class="btn primary"
+                            @click="confirmPodColor(pod, 'borderColor')"
+                          >
+                            确定
+                          </button>
                           <button
                             v-if="pod.borderColor"
                             type="button"
                             class="btn ghost"
-                            @click="savePod(pod.id, { borderColor: '' })"
+                            @click="clearPodColor(pod, 'borderColor')"
                           >
                             重置
                           </button>
@@ -1251,17 +1280,25 @@ const PAGES = [
                             <input
                               type="color"
                               class="color-input"
-                              :value="podHexColorValue(pod.panelColor)"
+                              :value="podHexColorValue(colorDraftValue(pod, 'panelColor'))"
                               aria-label="面板填充色"
-                              @change="(e) => commitPodHexColor(pod, 'panelColor', e)"
+                              @input="(e) => previewPodColor(pod, 'panelColor', (e.target as HTMLInputElement).value)"
                             />
-                            <span class="color-text">{{ pod.panelColor || "跟随主题" }}</span>
+                            <span class="color-text">{{ colorDraftValue(pod, 'panelColor') || "跟随主题" }}</span>
                           </label>
+                          <button
+                            v-if="hasColorDraft(pod, 'panelColor')"
+                            type="button"
+                            class="btn primary"
+                            @click="confirmPodColor(pod, 'panelColor')"
+                          >
+                            确定
+                          </button>
                           <button
                             v-if="pod.panelColor"
                             type="button"
                             class="btn ghost"
-                            @click="savePod(pod.id, { panelColor: '' })"
+                            @click="clearPodColor(pod, 'panelColor')"
                           >
                             重置
                           </button>

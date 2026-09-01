@@ -50,8 +50,9 @@ pub struct AutoBlock {
     pub apps: Vec<String>,
 }
 
-/// 窗口材质取值：亚克力 / 云母（Win11）/ 模糊（Win10）/ 普通无材质。
-pub const MATERIALS: [&str; 4] = ["acrylic", "mica", "blur", "plain"];
+/// 窗口材质取值：亚克力 / 云母（Win11）/ 普通无材质。
+/// 早期版本的「模糊」与亚克力观感一致，已合并（见 normalize_materials）。
+pub const MATERIALS: [&str; 3] = ["acrylic", "mica", "plain"];
 
 fn valid_material(material: &str) -> bool {
     MATERIALS.contains(&material)
@@ -173,6 +174,7 @@ pub fn load(conn: &Connection, data_dir: &str, version: &str) -> Result<Settings
             let mut s: Settings = serde_json::from_value(v.clone()).map_err(|e| e.to_string())?;
             migrate_legacy(&mut s, &v);
             migrate_panel_appearance(&mut s, &v);
+            normalize_materials(&mut s);
             s
         }
         None => Settings::default(),
@@ -510,6 +512,19 @@ fn migrate_legacy(s: &mut Settings, v: &serde_json::Value) {
     });
 }
 
+/// 「模糊」（Win10 BlurBehind）与亚克力观感一致且在 Win11 上渲染异常，
+/// 已从材质列表移除：存量配置里的 blur 统一迁移为 acrylic。
+fn normalize_materials(s: &mut Settings) {
+    for pod in &mut s.pods {
+        if pod.material == "blur" {
+            pod.material = "acrylic".into();
+        }
+        if pod.panel_material == "blur" {
+            pod.panel_material = "acrylic".into();
+        }
+    }
+}
+
 /// 1.2 及更早的存储没有面板独立外观字段：面板沿用该匣的材质与不透明度。
 /// 只回填存储中确实缺失的字段，避免每次加载覆盖用户已保存的值。
 fn migrate_panel_appearance(s: &mut Settings, v: &serde_json::Value) {
@@ -572,6 +587,7 @@ pub fn merge_persist(
     let mut candidate: Settings = serde_json::from_value(raw.clone()).map_err(|e| e.to_string())?;
     migrate_legacy(&mut candidate, &raw);
     migrate_panel_appearance(&mut candidate, &raw);
+    normalize_materials(&mut candidate);
     candidate.version = version.to_string();
     candidate.data_dir = data_dir.to_string();
     validate(&candidate, data_dir)?;
@@ -764,7 +780,7 @@ mod tests {
                     "stagingFolder": stage_two,
                     "opacity": 1.0,
                     "material": "acrylic",
-                    "panelMaterial": "blur",
+                    "panelMaterial": "acrylic",
                     "panelOpacity": 1.0,
                     "panelColor": "",
                     "panelWidth": 300,
@@ -797,7 +813,7 @@ mod tests {
         assert!(!loaded.pods[0].auto_hide);
         assert_eq!(loaded.pods[0].auto_hide_delay_ms, 480);
         assert_eq!(loaded.pods[1].drop_action, "shortcut");
-        assert_eq!(loaded.pods[1].panel_material, "blur");
+        assert_eq!(loaded.pods[1].panel_material, "acrylic");
         assert!(loaded.pods[1].auto_hide);
         assert_eq!(loaded.pods[1].bar_width, 36);
         assert!(!loaded.pods[1].enabled);
@@ -853,7 +869,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let data_dir = tmp.path().join("data").to_string_lossy().to_string();
 
-        for good in ["acrylic", "mica", "blur", "plain"] {
+        for good in ["acrylic", "mica", "plain"] {
             let mut candidate = pod(1, &tmp.path().join("stage"));
             candidate.material = good.into();
             candidate.panel_material = good.into();
@@ -863,7 +879,7 @@ mod tests {
             };
             assert!(validate(&settings, &data_dir).is_ok(), "材质 {good} 应有效");
         }
-        for bad in ["glass", "frosted", "MICA", ""] {
+        for bad in ["blur", "glass", "frosted", "MICA", ""] {
             let mut candidate = pod(1, &tmp.path().join("stage"));
             candidate.material = bad.into();
             let settings = Settings {
@@ -923,6 +939,32 @@ mod tests {
         .unwrap();
         assert!(s.auto_block.enabled);
         assert_eq!(s.auto_block.apps, vec!["Game.exe".to_string()]);
+    }
+
+    #[test]
+    fn blur_material_migrates_to_acrylic() {
+        let c = conn();
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path().join("data").to_string_lossy().to_string();
+        let stage = tmp.path().join("stage").to_string_lossy().to_string();
+        db::kv_set(
+            &c,
+            KEY,
+            &serde_json::json!({
+                "theme": "system",
+                "pods": [{
+                    "id": 1, "name": "匣", "edge": "left", "stagingFolder": stage,
+                    "material": "blur", "panelMaterial": "blur"
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let s = load(&c, &data_dir, "1.3.0").unwrap();
+        assert_eq!(s.pods[0].material, "acrylic");
+        assert_eq!(s.pods[0].panel_material, "acrylic");
+        // 迁移结果合法，可直接通过校验。
+        assert!(validate(&s, &data_dir).is_ok());
     }
 
     #[test]
