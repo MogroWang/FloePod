@@ -43,8 +43,12 @@ export const ipc = {
     invoke(Commands.CreatePod, { config, reuseExisting }),
   updatePod: (podId: number, patch: Partial<Pod>): Promise<Pod | null> =>
     invoke(Commands.UpdatePod, { podId, patch }),
-  deletePod: (podId: number, recycleFiles: boolean): Promise<void> =>
-    invoke(Commands.DeletePod, { podId, recycleFiles }),
+  /**
+   * 删除匣。mode：keep = 仅解除关联（文件保留）；folder = 暂存文件夹连同
+   * 内容一起移入回收站。调用方负责先向用户确认。
+   */
+  deletePod: (podId: number, mode: "keep" | "folder"): Promise<void> =>
+    invoke(Commands.DeletePod, { podId, mode }),
   saveSettings: (patch: Partial<Settings>): Promise<Settings> =>
     invoke(Commands.SaveSettings, { patch }),
 

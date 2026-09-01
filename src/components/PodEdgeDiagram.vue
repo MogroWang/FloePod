@@ -1,9 +1,9 @@
 <script setup lang="ts">
 /**
- * 位置状态示意图：圆角矩形代表屏幕，当前边高亮，
- * 小蓝点表示匣的位置，可直接沿高亮边拖动定位（也支持方向键微调）。
- * 拖动过程实时上报 update:offset 供预览，松手（或按键）后上报 commit 保存，
- * 与「沿边缘位置」滑杆共用同一份草稿状态。
+ * 位置状态示意图：圆角矩形代表屏幕，靠近哪条边蓝点就贴哪条边。
+ * 小蓝点可以随意拖动：拖到另一条边附近即切换所在边，同时更新沿边位置
+ * （也支持方向键微调，Shift 加速）。拖动过程实时上报 update:offset 预览，
+ * 松手后上报 commit 保存；切换边时立即上报 update:edge 由宿主保存。
  */
 import { computed, ref } from "vue";
 
@@ -14,6 +14,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
+  (e: "update:edge", value: string): void;
   (e: "update:offset", value: number): void;
   (e: "commit", value: number): void;
 }>();
@@ -27,12 +28,17 @@ const EDGE_LABELS: Record<string, string> = {
 
 const VERTICAL_EDGES = new Set(["left", "right"]);
 
+const screenEl = ref<HTMLElement | null>(null);
+const dragging = ref(false);
+/** 拖动中的所在边：跟随指针即时变化，不等宿主保存回流。 */
+const dragEdge = ref(props.edge);
+
+const displayEdge = computed(() => (dragging.value ? dragEdge.value : props.edge));
 const pct = computed(() => Math.round(props.offset * 100));
-const vertical = computed(() => VERTICAL_EDGES.has(props.edge));
 
 const dotStyle = computed<Record<string, string>>(() => {
   const p = `${pct.value}%`;
-  switch (props.edge) {
+  switch (displayEdge.value) {
     case "top":
       return { left: p, top: "0" };
     case "bottom":
@@ -45,42 +51,62 @@ const dotStyle = computed<Record<string, string>>(() => {
 });
 
 const caption = computed(() => {
-  const parts = [EDGE_LABELS[props.edge] ?? "?", `${pct.value}%`];
+  const parts = [EDGE_LABELS[displayEdge.value] ?? "?", `${pct.value}%`];
   if (props.monitorLabel) parts.push(props.monitorLabel);
   return parts.join(" · ");
 });
 
-/* --- 小蓝点拖动定位 --- */
-const screenEl = ref<HTMLElement | null>(null);
-const dragging = ref(false);
+/* --- 蓝点拖动定位（可跨边切换） --- */
 
 function clampOffset(value: number): number {
   return Math.round(Math.min(1, Math.max(0, value)) * 100) / 100;
 }
 
-function offsetFromPointer(event: PointerEvent): number {
-  const el = screenEl.value;
-  if (!el) return props.offset;
-  const rect = el.getBoundingClientRect();
-  if (rect.width <= 0 || rect.height <= 0) return props.offset;
-  const raw = vertical.value
-    ? (event.clientY - rect.top) / rect.height
-    : (event.clientX - rect.left) / rect.width;
-  return clampOffset(raw);
+/** 指针落在哪条边的感应区（每条边 18% 的带状区域）；中间区域返回 null 不切边。 */
+function edgeUnderPointer(rect: DOMRect, x: number, y: number): string | null {
+  const band = 0.18;
+  if (y <= rect.height * band) return "top";
+  if (y >= rect.height * (1 - band)) return "bottom";
+  if (x <= rect.width * band) return "left";
+  if (x >= rect.width * (1 - band)) return "right";
+  return null;
+}
+
+function projectedOffset(rect: DOMRect, edge: string, x: number, y: number): number {
+  return VERTICAL_EDGES.has(edge)
+    ? clampOffset(y / rect.height)
+    : clampOffset(x / rect.width);
 }
 
 function onDotPointerDown(event: PointerEvent) {
   if (event.button !== 0) return;
+  const el = screenEl.value;
+  if (!el) return;
   dragging.value = true;
+  dragEdge.value = props.edge;
   // 捕获指针：拖出示意图边界后仍能继续调整，松手前事件始终派发给蓝点。
   (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-  emit("update:offset", offsetFromPointer(event));
+  const rect = el.getBoundingClientRect();
+  emit(
+    "update:offset",
+    projectedOffset(rect, dragEdge.value, event.clientX - rect.left, event.clientY - rect.top),
+  );
   event.preventDefault();
 }
 
 function onDotPointerMove(event: PointerEvent) {
   if (!dragging.value) return;
-  emit("update:offset", offsetFromPointer(event));
+  const el = screenEl.value;
+  if (!el) return;
+  const rect = el.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const y = event.clientY - rect.top;
+  const edge = edgeUnderPointer(rect, x, y);
+  if (edge && edge !== dragEdge.value) {
+    dragEdge.value = edge;
+    emit("update:edge", edge);
+  }
+  emit("update:offset", projectedOffset(rect, dragEdge.value, x, y));
 }
 
 function onDotPointerUp(event: PointerEvent) {
@@ -88,7 +114,11 @@ function onDotPointerUp(event: PointerEvent) {
   dragging.value = false;
   const el = event.currentTarget as HTMLElement | null;
   if (el?.hasPointerCapture(event.pointerId)) el.releasePointerCapture(event.pointerId);
-  emit("commit", offsetFromPointer(event));
+  const rect = screenEl.value?.getBoundingClientRect();
+  const offset = rect
+    ? projectedOffset(rect, dragEdge.value, event.clientX - rect.left, event.clientY - rect.top)
+    : props.offset;
+  emit("commit", offset);
 }
 
 /** 键盘微调：方向键 ±1%，Shift 加速到 ±5%。 */
@@ -110,16 +140,16 @@ function onDotKeydown(event: KeyboardEvent) {
 <template>
   <div class="edge-diagram">
     <div ref="screenEl" class="screen">
-      <span class="edge e-top" :class="{ on: edge === 'top' }" />
-      <span class="edge e-right" :class="{ on: edge === 'right' }" />
-      <span class="edge e-bottom" :class="{ on: edge === 'bottom' }" />
-      <span class="edge e-left" :class="{ on: edge === 'left' }" />
+      <span class="edge e-top" :class="{ on: displayEdge === 'top' }" />
+      <span class="edge e-right" :class="{ on: displayEdge === 'right' }" />
+      <span class="edge e-bottom" :class="{ on: displayEdge === 'bottom' }" />
+      <span class="edge e-left" :class="{ on: displayEdge === 'left' }" />
       <button
         type="button"
         class="dot"
         :class="{ dragging }"
         :style="dotStyle"
-        :aria-label="`沿边缘拖动定位，当前 ${caption}`"
+        :aria-label="`拖动定位，可拖到任意屏幕边缘；当前 ${caption}`"
         @pointerdown="onDotPointerDown"
         @pointermove="onDotPointerMove"
         @pointerup="onDotPointerUp"

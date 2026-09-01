@@ -1,10 +1,10 @@
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::db::{self, StagedItem};
+use crate::db;
 use crate::events;
 use crate::manager;
 use crate::settings::{self, Pod, Settings};
@@ -54,6 +54,7 @@ fn apply_patch(pod: &mut Pod, patch: &serde_json::Value) -> Result<(), String> {
             "material" => pod.material = string(value, field)?,
             "panelMaterial" => pod.panel_material = string(value, field)?,
             "panelOpacity" => pod.panel_opacity = numeric(value, field)?,
+            "panelColor" => pod.panel_color = string(value, field)?,
             "panelWidth" => {
                 pod.panel_width = u32::try_from(unsigned(value, field)?)
                     .map_err(|_| format!("字段 {field} 超出有效范围"))?;
@@ -188,49 +189,41 @@ pub fn update(app: AppHandle, pod_id: u64, patch: serde_json::Value) -> Result<P
     Ok(pod)
 }
 
-pub fn delete(app: AppHandle, pod_id: u64, recycle_files: bool) -> Result<(), String> {
+/// 删除匣。mode：
+/// - "keep"：仅解除关联，暂存文件夹与文件原样保留；
+/// - "folder"：把暂存文件夹连同全部内容移入回收站（可恢复），再删除匣。
+pub fn delete(app: AppHandle, pod_id: u64, mode: &str) -> Result<(), String> {
+    let recycle_folder = match mode {
+        "keep" => false,
+        "folder" => true,
+        other => return Err(format!("未知删除模式: {other}")),
+    };
     let state = app.state::<AppState>();
     let _settings_operation = state.settings_ops.lock().unwrap();
     let file_operation = state.file_ops.lock().unwrap();
-    let (current, items): (Settings, Vec<StagedItem>) = {
+    let current: Settings = {
         let connection = state.db.lock().unwrap();
-        (
-            staging::load_settings_from(&connection, &state)?,
-            db::items_of_pod(&connection, pod_id as i64)?,
-        )
+        staging::load_settings_from(&connection, &state)?
     };
 
-    if recycle_files {
+    if recycle_folder {
         settings::validate(&current, &staging::data_dir(&state))?;
         settings::validate_pod_for_io(&current, &staging::data_dir(&state), pod_id)?;
-        let validated: Vec<(&StagedItem, PathBuf)> = items
+        // 路径按匣配置重新解析，WebView 无法驱使删除任意目录。
+        let pod = current
+            .pods
             .iter()
-            .map(|item| staging::item_path(item, &current).map(|path| (item, path)))
-            .collect::<Result<_, _>>()?;
-        let mut removed_ids = Vec::new();
-        let mut failed = Vec::new();
-        for (item, path) in validated {
-            match fs::symlink_metadata(&path) {
-                Ok(_) => match trash::delete(&path) {
-                    Ok(()) => removed_ids.push(item.id),
-                    Err(error) => failed.push(format!("{}: {error}", item.name)),
-                },
-                Err(error) if error.kind() == io::ErrorKind::NotFound => removed_ids.push(item.id),
-                Err(error) => failed.push(format!("{}: {error}", item.name)),
+            .find(|pod| pod.id == pod_id)
+            .ok_or_else(|| "匣不存在".to_string())?;
+        let raw = pod.staging_folder.trim();
+        if !raw.is_empty() {
+            let folder = settings::resolve_path(Path::new(raw))?;
+            match fs::symlink_metadata(&folder) {
+                Ok(_) => trash::delete(&folder)
+                    .map_err(|error| format!("无法把暂存文件夹移入回收站: {error}"))?,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(format!("无法访问暂存文件夹: {error}")),
             }
-        }
-        if !failed.is_empty() {
-            if !removed_ids.is_empty() {
-                let mut connection = state.db.lock().unwrap();
-                let transaction = connection
-                    .transaction()
-                    .map_err(|error| error.to_string())?;
-                db::delete_items_by_ids(&transaction, &removed_ids)?;
-                transaction.commit().map_err(|error| error.to_string())?;
-                state.mark_staged();
-                events::emit_items_changed(&app, pod_id);
-            }
-            return Err(format!("部分文件无法移入回收站：{}", failed.join("；")));
         }
     }
 

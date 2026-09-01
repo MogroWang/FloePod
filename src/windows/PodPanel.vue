@@ -41,9 +41,10 @@ const staging = useStagingStore();
 const pod = computed(() => settingsStore.pod(props.podId));
 const edge = computed(() => pod.value?.edge ?? "left");
 const panelStyle = computed<Record<string, string>>(() => {
-  // 面板不透明度独立于胶囊条；旧配置缺失时回退匣的不透明度。
+  // 面板填充色与不透明度独立于胶囊条；旧配置缺失时回退匣的不透明度。
   const opacity = clampOpacity(pod.value?.panelOpacity ?? pod.value?.opacity);
-  return { "--pod-opacity": `${opacity * 100}%` };
+  const fill = pod.value?.panelColor?.trim() || "var(--surface)";
+  return { "--pod-opacity": `${opacity * 100}%`, "--pod-fill": fill };
 });
 
 const mode = ref<PanelMode>("list");
@@ -949,7 +950,7 @@ function executeInlineMenu(spec: MenuItemSpec) {
           </button>
         </div>
       </template>
-      <template v-else-if="items.length > 0">
+      <template v-else>
         <div class="foot-left">
           <span class="drag-mode-label">拖出时：</span>
           <SegmentedControl
@@ -961,7 +962,7 @@ function executeInlineMenu(spec: MenuItemSpec) {
             :disabled="anyBusy"
           />
         </div>
-        <div class="foot-right">
+        <div v-if="items.length > 0" class="foot-right">
           <button type="button" class="foot-btn ghost" :disabled="anyBusy" @click="selectAll">全选</button>
           <button type="button" class="foot-btn ghost danger" :disabled="anyBusy" @click="clearAll">
             {{ confirmClear ? "确认清空？" : "清空" }}
@@ -993,7 +994,7 @@ function executeInlineMenu(spec: MenuItemSpec) {
   flex-direction: column;
   background: color-mix(
     in srgb,
-    var(--surface) var(--pod-opacity, 100%),
+    var(--pod-fill, var(--surface)) var(--pod-opacity, 100%),
     transparent
   );
   border-radius: var(--radius-panel);

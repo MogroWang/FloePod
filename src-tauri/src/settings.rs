@@ -76,6 +76,8 @@ pub struct Pod {
     pub panel_material: String,
     /// 面板不透明度 0.1 - 1.0；与胶囊条不透明度独立设置。
     pub panel_opacity: f64,
+    /// 面板填充色（#RGB/#RRGGBB/#RRGGBBAA）；空串 = 跟随主题表面色。
+    pub panel_color: String,
     pub panel_width: u32,
     pub hover_delay_ms: u64,
     /// 鼠标离开后自动收起面板。
@@ -107,6 +109,7 @@ impl Default for Pod {
             material: "acrylic".into(),
             panel_material: "acrylic".into(),
             panel_opacity: 1.0,
+            panel_color: String::new(),
             panel_width: 380,
             hover_delay_ms: 120,
             auto_hide: true,
@@ -295,8 +298,8 @@ pub fn path_key(path: &Path) -> String {
     }
 }
 
-/// 校验边框颜色：空串（跟随主题）或 #RGB / #RRGGBB / #RRGGBBAA 十六进制色。
-fn valid_border_color(raw: &str) -> bool {
+/// 校验十六进制颜色：空串（跟随主题）或 #RGB / #RRGGBB / #RRGGBBAA。
+fn valid_hex_color(raw: &str) -> bool {
     let body = match raw.strip_prefix('#') {
         Some(body) => body,
         None => return false,
@@ -393,7 +396,10 @@ fn validate_impl(s: &Settings, data_dir: &str, allow_missing_roots: bool) -> Res
         if pod.corner_radius > 64 {
             return Err(format!("匣「{}」的圆角无效", pod.name));
         }
-        if !pod.border_color.is_empty() && !valid_border_color(&pod.border_color) {
+        if !pod.panel_color.is_empty() && !valid_hex_color(&pod.panel_color) {
+            return Err(format!("匣「{}」的面板填充色无效", pod.name));
+        }
+        if !pod.border_color.is_empty() && !valid_hex_color(&pod.border_color) {
             return Err(format!("匣「{}」的边框颜色无效", pod.name));
         }
         if !pod.border_opacity.is_finite() || !(0.0..=1.0).contains(&pod.border_opacity) {
@@ -737,6 +743,7 @@ mod tests {
                     "material": "plain",
                     "panelMaterial": "mica",
                     "panelOpacity": 0.9,
+                    "panelColor": "#aabbcc",
                     "panelWidth": 512,
                     "hoverDelayMs": 600,
                     "autoHide": false,
@@ -759,6 +766,7 @@ mod tests {
                     "material": "acrylic",
                     "panelMaterial": "blur",
                     "panelOpacity": 1.0,
+                    "panelColor": "",
                     "panelWidth": 300,
                     "hoverDelayMs": 0,
                     "autoHide": true,
@@ -785,6 +793,7 @@ mod tests {
         assert_eq!(loaded.pods[0].border_opacity, 0.4);
         assert_eq!(loaded.pods[0].panel_material, "mica");
         assert_eq!(loaded.pods[0].panel_opacity, 0.9);
+        assert_eq!(loaded.pods[0].panel_color, "#aabbcc");
         assert!(!loaded.pods[0].auto_hide);
         assert_eq!(loaded.pods[0].auto_hide_delay_ms, 480);
         assert_eq!(loaded.pods[1].drop_action, "shortcut");

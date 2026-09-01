@@ -45,8 +45,10 @@ export interface Pod {
   material: Material;
   /** 面板材质；与胶囊条材质独立设置。 */
   panelMaterial: Material;
-  /** 面板不透明度 0.1-1；与胶囊条不透明度独立设置。 */
+  /** 面板填充色不透明度 0.1-1；作用于面板背景填充色。 */
   panelOpacity: number;
+  /** 面板填充色（#RGB/#RRGGBB/#RRGGBBAA）；空字符串表示跟随主题表面色。 */
+  panelColor: string;
   panelWidth: number;
   hoverDelayMs: number;
   /** 鼠标离开后是否自动收起面板。 */

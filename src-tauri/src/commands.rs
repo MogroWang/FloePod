@@ -71,8 +71,8 @@ pub async fn update_pod(
 }
 
 #[tauri::command]
-pub async fn delete_pod(app: AppHandle, pod_id: u64, recycle_files: bool) -> Result<(), String> {
-    pods::delete(app, pod_id, recycle_files)
+pub async fn delete_pod(app: AppHandle, pod_id: u64, mode: String) -> Result<(), String> {
+    pods::delete(app, pod_id, &mode)
 }
 
 #[tauri::command]

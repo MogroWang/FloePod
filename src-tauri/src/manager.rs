@@ -262,10 +262,40 @@ pub fn place_pod_bar(app: &AppHandle, pod: &Pod, accepting: bool) {
     let Some(bar) = pod_bar(app, pod.id) else {
         return;
     };
-    if let Some((x, y, w, h)) = bar_geometry(app, pod, accepting) {
-        let _ = bar.set_size(PhysicalSize::new(w as u32, h as u32));
-        let _ = bar.set_position(PhysicalPosition::new(x, y));
+    let Some((x, y, w, h)) = bar_geometry(app, pod, accepting) else {
+        return;
+    };
+    let _ = bar.set_size(PhysicalSize::new(w as u32, h as u32));
+    let _ = bar.set_position(PhysicalPosition::new(x, y));
+    apply_bar_region(&bar, pod, w, h);
+}
+
+/// 材质 != plain 时把窗口裁剪成胶囊形状（贴屏侧直角、外侧圆角随设置），
+/// 让系统材质与胶囊条的 CSS 圆角一致；plain 时清除区域恢复矩形。
+fn apply_bar_region(bar: &WebviewWindow, pod: &Pod, w: i32, h: i32) {
+    let Ok(hwnd) = bar.hwnd() else {
+        return;
+    };
+    if pod.material == "plain" {
+        win::set_bar_region(hwnd.0 as isize, w, h, 0, &pod.edge);
+        return;
     }
+    let scale = bar.scale_factor().unwrap_or(1.0);
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    // 与 CSS 的圆角收敛规则对齐：外侧圆角不能超过短边，且两角之和不超过长边。
+    let (short, long) = if matches!(pod.edge.as_str(), "left" | "right") {
+        (w, h)
+    } else {
+        (h, w)
+    };
+    let radius = (pod.corner_radius as f64 * scale)
+        .round()
+        .clamp(0.0, (short.min(long / 2)) as f64) as i32;
+    win::set_bar_region(hwnd.0 as isize, w, h, radius, &pod.edge);
 }
 
 /// 把请求的面板矩形限制在显示器工作矩形内。
@@ -477,10 +507,18 @@ fn apply_material(window: &WebviewWindow, material: &str) {
     use tauri::window::{Effect, EffectsBuilder};
     let effect = match material {
         "acrylic" => Some(Effect::Acrylic),
-        // 云母仅在 Windows 11 可用，模糊对应 Win10 的 BlurBehind；
-        // 不支持的系统上 set_effects 返回 Err，忽略后表现为普通半透明。
+        // 云母仅在 Windows 11 可用；模糊对应 Win10 的 BlurBehind，
+        // 但 Win11（≥22000）上系统会把 BlurBehind 渲染成整块黑，
+        // 因此在 Win11 上回退为亚克力（观感最接近）。不支持的系统上
+        // set_effects 返回 Err，忽略后表现为普通半透明。
         "mica" => Some(Effect::Mica),
-        "blur" => Some(Effect::Blur),
+        "blur" => {
+            if win::windows_build() >= 22_000 {
+                Some(Effect::Acrylic)
+            } else {
+                Some(Effect::Blur)
+            }
+        }
         _ => None,
     };
     match effect {
@@ -494,24 +532,44 @@ fn apply_material(window: &WebviewWindow, material: &str) {
     }
 }
 
-/// 把与运行态相关的外观配置同步进 PodRuntime（自动收起设置 + 两个窗口材质）。
-/// 返回 (胶囊条材质变化, 面板材质变化)，供调用方只在变化时重设窗口效果，
-/// 避免每次显示都重设亚克力引起重绘闪烁。
-fn sync_runtime_config(app: &AppHandle, pod: &Pod) -> (bool, bool) {
+/// 把与运行态相关的配置同步进 PodRuntime（自动收起设置 + 胶囊条材质）。
+/// 返回胶囊条材质是否变化，供调用方只在变化时重设窗口效果。
+/// 面板材质不在这里处理：必须对隐藏的面板也落地，见 apply_panel_material_if_changed。
+fn sync_runtime_config(app: &AppHandle, pod: &Pod) -> bool {
     let state = app.state::<AppState>();
     let mut guard = state.pods.lock().unwrap();
     let runtime = guard.entry(pod.id).or_default();
     runtime.auto_hide_enabled = pod.auto_hide;
     runtime.auto_hide_delay_ms = pod.auto_hide_delay_ms;
     let bar_changed = runtime.bar_material.as_deref() != Some(pod.material.as_str());
-    let panel_changed = runtime.panel_material.as_deref() != Some(pod.panel_material.as_str());
     if bar_changed {
         runtime.bar_material = Some(pod.material.clone());
     }
-    if panel_changed {
-        runtime.panel_material = Some(pod.panel_material.clone());
+    bar_changed
+}
+
+/// 面板材质只在变化时重设（每次显示都重设亚克力会引起重绘闪烁）。
+///
+/// 必须对隐藏 / 未固定的面板同样生效：此前只在面板可见时应用，而运行态
+/// 已经记录了新材质，显示路径的变化检测就再也不触发，导致「改材质时
+/// 面板没固定」永远不生效。
+fn apply_panel_material_if_changed(app: &AppHandle, pod: &Pod) {
+    let changed = {
+        let state = app.state::<AppState>();
+        let mut guard = state.pods.lock().unwrap();
+        let runtime = guard.entry(pod.id).or_default();
+        if runtime.panel_material.as_deref() == Some(pod.panel_material.as_str()) {
+            false
+        } else {
+            runtime.panel_material = Some(pod.panel_material.clone());
+            true
+        }
+    };
+    if changed {
+        if let Some(panel) = pod_panel(app, pod.id) {
+            apply_material(&panel, &pod.panel_material);
+        }
     }
-    (bar_changed, panel_changed)
 }
 
 fn panel_snapshot(app: &AppHandle, id: u64) -> PanelSnapshot {
@@ -733,20 +791,8 @@ fn show_panel_locked(app: &AppHandle, id: u64, pod: &Pod, pin_on_show: bool) -> 
         dismiss_other_panels_locked(app, id);
     }
     place_panel(app, pod);
-    // 材质只在变化时重设：每次显示都重设亚克力会引起重绘闪烁。
-    let panel_material_changed = {
-        let mut guard = state.pods.lock().unwrap();
-        let runtime = guard.entry(id).or_default();
-        if runtime.panel_material.as_deref() == Some(pod.panel_material.as_str()) {
-            false
-        } else {
-            runtime.panel_material = Some(pod.panel_material.clone());
-            true
-        }
-    };
-    if panel_material_changed {
-        apply_material(&panel, &pod.panel_material);
-    }
+    // 材质只在变化时重设；正常由 apply_settings 落地，这里兜底检测一次。
+    apply_panel_material_if_changed(app, pod);
     let _ = panel.set_title(&format!("{} 面板", pod.name));
     win::prefer_rounded_corners(hwnd.0 as isize);
     win::show_no_activate(hwnd.0 as isize);
@@ -1027,7 +1073,9 @@ pub fn apply_settings(app: &AppHandle, s: &Settings) {
         sync_pods_with_settings(app, s);
 
         for pod in s.pods.iter().filter(|p| p.enabled) {
-            let (bar_material_changed, panel_material_changed) = sync_runtime_config(app, pod);
+            let bar_material_changed = sync_runtime_config(app, pod);
+            // 面板材质无论可见与否都要落地，否则未固定的面板改材质永远不生效。
+            apply_panel_material_if_changed(app, pod);
             place_pod_bar(app, pod, false);
             if let Some(bar) = pod_bar(app, pod.id) {
                 let _ = bar.set_title(&pod.name);
@@ -1047,11 +1095,6 @@ pub fn apply_settings(app: &AppHandle, s: &Settings) {
                 .unwrap_or(false);
             if panel_visible {
                 place_panel(app, pod);
-                if panel_material_changed {
-                    if let Some(panel) = pod_panel(app, pod.id) {
-                        apply_material(&panel, &pod.panel_material);
-                    }
-                }
                 emit_panel_snapshot(app, pod.id);
             }
         }

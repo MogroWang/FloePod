@@ -130,6 +130,67 @@ pub fn disable_rounding(hwnd: isize) {
     }
 }
 
+/// 把窗口裁剪成「贴屏侧直角、外侧两角按 radius（物理像素）圆角」的胶囊区域。
+///
+/// 系统材质（亚克力/云母/模糊）绘制在整个窗口矩形上，无法跟随 WebView 里的
+/// CSS 圆角：不裁剪时材质会在胶囊圆角外露出直角。region 只在材质 != plain 时设置。
+/// 区域句柄交给系统接管，无需手动释放；radius <= 0 时清除区域恢复矩形。
+/// 贴屏侧通过把圆角矩形延伸出窗口外再由窗口自身裁掉的方式保持直角。
+pub fn set_bar_region(hwnd: isize, width: i32, height: i32, radius: i32, edge: &str) {
+    use windows_sys::Win32::Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn};
+    unsafe {
+        let region = if radius <= 0 {
+            std::ptr::null_mut()
+        } else {
+            let (left, top, right, bottom) = match edge {
+                "left" => (-radius, 0, width, height),
+                "right" => (0, 0, width + radius, height),
+                "top" => (0, -radius, width, height),
+                _ => (0, 0, width, height + radius),
+            };
+            CreateRoundRectRgn(left, top, right, bottom, radius * 2, radius * 2)
+        };
+        // 返回 0 表示失败，此时需自行释放区域避免泄漏。
+        if SetWindowRgn(hwnd as *mut c_void, region, 1) == 0 && !region.is_null() {
+            DeleteObject(region);
+        }
+    }
+}
+
+/// Windows 构建号（Win10 为 1904x，Win11 ≥ 22000）。读取失败返回 0。
+pub fn windows_build() -> u32 {
+    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
+
+    fn wide(value: &str) -> Vec<u16> {
+        value.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    static CACHE: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *CACHE.get_or_init(|| unsafe {
+        let subkey = wide("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion");
+        let value = wide("CurrentBuildNumber");
+        let mut buf = [0u16; 16];
+        let mut size = (buf.len() * std::mem::size_of::<u16>()) as u32;
+        let status = RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            subkey.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            buf.as_mut_ptr().cast(),
+            &mut size,
+        );
+        if status != 0 {
+            return 0;
+        }
+        let len = buf.iter().position(|c| *c == 0).unwrap_or(buf.len());
+        String::from_utf16_lossy(&buf[..len])
+            .trim()
+            .parse()
+            .unwrap_or(0)
+    })
+}
+
 /// 请求 Windows 11 使用系统圆角（DWMWCP_ROUND）。
 /// 面板窗口：CSS 负责裁切 WebView 内容，这里让原生窗口的
 /// 阴影/亚克力背景与同一圆角轮廓对齐；旧版 Windows 会忽略不支持的属性。

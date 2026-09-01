@@ -75,9 +75,9 @@ let oobeCreatedPod: Pod | null = null;
 
 const EDGES: { value: Edge; label: string }[] = [
   { value: "top", label: "上" },
-  { value: "right", label: "右" },
   { value: "bottom", label: "下" },
   { value: "left", label: "左" },
+  { value: "right", label: "右" },
 ];
 
 const DROP_ACTIONS: { value: DropAction; label: string }[] = [
@@ -316,22 +316,25 @@ async function commitRename() {
   await savePod(id, { name: value });
 }
 
-/** 边框颜色：空字符串表示跟随主题；3 位十六进制展开成 6 位供取色器回显。
+/** 颜色字段：空字符串表示跟随主题；3 位十六进制展开成 6 位供取色器回显。
  *  绑定 @change（确认选色后才触发），选色过程中不会实时改匣的外观。 */
-const BORDER_COLOR_FALLBACK = "#ffffff";
+const HEX_COLOR_FALLBACK = "#ffffff";
 
-function podBorderColorValue(pod: Pod): string {
-  const raw = pod.borderColor;
+function podHexColorValue(raw: string): string {
   const triple = /^#([0-9a-fA-F])([0-9a-fA-F])([0-9a-fA-F])$/.exec(raw);
   if (triple) {
     return `#${triple[1]}${triple[1]}${triple[2]}${triple[2]}${triple[3]}${triple[3]}`;
   }
-  return raw || BORDER_COLOR_FALLBACK;
+  return raw || HEX_COLOR_FALLBACK;
 }
 
-async function commitPodBorderColor(pod: Pod, event: Event) {
+async function commitPodHexColor(
+  pod: Pod,
+  field: "borderColor" | "panelColor",
+  event: Event,
+) {
   const value = (event.target as HTMLInputElement).value;
-  await savePod(pod.id, { borderColor: value });
+  await savePod(pod.id, { [field]: value });
 }
 
 async function commitPodMonitor(pod: Pod, event: Event) {
@@ -385,6 +388,7 @@ async function confirmAddPod() {
       material: "acrylic",
       panelMaterial: "acrylic",
       panelOpacity: 1,
+      panelColor: "",
       panelWidth: 380,
       hoverDelayMs: 120,
       autoHide: true,
@@ -408,24 +412,50 @@ async function confirmAddPod() {
   }
 }
 
-async function removePod(pod: Pod) {
+/** 删除匣：先选择「仅移除匣」还是「连暂存文件夹一起删除」。 */
+const deleteDialog = ref<{ pod: Pod } | null>(null);
+
+function requestRemovePod(pod: Pod) {
+  deleteDialog.value = { pod };
+}
+
+function cancelRemovePod() {
+  deleteDialog.value = null;
+}
+
+async function doRemovePod(pod: Pod, mode: "keep" | "folder", done: string) {
   if (deletingPodIds.has(pod.id)) return;
   deletingPodIds.add(pod.id);
   try {
-    const message = `删除「${pod.name}」？其中的暂存文件会一并移入回收站。`;
-    const ok = ipc.inTauri
-      ? await ask(message, { title: "删除匣", kind: "warning" })
-      : window.confirm(message);
-    if (!ok) return;
-    await ipc.deletePod(pod.id, true);
+    await ipc.deletePod(pod.id, mode);
     await settingsStore.refreshPods();
-    showToast("已删除");
+    showToast(done);
   } catch (err) {
     console.error(err);
     showToast("删除失败，请重试");
   } finally {
     deletingPodIds.delete(pod.id);
   }
+}
+
+async function removePodKeepingFiles() {
+  const target = deleteDialog.value?.pod;
+  if (!target) return;
+  deleteDialog.value = null;
+  await doRemovePod(target, "keep", "已移除匣（暂存文件夹与文件保留）");
+}
+
+/** 连文件夹删除是重操作：选择后再弹一次原生确认。 */
+async function removePodWithFolder() {
+  const target = deleteDialog.value?.pod;
+  if (!target) return;
+  deleteDialog.value = null;
+  const message = `将把暂存文件夹「${target.stagingFolder}」连同全部内容移入回收站，并删除匣「${target.name}」。确定继续？`;
+  const ok = ipc.inTauri
+    ? await ask(message, { title: "删除匣与文件", kind: "warning" })
+    : window.confirm(message);
+  if (!ok) return;
+  await doRemovePod(target, "folder", "已删除匣（暂存文件夹已移入回收站）");
 }
 
 function oobePodConfig(): Omit<Pod, "id"> {
@@ -439,6 +469,7 @@ function oobePodConfig(): Omit<Pod, "id"> {
     material: oobe.value.material,
     panelMaterial: oobe.value.material,
     panelOpacity: Number(oobe.value.opacity),
+    panelColor: "",
     panelWidth: 380,
     hoverDelayMs: 120,
     autoHide: true,
@@ -918,12 +949,9 @@ const PAGES = [
 
               <template v-else-if="page === 'block'">
                 <h2 class="page-title">自动屏蔽</h2>
-                <p class="page-desc">
-                  玩游戏或使用全屏应用时自动隐藏屏幕边缘的所有浮匣，避免误触；
-                  该应用离开前台后浮匣自动恢复，面板的固定与暂存内容不受影响。
-                </p>
+                <p class="page-desc">列表内的应用位于前台时自动隐藏全部浮匣，切走后自动恢复。</p>
                 <div class="settings-card">
-                  <SettingsRow label="启用自动屏蔽" hint="下列应用位于前台时隐藏全部匣，离开前台后自动恢复">
+                  <SettingsRow label="启用自动屏蔽" hint="按下方列表匹配前台应用">
                     <ToggleSwitch
                       :model-value="s.autoBlock.enabled"
                       @update:model-value="toggleAutoBlock"
@@ -936,7 +964,7 @@ const PAGES = [
                       <button type="button" class="btn" @click="pickBlockApp">选择程序…</button>
                     </div>
                     <p v-if="s.autoBlock.apps.length === 0" class="block-empty">
-                      还没有添加应用。可以选择程序文件，或手动输入进程名（如 game.exe）。
+                      还没有添加应用，按可执行文件名匹配（不区分大小写）。
                     </p>
                     <ul v-else class="block-list">
                       <li v-for="(app, index) in s.autoBlock.apps" :key="blockAppKey(app)" class="block-item">
@@ -974,16 +1002,13 @@ const PAGES = [
                     </div>
                   </div>
                 </div>
-                <p class="page-desc block-tip">
-                  提示：匹配按可执行文件名进行，不区分大小写；填写完整路径也可以。
-                </p>
               </template>
 
               <template v-else-if="page === 'pods'">
                 <div class="page-head">
                   <div>
                     <h2 class="page-title">匣</h2>
-                    <p class="page-desc">每个匣是贴在屏幕边缘的独立暂存点，可分别设置位置、显示器和保存文件夹；示意图上的小蓝点可以直接拖动定位。</p>
+                    <p class="page-desc">示意图上的蓝点可直接拖动到任意边缘定位。</p>
                   </div>
                   <button type="button" class="btn" :disabled="addPodCreating" @click="openAddDialog">
                     + 新建匣
@@ -1047,7 +1072,7 @@ const PAGES = [
                         title="删除此匣"
                         aria-label="删除此匣"
                         :disabled="deletingPodIds.has(pod.id)"
-                        @click="removePod(pod)"
+                        @click="requestRemovePod(pod)"
                       >
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
                           <path d="M5 7h14M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m3 0-1 13a1.5 1.5 0 0 1-1.5 1.4h-7A1.5 1.5 0 0 1 6.5 20L5.5 7" />
@@ -1063,6 +1088,7 @@ const PAGES = [
                         :edge="pod.edge"
                         :offset="podNumberValue(pod, 'offset')"
                         :monitor-label="monitorLabel(pod)"
+                        @update:edge="(e) => savePod(pod.id, { edge: e as Edge })"
                         @update:offset="(v) => previewPodNumber(pod.id, 'offset', v)"
                         @commit="(v) => commitPodNumber(pod, 'offset', v)"
                       />
@@ -1162,9 +1188,9 @@ const PAGES = [
                             <input
                               type="color"
                               class="color-input"
-                              :value="podBorderColorValue(pod)"
+                              :value="podHexColorValue(pod.borderColor)"
                               aria-label="边框颜色"
-                              @change="(e) => commitPodBorderColor(pod, e)"
+                              @change="(e) => commitPodHexColor(pod, 'borderColor', e)"
                             />
                             <span class="color-text">{{ pod.borderColor || "跟随主题" }}</span>
                           </label>
@@ -1219,14 +1245,37 @@ const PAGES = [
                         </div>
                       </div>
                       <div class="frow">
-                        <span class="flabel">面板不透明度</span>
+                        <span class="flabel">面板填充色</span>
+                        <div class="fctrl">
+                          <label class="color-field">
+                            <input
+                              type="color"
+                              class="color-input"
+                              :value="podHexColorValue(pod.panelColor)"
+                              aria-label="面板填充色"
+                              @change="(e) => commitPodHexColor(pod, 'panelColor', e)"
+                            />
+                            <span class="color-text">{{ pod.panelColor || "跟随主题" }}</span>
+                          </label>
+                          <button
+                            v-if="pod.panelColor"
+                            type="button"
+                            class="btn ghost"
+                            @click="savePod(pod.id, { panelColor: '' })"
+                          >
+                            重置
+                          </button>
+                        </div>
+                      </div>
+                      <div class="frow">
+                        <span class="flabel">面板填充色不透明度</span>
                         <div class="fctrl">
                           <RangeSlider
                             :value="podNumberValue(pod, 'panelOpacity')"
                             :min="0.1"
                             :max="1"
                             :step="0.01"
-                            aria-label="面板不透明度"
+                            aria-label="面板填充色不透明度"
                             @update:value="(v) => previewPodNumber(pod.id, 'panelOpacity', v)"
                             @commit="(v) => commitPodNumber(pod, 'panelOpacity', v)"
                           />
@@ -1343,6 +1392,25 @@ const PAGES = [
       </div>
     </template>
     </template>
+
+    <!-- 删除匣：选择仅移除还是连暂存文件夹一起删除 -->
+    <Transition name="modal">
+      <div v-if="deleteDialog" class="modal-layer" @pointerdown.self="cancelRemovePod">
+        <div class="modal-card" role="dialog" aria-modal="true" aria-label="删除匣">
+          <h3 class="modal-title">删除「{{ deleteDialog.pod.name }}」</h3>
+          <p class="modal-text">暂存文件夹：{{ deleteDialog.pod.stagingFolder || "未设置" }}</p>
+          <div class="modal-actions column">
+            <button type="button" class="btn" @click="removePodKeepingFiles">
+              仅移除匣（保留文件夹和文件）
+            </button>
+            <button type="button" class="btn danger" @click="removePodWithFolder">
+              删除匣，并把暂存文件夹与文件移入回收站
+            </button>
+            <button type="button" class="btn ghost" @click="cancelRemovePod">取消</button>
+          </div>
+        </div>
+      </div>
+    </Transition>
 
     <!-- 新建匣：先询问名称与文件夹位置 -->
     <Transition name="modal">
@@ -1623,13 +1691,18 @@ const PAGES = [
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 20px;
+  gap: 12px;
+}
+/* 标题旁的操作按钮不参与伸缩，避免被长描述挤变形 */
+.page-head .btn {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .page-desc {
   font-size: 12.5px;
   color: var(--ink-3);
-  line-height: 1.65;
-  margin: 0 0 18px;
+  line-height: 1.6;
+  margin: 0 0 14px;
 }
 .page-head .page-desc {
   margin-bottom: 18px;
@@ -1943,11 +2016,25 @@ select.input {
   font-size: 16px;
   font-weight: 650;
 }
+.modal-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
 .modal-actions {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
   margin-top: 2px;
+}
+.modal-actions.column {
+  flex-direction: column;
+  align-items: stretch;
+}
+.modal-actions.column .btn {
+  text-align: center;
 }
 .modal-enter-active,
 .modal-leave-active {
