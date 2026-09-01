@@ -880,17 +880,21 @@ mod tests {
         };
         assert!(validate(&settings, &data_dir).is_err());
 
-        let mut blocked = Settings::default();
-        blocked.auto_block = AutoBlock {
-            enabled: true,
-            apps: (0..65).map(|i| format!("app{i}.exe")).collect(),
+        let blocked = Settings {
+            auto_block: AutoBlock {
+                enabled: true,
+                apps: (0..65).map(|i| format!("app{i}.exe")).collect(),
+            },
+            ..Default::default()
         };
         assert!(validate(&blocked, &data_dir).is_err());
 
-        let mut blank = Settings::default();
-        blank.auto_block = AutoBlock {
-            enabled: true,
-            apps: vec!["   ".into()],
+        let blank = Settings {
+            auto_block: AutoBlock {
+                enabled: true,
+                apps: vec!["   ".into()],
+            },
+            ..Default::default()
         };
         assert!(validate(&blank, &data_dir).is_err());
     }
