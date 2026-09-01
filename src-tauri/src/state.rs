@@ -39,8 +39,14 @@ pub struct PodRuntime {
     /// 面板的 CSS 逻辑像素高度；设置原生窗口尺寸时再且只再乘一次 scale factor。
     pub panel_height: u32,
     pub last_change: Option<Instant>,
-    /// 已应用的窗口材质（避免每次显示都重设亚克力引起闪烁）
-    pub material: Option<String>,
+    /// 已应用的窗口材质（胶囊条 / 面板各自跟踪，避免重复重设引起闪烁）。
+    /// None 表示尚未应用过，下一次 apply / show 时必然落地。
+    pub bar_material: Option<String>,
+    pub panel_material: Option<String>,
+    /// 面板自动收起设置；apply_settings 时随配置刷新。
+    pub auto_hide_enabled: bool,
+    /// 鼠标离开后到自动收起的延迟（毫秒）。
+    pub auto_hide_delay_ms: u64,
 }
 
 /// 剪切拖出开始时捕获的文件身份。稳定版 Rust 当前使用创建时间、写入时间、
@@ -105,7 +111,10 @@ impl Default for PodRuntime {
             pending_drop: Vec::new(),
             panel_height: 0,
             last_change: None,
-            material: None,
+            bar_material: None,
+            panel_material: None,
+            auto_hide_enabled: true,
+            auto_hide_delay_ms: 320,
         }
     }
 }
@@ -165,6 +174,12 @@ pub struct AppState {
     pub next_drag_cut_token: AtomicU64,
     /// 用户的“显示 / 隐藏全部匣”选择。隐藏是临时暂停，不应销毁 pin/Ask 上下文。
     pub bars_visible: AtomicBool,
+    /// 「自动屏蔽」配置的内存快照（apply_settings 时刷新），供轮询线程低频读取，
+    /// 避免轮询线程反复读库。
+    pub auto_block_enabled: AtomicBool,
+    pub auto_block_apps: Mutex<Vec<String>>,
+    /// 进入屏蔽前匣的可见性；解除屏蔽后据此恢复，不覆盖用户的手动隐藏。
+    pub auto_block_restore: AtomicBool,
     /// 最近一次应用自身文件写入。必须使用单调时钟；系统墙钟回拨不能让 watcher
     /// 永久停留在“刚写入”的抑制窗口。
     pub last_stage: Mutex<Option<Instant>>,
@@ -186,6 +201,9 @@ impl AppState {
             drag_cut_tokens: Mutex::new(HashMap::new()),
             next_drag_cut_token: AtomicU64::new(1),
             bars_visible: AtomicBool::new(true),
+            auto_block_enabled: AtomicBool::new(false),
+            auto_block_apps: Mutex::new(Vec::new()),
+            auto_block_restore: AtomicBool::new(false),
             last_stage: Mutex::new(None),
             watcher_dirty: AtomicBool::new(false),
             watcher: Mutex::new(HashMap::new()),

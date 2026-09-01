@@ -52,11 +52,19 @@ fn apply_patch(pod: &mut Pod, patch: &serde_json::Value) -> Result<(), String> {
             "stagingFolder" => pod.staging_folder = string(value, field)?,
             "opacity" => pod.opacity = numeric(value, field)?,
             "material" => pod.material = string(value, field)?,
+            "panelMaterial" => pod.panel_material = string(value, field)?,
+            "panelOpacity" => pod.panel_opacity = numeric(value, field)?,
             "panelWidth" => {
                 pod.panel_width = u32::try_from(unsigned(value, field)?)
                     .map_err(|_| format!("字段 {field} 超出有效范围"))?;
             }
             "hoverDelayMs" => pod.hover_delay_ms = unsigned(value, field)?,
+            "autoHide" => {
+                pod.auto_hide = value
+                    .as_bool()
+                    .ok_or_else(|| format!("字段 {field} 必须是布尔值"))?;
+            }
+            "autoHideDelayMs" => pod.auto_hide_delay_ms = unsigned(value, field)?,
             "dropAction" => pod.drop_action = string(value, field)?,
             "barWidth" => {
                 pod.bar_width = u32::try_from(unsigned(value, field)?)
@@ -319,7 +327,11 @@ mod tests {
             "barWidth": "56",
             "cornerRadius": "12",
             "borderColor": "#80ffaa",
-            "borderOpacity": "0.4"
+            "borderOpacity": "0.4",
+            "panelMaterial": "mica",
+            "panelOpacity": "0.9",
+            "autoHide": false,
+            "autoHideDelayMs": "480"
         }))
         .unwrap();
         assert_eq!(pod.opacity, 0.85);
@@ -328,9 +340,14 @@ mod tests {
         assert_eq!(pod.corner_radius, 12);
         assert_eq!(pod.border_color, "#80ffaa");
         assert_eq!(pod.border_opacity, 0.4);
+        assert_eq!(pod.panel_material, "mica");
+        assert_eq!(pod.panel_opacity, 0.9);
+        assert!(!pod.auto_hide);
+        assert_eq!(pod.auto_hide_delay_ms, 480);
 
         let mut pod = Pod::default();
         assert!(apply_patch(&mut pod, &serde_json::json!({ "enabled": "yes" })).is_err());
+        assert!(apply_patch(&mut pod, &serde_json::json!({ "autoHide": "yes" })).is_err());
         assert!(apply_patch(&mut pod, &serde_json::json!({ "panelWidth": -1 })).is_err());
         assert!(apply_patch(&mut pod, &serde_json::json!({ "barWidth": -1 })).is_err());
         assert!(apply_patch(&mut pod, &serde_json::json!({ "cornerRadius": -1 })).is_err());

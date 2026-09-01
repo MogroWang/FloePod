@@ -21,7 +21,8 @@ const POD_BAR_LONG: u32 = 190;
 const POD_BAR_ACCEPT_GROW: u32 = 18;
 const PANEL_GAP: u32 = 10;
 const PANEL_MARGIN: u32 = 8;
-const PANEL_LEAVE_GRACE: Duration = Duration::from_millis(320);
+/// 自动屏蔽轮询间隔；前台进程切换的感知延迟上限。
+const AUTO_BLOCK_POLL: Duration = Duration::from_millis(600);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct MonitorGeometry {
@@ -474,32 +475,43 @@ fn sync_pods_with_settings(app: &AppHandle, s: &Settings) {
 
 fn apply_material(window: &WebviewWindow, material: &str) {
     use tauri::window::{Effect, EffectsBuilder};
-    if material == "acrylic" {
-        let config = EffectsBuilder::new().effects([Effect::Acrylic]).build();
-        let _ = window.set_effects(Some(config));
-    } else {
-        let _ = window.set_effects(None);
+    let effect = match material {
+        "acrylic" => Some(Effect::Acrylic),
+        // 云母仅在 Windows 11 可用，模糊对应 Win10 的 BlurBehind；
+        // 不支持的系统上 set_effects 返回 Err，忽略后表现为普通半透明。
+        "mica" => Some(Effect::Mica),
+        "blur" => Some(Effect::Blur),
+        _ => None,
+    };
+    match effect {
+        Some(effect) => {
+            let config = EffectsBuilder::new().effects([effect]).build();
+            let _ = window.set_effects(Some(config));
+        }
+        None => {
+            let _ = window.set_effects(None);
+        }
     }
 }
 
-/// 仅在材质变化时重设窗口效果：每次显示都重设亚克力会引起重绘闪烁。
-fn apply_material_once(app: &AppHandle, material: &str, id: u64) {
-    let changed = {
-        let state = app.state::<AppState>();
-        let mut guard = state.pods.lock().unwrap();
-        let r = guard.entry(id).or_default();
-        if r.material.as_deref() == Some(material) {
-            false
-        } else {
-            r.material = Some(material.to_string());
-            true
-        }
-    };
-    if changed {
-        if let Some(panel) = pod_panel(app, id) {
-            apply_material(&panel, material);
-        }
+/// 把与运行态相关的外观配置同步进 PodRuntime（自动收起设置 + 两个窗口材质）。
+/// 返回 (胶囊条材质变化, 面板材质变化)，供调用方只在变化时重设窗口效果，
+/// 避免每次显示都重设亚克力引起重绘闪烁。
+fn sync_runtime_config(app: &AppHandle, pod: &Pod) -> (bool, bool) {
+    let state = app.state::<AppState>();
+    let mut guard = state.pods.lock().unwrap();
+    let runtime = guard.entry(pod.id).or_default();
+    runtime.auto_hide_enabled = pod.auto_hide;
+    runtime.auto_hide_delay_ms = pod.auto_hide_delay_ms;
+    let bar_changed = runtime.bar_material.as_deref() != Some(pod.material.as_str());
+    let panel_changed = runtime.panel_material.as_deref() != Some(pod.panel_material.as_str());
+    if bar_changed {
+        runtime.bar_material = Some(pod.material.clone());
     }
+    if panel_changed {
+        runtime.panel_material = Some(pod.panel_material.clone());
+    }
+    (bar_changed, panel_changed)
 }
 
 fn panel_snapshot(app: &AppHandle, id: u64) -> PanelSnapshot {
@@ -679,7 +691,7 @@ fn hide_panel_window(app: &AppHandle, id: u64) {
 
 /// 单一活动面板：收起除 id 外所有「可见、未固定、列表模式」的面板。
 /// 固定（panel_pinned）以及正在拖入询问/冲突解决（mode != List）的面板不受影响。
-/// OLE 拖出中的面板也不受影响。
+/// 关闭了自动收起的面板等价于固定，同样不被收起；OLE 拖出中的面板也不受影响。
 /// 直接 SW_HIDE（无收起动画，Windows 自带窗口关闭动画），消除切换时的重叠竞争闪烁。
 /// 调用方必须持有 `AppState::panel_ops`。
 fn dismiss_other_panels_locked(app: &AppHandle, id: u64) {
@@ -690,7 +702,9 @@ fn dismiss_other_panels_locked(app: &AppHandle, id: u64) {
     };
     for pid in others {
         // 逐项在真正隐藏前重新判断，不使用可能已经过期的候选快照。
-        transition_to_hidden_locked(app, pid, PodRuntime::can_dismiss);
+        transition_to_hidden_locked(app, pid, |runtime| {
+            runtime.auto_hide_enabled && runtime.can_dismiss()
+        });
     }
 }
 
@@ -719,7 +733,20 @@ fn show_panel_locked(app: &AppHandle, id: u64, pod: &Pod, pin_on_show: bool) -> 
         dismiss_other_panels_locked(app, id);
     }
     place_panel(app, pod);
-    apply_material_once(app, &pod.material, id);
+    // 材质只在变化时重设：每次显示都重设亚克力会引起重绘闪烁。
+    let panel_material_changed = {
+        let mut guard = state.pods.lock().unwrap();
+        let runtime = guard.entry(id).or_default();
+        if runtime.panel_material.as_deref() == Some(pod.panel_material.as_str()) {
+            false
+        } else {
+            runtime.panel_material = Some(pod.panel_material.clone());
+            true
+        }
+    };
+    if panel_material_changed {
+        apply_material(&panel, &pod.panel_material);
+    }
     let _ = panel.set_title(&format!("{} 面板", pod.name));
     win::prefer_rounded_corners(hwnd.0 as isize);
     win::show_no_activate(hwnd.0 as isize);
@@ -887,6 +914,7 @@ pub fn move_pod_bar(app: &AppHandle, id: u64, offset: f64) {
 
 /// 看门狗：逐个匣检查--面板未固定、未在拖出、列表模式且指针离开超过宽限期 -> 直接隐藏。
 /// 单一活动面板由 show_panel / report_presence 主动维持；这里只负责指针离开后的兜底收起。
+/// 关闭了「自动收起」的匣不参与自动隐藏，面板保持到用户手动关闭。
 pub fn spawn_watchdog(app: AppHandle) {
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_millis(100));
@@ -902,7 +930,8 @@ pub fn spawn_watchdog(app: AppHandle) {
         for id in ids {
             let now = Instant::now();
             transition_to_hidden_locked(&app, id, |runtime| {
-                runtime.can_auto_hide(now, PANEL_LEAVE_GRACE)
+                runtime.auto_hide_enabled
+                    && runtime.can_auto_hide(now, Duration::from_millis(runtime.auto_hide_delay_ms))
             });
         }
     });
@@ -981,6 +1010,15 @@ pub fn sync_autostart(_app: &AppHandle, enabled: bool) -> Result<(), String> {
 /// 设置落地：同步匣窗口、材质、监听、托盘全量应用。
 /// 自启动属于可失败的系统副作用，由保存设置和启动流程显式调用 `sync_autostart`。
 pub fn apply_settings(app: &AppHandle, s: &Settings) {
+    // 自动屏蔽配置驻留内存：轮询线程每几百毫秒读取一次，不能每次都查库。
+    {
+        let state = app.state::<AppState>();
+        state
+            .auto_block_enabled
+            .store(s.auto_block.enabled, Ordering::Relaxed);
+        *state.auto_block_apps.lock().unwrap() = s.auto_block.apps.clone();
+    }
+
     // 窗口创建/销毁与所有面板显隐串行。对已固定、可见的面板立即应用新的
     // monitor/edge/offset/panelWidth/material，而不是等到关闭重开。
     {
@@ -989,10 +1027,13 @@ pub fn apply_settings(app: &AppHandle, s: &Settings) {
         sync_pods_with_settings(app, s);
 
         for pod in s.pods.iter().filter(|p| p.enabled) {
+            let (bar_material_changed, panel_material_changed) = sync_runtime_config(app, pod);
             place_pod_bar(app, pod, false);
             if let Some(bar) = pod_bar(app, pod.id) {
                 let _ = bar.set_title(&pod.name);
-                apply_material(&bar, "plain");
+                if bar_material_changed {
+                    apply_material(&bar, &pod.material);
+                }
             }
             if let Some(panel) = pod_panel(app, pod.id) {
                 let _ = panel.set_title(&format!("{} 面板", pod.name));
@@ -1006,7 +1047,11 @@ pub fn apply_settings(app: &AppHandle, s: &Settings) {
                 .unwrap_or(false);
             if panel_visible {
                 place_panel(app, pod);
-                apply_material_once(app, &pod.material, pod.id);
+                if panel_material_changed {
+                    if let Some(panel) = pod_panel(app, pod.id) {
+                        apply_material(&panel, &pod.panel_material);
+                    }
+                }
                 emit_panel_snapshot(app, pod.id);
             }
         }
@@ -1031,6 +1076,64 @@ pub fn apply_settings(app: &AppHandle, s: &Settings) {
 
     crate::tray::refresh_menu(app);
     let _ = app.emit(events::SETTINGS_CHANGED, s.clone());
+}
+
+/// 进程名匹配：取文件名部分，忽略大小写、可选的 .exe 后缀与首尾引号。
+/// 允许用户粘贴完整路径或只写进程名，两种写法都能命中。
+fn exe_matches(candidate: &str, foreground: &str) -> bool {
+    let base = |raw: &str| {
+        let trimmed = raw.trim().trim_matches('"');
+        let name = std::path::Path::new(trimmed)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| trimmed.to_string());
+        name.to_lowercase()
+    };
+    let candidate = base(candidate);
+    if candidate.is_empty() {
+        return false;
+    }
+    let foreground = base(foreground);
+    fn strip_exe(s: &str) -> &str {
+        s.strip_suffix(".exe").unwrap_or(s)
+    }
+    strip_exe(&candidate) == strip_exe(&foreground)
+}
+
+/// 自动屏蔽轮询：配置的应用位于前台时暂时隐藏全部匣，切回其他应用后自动恢复。
+///
+/// 屏蔽走 set_all_bars 的全局暂停语义：面板的固定 / 询问 / 冲突上下文得以保留，
+/// 恢复时原样回归。进入屏蔽前记录可见性，解除时只恢复屏蔽前可见的状态，
+/// 不会覆盖用户在屏蔽期间手动执行的「隐藏全部匣」。
+pub fn spawn_auto_block_watcher(app: AppHandle) {
+    std::thread::spawn(move || {
+        let mut was_blocked = false;
+        loop {
+            std::thread::sleep(AUTO_BLOCK_POLL);
+            let state = app.state::<AppState>();
+            let apps = state.auto_block_apps.lock().unwrap().clone();
+            let blocked = state.auto_block_enabled.load(Ordering::Relaxed)
+                && !apps.is_empty()
+                && win::foreground_exe()
+                    .map(|foreground| {
+                        apps.iter().any(|candidate| exe_matches(candidate, &foreground))
+                    })
+                    .unwrap_or(false);
+            if blocked == was_blocked {
+                continue;
+            }
+            was_blocked = blocked;
+            if blocked {
+                state.auto_block_restore.store(
+                    state.bars_visible.load(Ordering::Relaxed),
+                    Ordering::Relaxed,
+                );
+                set_all_bars(&app, false);
+            } else if state.auto_block_restore.load(Ordering::Relaxed) {
+                set_all_bars(&app, true);
+            }
+        }
+    });
 }
 
 #[cfg(test)]
@@ -1131,6 +1234,18 @@ mod tests {
             panel_toggle_action(true, Some(&runtime)),
             PanelToggleAction::Hide
         );
+    }
+
+    #[test]
+    fn foreground_exe_matching_is_name_based_and_case_insensitive() {
+        assert!(exe_matches("game.exe", "GAME.EXE"));
+        assert!(exe_matches("C:\\Games\\game.exe", "game.exe"));
+        assert!(exe_matches("game", "game.exe"));
+        assert!(exe_matches("\"My Game.exe\"", "my game.exe"));
+        assert!(!exe_matches("game.exe", "other.exe"));
+        assert!(!exe_matches("game.exe", "gamelite.exe"));
+        assert!(!exe_matches("", "game.exe"));
+        assert!(!exe_matches("   ", "game.exe"));
     }
 
     #[test]

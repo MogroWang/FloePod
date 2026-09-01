@@ -10,7 +10,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask, open } from "@tauri-apps/plugin-dialog";
 import { useToast } from "@/composables/useToast";
 import { normalizeWindowsPathKey } from "@/domain/settings";
-import type { DropAction, Edge, Material, Pod, ThemeMode } from "@/domain/types";
+import type { AutoBlock, DropAction, Edge, Material, Pod, ThemeMode } from "@/domain/types";
 import { ipc } from "@/ipc/client";
 import { BROWSER_PREVIEW_STAGING_ROOT } from "@/lib/env";
 import { useSettingsStore } from "@/stores/settings";
@@ -26,7 +26,7 @@ const settingsStore = useSettingsStore();
 const s = computed(() => settingsStore.settings);
 const monitors = computed(() => settingsStore.monitors);
 
-const page = ref<"general" | "pods" | "hotkeys" | "about">("general");
+const page = ref<"general" | "block" | "pods" | "hotkeys" | "about">("general");
 const { toast, showToast, disposeToast } = useToast(2400);
 const hotkeyError = ref("");
 const loading = ref(true);
@@ -89,7 +89,9 @@ const DROP_ACTIONS: { value: DropAction; label: string }[] = [
 
 const MATERIALS: { value: Material; label: string }[] = [
   { value: "acrylic", label: "亚克力" },
-  { value: "plain", label: "纯半透明" },
+  { value: "mica", label: "云母" },
+  { value: "blur", label: "模糊" },
+  { value: "plain", label: "普通" },
 ];
 
 const THEMES: { value: ThemeMode; label: string }[] = [
@@ -104,6 +106,8 @@ const THEMES: { value: ThemeMode; label: string }[] = [
 const NAV_ICONS: Record<string, string> = {
   general:
     '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M2 14h4M10 8h4M18 16h4"/>',
+  block:
+    '<path d="M12 3l7 2.8v5.1c0 4.4-2.9 8.4-7 10.1-4.1-1.7-7-5.7-7-10.1V5.8L12 3z"/><path d="m9 12 2 2 4-4.5"/>',
   pods: '<rect x="3.5" y="3.5" width="17" height="17" rx="3"/><path d="M12 8v8M8 12h8"/>',
   hotkeys:
     '<rect x="3" y="6.5" width="18" height="11" rx="2"/><path d="M7.5 12h.01M12 12h.01M16.5 12h.01M10 15h4"/>',
@@ -254,8 +258,10 @@ async function savePodEnabled(pod: Pod, enabled: boolean) {
 type PodNumberField =
   | "offset"
   | "opacity"
+  | "panelOpacity"
   | "panelWidth"
   | "hoverDelayMs"
+  | "autoHideDelayMs"
   | "barWidth"
   | "cornerRadius"
   | "borderOpacity";
@@ -310,7 +316,8 @@ async function commitRename() {
   await savePod(id, { name: value });
 }
 
-/** 边框颜色：空字符串表示跟随主题；3 位十六进制展开成 6 位供取色器回显。 */
+/** 边框颜色：空字符串表示跟随主题；3 位十六进制展开成 6 位供取色器回显。
+ *  绑定 @change（确认选色后才触发），选色过程中不会实时改匣的外观。 */
 const BORDER_COLOR_FALLBACK = "#ffffff";
 
 function podBorderColorValue(pod: Pod): string {
@@ -376,8 +383,12 @@ async function confirmAddPod() {
       stagingFolder: folder,
       opacity: 1,
       material: "acrylic",
+      panelMaterial: "acrylic",
+      panelOpacity: 1,
       panelWidth: 380,
       hoverDelayMs: 120,
+      autoHide: true,
+      autoHideDelayMs: 320,
       dropAction: "ask",
       enabled: true,
       barWidth: 44,
@@ -426,8 +437,12 @@ function oobePodConfig(): Omit<Pod, "id"> {
     stagingFolder: oobe.value.folder,
     opacity: Number(oobe.value.opacity),
     material: oobe.value.material,
+    panelMaterial: oobe.value.material,
+    panelOpacity: Number(oobe.value.opacity),
     panelWidth: 380,
     hoverDelayMs: 120,
+    autoHide: true,
+    autoHideDelayMs: 320,
     dropAction: "ask",
     enabled: true,
     barWidth: 44,
@@ -600,6 +615,74 @@ async function quitApp() {
   }
 }
 
+// ---- 自动屏蔽 ----
+
+const blockAppDraft = ref("");
+
+async function saveAutoBlock(next: AutoBlock) {
+  await save({
+    autoBlock: {
+      enabled: next.enabled,
+      apps: next.apps.map((app) => app.trim()).filter((app) => app.length > 0),
+    },
+  });
+}
+
+/** 模板回调里无法收窄 s 的可空性，改从这里取当前配置。 */
+function toggleAutoBlock(enabled: boolean) {
+  const current = s.value?.autoBlock;
+  if (!current) return;
+  void saveAutoBlock({ ...current, enabled });
+}
+
+/** 与 Rust 侧 exe_matches 对齐：取文件名、小写化、补齐 .exe 后缀后比较。 */
+function blockAppKey(raw: string): string {
+  const trimmed = raw.trim().replace(/^"+|"+$/g, "");
+  const parts = trimmed.split(/[\\/]/).filter((part) => part.length > 0);
+  const name = (parts[parts.length - 1] ?? trimmed).toLowerCase();
+  return name.endsWith(".exe") ? name : `${name}.exe`;
+}
+
+function addBlockApp(raw: string) {
+  const value = raw.trim().replace(/^"+|"+$/g, "");
+  blockAppDraft.value = "";
+  if (!value) return;
+  const current = s.value?.autoBlock;
+  if (!current) return;
+  if (current.apps.some((app) => blockAppKey(app) === blockAppKey(value))) {
+    showToast("该应用已在列表中");
+    return;
+  }
+  void saveAutoBlock({ enabled: current.enabled, apps: [...current.apps, value] });
+}
+
+function removeBlockApp(index: number) {
+  const current = s.value?.autoBlock;
+  if (!current) return;
+  void saveAutoBlock({
+    enabled: current.enabled,
+    apps: current.apps.filter((_, i) => i !== index),
+  });
+}
+
+async function pickBlockApp() {
+  if (!ipc.inTauri) {
+    showToast("浏览器预览：请手动输入进程名");
+    return;
+  }
+  try {
+    const file = await open({
+      multiple: false,
+      title: "选择要屏蔽的应用",
+      filters: [{ name: "应用程序", extensions: ["exe"] }],
+    });
+    if (typeof file === "string" && file) addBlockApp(file);
+  } catch (err) {
+    console.error("pick block app failed", err);
+    showToast("无法打开文件选择器");
+  }
+}
+
 async function loadSettings() {
   loading.value = true;
   loadError.value = "";
@@ -648,6 +731,7 @@ onBeforeUnmount(() => disposeToast());
 
 const PAGES = [
   { id: "general", label: "常规" },
+  { id: "block", label: "自动屏蔽" },
   { id: "pods", label: "匣" },
   { id: "hotkeys", label: "快捷键" },
   { id: "about", label: "关于" },
@@ -832,11 +916,74 @@ const PAGES = [
                 </div>
               </template>
 
+              <template v-else-if="page === 'block'">
+                <h2 class="page-title">自动屏蔽</h2>
+                <p class="page-desc">
+                  玩游戏或使用全屏应用时自动隐藏屏幕边缘的所有浮匣，避免误触；
+                  该应用离开前台后浮匣自动恢复，面板的固定与暂存内容不受影响。
+                </p>
+                <div class="settings-card">
+                  <SettingsRow label="启用自动屏蔽" hint="下列应用位于前台时隐藏全部匣，离开前台后自动恢复">
+                    <ToggleSwitch
+                      :model-value="s.autoBlock.enabled"
+                      @update:model-value="toggleAutoBlock"
+                    />
+                  </SettingsRow>
+                  <div class="sep" />
+                  <div class="block-apps">
+                    <div class="block-head">
+                      <span class="block-title">屏蔽应用</span>
+                      <button type="button" class="btn" @click="pickBlockApp">选择程序…</button>
+                    </div>
+                    <p v-if="s.autoBlock.apps.length === 0" class="block-empty">
+                      还没有添加应用。可以选择程序文件，或手动输入进程名（如 game.exe）。
+                    </p>
+                    <ul v-else class="block-list">
+                      <li v-for="(app, index) in s.autoBlock.apps" :key="blockAppKey(app)" class="block-item">
+                        <span class="block-name" :title="app">{{ app }}</span>
+                        <button
+                          type="button"
+                          class="op-btn"
+                          :aria-label="`移除 ${app}`"
+                          title="移除"
+                          @click="removeBlockApp(index)"
+                        >
+                          <svg width="13" height="13" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+                            <path d="m3 3 6 6M9 3l-6 6" />
+                          </svg>
+                        </button>
+                      </li>
+                    </ul>
+                    <div class="block-add">
+                      <input
+                        v-model="blockAppDraft"
+                        class="input mono"
+                        maxlength="260"
+                        placeholder="手动输入进程名，如 game.exe"
+                        aria-label="手动输入进程名"
+                        @keydown.enter.prevent="addBlockApp(blockAppDraft)"
+                      />
+                      <button
+                        type="button"
+                        class="btn"
+                        :disabled="!blockAppDraft.trim()"
+                        @click="addBlockApp(blockAppDraft)"
+                      >
+                        添加
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <p class="page-desc block-tip">
+                  提示：匹配按可执行文件名进行，不区分大小写；填写完整路径也可以。
+                </p>
+              </template>
+
               <template v-else-if="page === 'pods'">
                 <div class="page-head">
                   <div>
                     <h2 class="page-title">匣</h2>
-                    <p class="page-desc">每个匣是贴在屏幕边缘的独立暂存点，可分别设置位置、显示器和保存文件夹。</p>
+                    <p class="page-desc">每个匣是贴在屏幕边缘的独立暂存点，可分别设置位置、显示器和保存文件夹；示意图上的小蓝点可以直接拖动定位。</p>
                   </div>
                   <button type="button" class="btn" :disabled="addPodCreating" @click="openAddDialog">
                     + 新建匣
@@ -916,6 +1063,8 @@ const PAGES = [
                         :edge="pod.edge"
                         :offset="podNumberValue(pod, 'offset')"
                         :monitor-label="monitorLabel(pod)"
+                        @update:offset="(v) => previewPodNumber(pod.id, 'offset', v)"
+                        @commit="(v) => commitPodNumber(pod, 'offset', v)"
                       />
                       <div class="frow">
                         <span class="flabel">屏幕边缘</span>
@@ -954,7 +1103,7 @@ const PAGES = [
                     </div>
 
                     <div class="pod-group">
-                      <div class="group-title">外观</div>
+                      <div class="group-title">胶囊条</div>
                       <div class="frow">
                         <span class="flabel">匣宽度</span>
                         <div class="fctrl">
@@ -1015,7 +1164,7 @@ const PAGES = [
                               class="color-input"
                               :value="podBorderColorValue(pod)"
                               aria-label="边框颜色"
-                              @input="(e) => commitPodBorderColor(pod, e)"
+                              @change="(e) => commitPodBorderColor(pod, e)"
                             />
                             <span class="color-text">{{ pod.borderColor || "跟随主题" }}</span>
                           </label>
@@ -1064,6 +1213,27 @@ const PAGES = [
                         </div>
                       </div>
                       <div class="frow">
+                        <span class="flabel">面板材质</span>
+                        <div class="fctrl">
+                          <SegmentedControl :options="MATERIALS" :model-value="pod.panelMaterial" @update:model-value="(v) => savePod(pod.id, { panelMaterial: v as Material })" />
+                        </div>
+                      </div>
+                      <div class="frow">
+                        <span class="flabel">面板不透明度</span>
+                        <div class="fctrl">
+                          <RangeSlider
+                            :value="podNumberValue(pod, 'panelOpacity')"
+                            :min="0.1"
+                            :max="1"
+                            :step="0.01"
+                            aria-label="面板不透明度"
+                            @update:value="(v) => previewPodNumber(pod.id, 'panelOpacity', v)"
+                            @commit="(v) => commitPodNumber(pod, 'panelOpacity', v)"
+                          />
+                          <span class="fval">{{ Math.round(podNumberValue(pod, "panelOpacity") * 100) }}%</span>
+                        </div>
+                      </div>
+                      <div class="frow">
                         <span class="flabel">悬停展开延迟</span>
                         <div class="fctrl">
                           <RangeSlider
@@ -1076,6 +1246,30 @@ const PAGES = [
                             @commit="(v) => commitPodNumber(pod, 'hoverDelayMs', v)"
                           />
                           <span class="fval">{{ podNumberValue(pod, "hoverDelayMs") }}ms</span>
+                        </div>
+                      </div>
+                      <div class="frow">
+                        <span class="flabel">自动收起</span>
+                        <div class="fctrl">
+                          <ToggleSwitch
+                            :model-value="pod.autoHide"
+                            @update:model-value="(v) => savePod(pod.id, { autoHide: v })"
+                          />
+                        </div>
+                      </div>
+                      <div v-if="pod.autoHide" class="frow">
+                        <span class="flabel">收起延迟</span>
+                        <div class="fctrl">
+                          <RangeSlider
+                            :value="podNumberValue(pod, 'autoHideDelayMs')"
+                            :min="0"
+                            :max="2000"
+                            :step="20"
+                            aria-label="收起延迟"
+                            @update:value="(v) => previewPodNumber(pod.id, 'autoHideDelayMs', v)"
+                            @commit="(v) => commitPodNumber(pod, 'autoHideDelayMs', v)"
+                          />
+                          <span class="fval">{{ podNumberValue(pod, "autoHideDelayMs") }}ms</span>
                         </div>
                       </div>
                     </div>
@@ -1798,6 +1992,75 @@ select.input {
   font-size: 12px;
   color: var(--ink-3);
   font-variant-numeric: tabular-nums;
+}
+
+/* 自动屏蔽 */
+.block-apps {
+  padding: 14px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.block-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.block-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.block-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 8px 7px 12px;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.block-item + .block-item {
+  border-top: 1px solid var(--line);
+}
+.block-item:hover {
+  background: var(--surface-hover);
+}
+.block-name {
+  font-family: ui-monospace, Consolas, monospace;
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.block-empty {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--ink-3);
+  background: var(--surface-hover);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.block-add {
+  display: flex;
+  gap: 8px;
+}
+.block-add .input {
+  flex: 1;
+  min-width: 0;
+}
+.block-tip {
+  margin-top: 12px;
+  margin-bottom: 0;
 }
 
 .about-hero {

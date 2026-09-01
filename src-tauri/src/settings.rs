@@ -40,6 +40,23 @@ impl Hotkeys {
     }
 }
 
+/// 自动屏蔽：配置的应用位于前台时暂时隐藏全部匣，离开前台后自动恢复。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoBlock {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub apps: Vec<String>,
+}
+
+/// 窗口材质取值：亚克力 / 云母（Win11）/ 模糊（Win10）/ 普通无材质。
+pub const MATERIALS: [&str; 4] = ["acrylic", "mica", "blur", "plain"];
+
+fn valid_material(material: &str) -> bool {
+    MATERIALS.contains(&material)
+}
+
 /// 一个「匣」：贴在屏幕边缘的独立暂存点，拥有自己的保存文件夹与外观。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -55,8 +72,16 @@ pub struct Pod {
     pub staging_folder: String,
     pub opacity: f64,
     pub material: String,
+    /// 面板材质；与胶囊条材质独立设置。
+    pub panel_material: String,
+    /// 面板不透明度 0.1 - 1.0；与胶囊条不透明度独立设置。
+    pub panel_opacity: f64,
     pub panel_width: u32,
     pub hover_delay_ms: u64,
+    /// 鼠标离开后自动收起面板。
+    pub auto_hide: bool,
+    /// 鼠标离开后到自动收起的延迟（毫秒）。
+    pub auto_hide_delay_ms: u64,
     pub drop_action: String,
     pub enabled: bool,
     /// 胶囊条短边宽度（CSS 逻辑像素）；面板宽度由 panel_width 控制。
@@ -80,8 +105,12 @@ impl Default for Pod {
             staging_folder: String::new(),
             opacity: 1.0,
             material: "acrylic".into(),
+            panel_material: "acrylic".into(),
+            panel_opacity: 1.0,
             panel_width: 380,
             hover_delay_ms: 120,
+            auto_hide: true,
+            auto_hide_delay_ms: 320,
             drop_action: "ask".into(),
             enabled: true,
             bar_width: 44,
@@ -104,6 +133,8 @@ pub struct Settings {
     #[serde(default = "Hotkeys::with_defaults")]
     pub hotkeys: Hotkeys,
     #[serde(default)]
+    pub auto_block: AutoBlock,
+    #[serde(default)]
     pub pods: Vec<Pod>,
     /// 只读：由应用在读取时注入并返回前端，但不接受数据库中的旧值。
     /// `persist` 会在写库前显式剔除这两个运行时字段。
@@ -124,6 +155,7 @@ impl Default for Settings {
             first_run_done: false,
             autostart: false,
             hotkeys: Hotkeys::with_defaults(),
+            auto_block: AutoBlock::default(),
             pods: Vec::new(),
             version: String::new(),
             data_dir: String::new(),
@@ -137,6 +169,7 @@ pub fn load(conn: &Connection, data_dir: &str, version: &str) -> Result<Settings
             let v: serde_json::Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
             let mut s: Settings = serde_json::from_value(v.clone()).map_err(|e| e.to_string())?;
             migrate_legacy(&mut s, &v);
+            migrate_panel_appearance(&mut s, &v);
             s
         }
         None => Settings::default(),
@@ -298,6 +331,18 @@ fn validate_impl(s: &Settings, data_dir: &str, allow_missing_roots: bool) -> Res
         return Err(format!("未知主题: {}", s.theme));
     }
 
+    if s.auto_block.apps.len() > 64 {
+        return Err("自动屏蔽应用列表过长".into());
+    }
+    for app in &s.auto_block.apps {
+        if app.trim().trim_matches('"').is_empty() {
+            return Err("自动屏蔽应用名不能为空".into());
+        }
+        if app.chars().count() > 260 {
+            return Err("自动屏蔽应用名过长".into());
+        }
+    }
+
     let data_dir = resolve_path(Path::new(data_dir))?;
     let mut ids = HashSet::new();
     let mut folders: Vec<(u64, String, PathBuf)> = Vec::new();
@@ -318,8 +363,17 @@ fn validate_impl(s: &Settings, data_dir: &str, allow_missing_roots: bool) -> Res
         if !pod.opacity.is_finite() || !(0.1..=1.0).contains(&pod.opacity) {
             return Err(format!("匣「{}」的不透明度无效", pod.name));
         }
-        if !matches!(pod.material.as_str(), "acrylic" | "plain") {
+        if !valid_material(&pod.material) {
             return Err(format!("匣「{}」的材质无效", pod.name));
+        }
+        if !valid_material(&pod.panel_material) {
+            return Err(format!("匣「{}」的面板材质无效", pod.name));
+        }
+        if !pod.panel_opacity.is_finite() || !(0.1..=1.0).contains(&pod.panel_opacity) {
+            return Err(format!("匣「{}」的面板不透明度无效", pod.name));
+        }
+        if pod.auto_hide_delay_ms > 5000 {
+            return Err(format!("匣「{}」的自动收起延迟无效", pod.name));
         }
         if !(300..=520).contains(&pod.panel_width) {
             return Err(format!("匣「{}」的面板宽度无效", pod.name));
@@ -418,6 +472,12 @@ fn migrate_legacy(s: &mut Settings, v: &serde_json::Value) {
         .and_then(|x| x.as_str())
         .filter(|e| matches!(*e, "top" | "right" | "bottom" | "left"))
         .unwrap_or("left");
+    let material = v
+        .get("material")
+        .and_then(|x| x.as_str())
+        .unwrap_or("acrylic")
+        .to_string();
+    let opacity = v.get("opacity").and_then(|x| x.as_f64()).unwrap_or(1.0);
     s.pods.push(Pod {
         id: 1,
         name: "我的匣".into(),
@@ -425,13 +485,11 @@ fn migrate_legacy(s: &mut Settings, v: &serde_json::Value) {
         monitor: String::new(),
         offset: 0.5,
         staging_folder: folder,
-        opacity: v.get("opacity").and_then(|x| x.as_f64()).unwrap_or(1.0),
-        material: v
-            .get("material")
-            .and_then(|x| x.as_str())
-            .unwrap_or("acrylic")
-            .into(),
+        panel_opacity: opacity,
+        material: material.clone(),
+        panel_material: material,
         panel_width: v.get("panelWidth").and_then(|x| x.as_u64()).unwrap_or(380) as u32,
+        opacity,
         hover_delay_ms: v
             .get("hoverDelayMs")
             .and_then(|x| x.as_u64())
@@ -444,6 +502,23 @@ fn migrate_legacy(s: &mut Settings, v: &serde_json::Value) {
         enabled: true,
         ..Pod::default()
     });
+}
+
+/// 1.2 及更早的存储没有面板独立外观字段：面板沿用该匣的材质与不透明度。
+/// 只回填存储中确实缺失的字段，避免每次加载覆盖用户已保存的值。
+fn migrate_panel_appearance(s: &mut Settings, v: &serde_json::Value) {
+    let Some(raw_pods) = v.get("pods").and_then(|p| p.as_array()) else {
+        return;
+    };
+    for (index, raw) in raw_pods.iter().enumerate() {
+        let Some(pod) = s.pods.get_mut(index) else { break };
+        if raw.get("panelMaterial").is_none() {
+            pod.panel_material = pod.material.clone();
+        }
+        if raw.get("panelOpacity").is_none() {
+            pod.panel_opacity = pod.opacity;
+        }
+    }
 }
 
 pub fn persist(conn: &Connection, s: &Settings) -> Result<(), String> {
@@ -476,7 +551,7 @@ pub fn merge_persist(
         .ok_or_else(|| "设置补丁必须是对象".to_string())?;
     for (k, v) in obj {
         match k.as_str() {
-            "theme" | "firstRunDone" | "autostart" | "hotkeys" => {
+            "theme" | "firstRunDone" | "autostart" | "hotkeys" | "autoBlock" => {
                 stored.insert(k.clone(), v.clone());
             }
             "version" | "dataDir" | "pods" => {}
@@ -488,6 +563,7 @@ pub fn merge_persist(
     let raw = serde_json::Value::Object(stored);
     let mut candidate: Settings = serde_json::from_value(raw.clone()).map_err(|e| e.to_string())?;
     migrate_legacy(&mut candidate, &raw);
+    migrate_panel_appearance(&mut candidate, &raw);
     candidate.version = version.to_string();
     candidate.data_dir = data_dir.to_string();
     validate(&candidate, data_dir)?;
@@ -643,6 +719,10 @@ mod tests {
                 "collectClipboard": "Ctrl+Alt+KeyS",
                 "openPanel": "Ctrl+Alt+KeyP"
             },
+            "autoBlock": {
+                "enabled": true,
+                "apps": ["game.exe", "C:\\Games\\Racer.exe"]
+            },
             "pods": [
                 {
                     "id": 7,
@@ -653,8 +733,12 @@ mod tests {
                     "stagingFolder": stage_one,
                     "opacity": 0.72,
                     "material": "plain",
+                    "panelMaterial": "mica",
+                    "panelOpacity": 0.9,
                     "panelWidth": 512,
                     "hoverDelayMs": 600,
+                    "autoHide": false,
+                    "autoHideDelayMs": 480,
                     "dropAction": "move",
                     "enabled": true,
                     "barWidth": 56,
@@ -671,8 +755,12 @@ mod tests {
                     "stagingFolder": stage_two,
                     "opacity": 1.0,
                     "material": "acrylic",
+                    "panelMaterial": "blur",
+                    "panelOpacity": 1.0,
                     "panelWidth": 300,
                     "hoverDelayMs": 0,
+                    "autoHide": true,
+                    "autoHideDelayMs": 320,
                     "dropAction": "shortcut",
                     "enabled": false,
                     "barWidth": 36,
@@ -693,14 +781,133 @@ mod tests {
         assert_eq!(loaded.pods[0].corner_radius, 12);
         assert_eq!(loaded.pods[0].border_color, "#80ffaa");
         assert_eq!(loaded.pods[0].border_opacity, 0.4);
+        assert_eq!(loaded.pods[0].panel_material, "mica");
+        assert_eq!(loaded.pods[0].panel_opacity, 0.9);
+        assert!(!loaded.pods[0].auto_hide);
+        assert_eq!(loaded.pods[0].auto_hide_delay_ms, 480);
         assert_eq!(loaded.pods[1].drop_action, "shortcut");
+        assert_eq!(loaded.pods[1].panel_material, "blur");
+        assert!(loaded.pods[1].auto_hide);
         assert_eq!(loaded.pods[1].bar_width, 36);
         assert!(!loaded.pods[1].enabled);
+        assert!(loaded.auto_block.enabled);
+        assert_eq!(
+            loaded.auto_block.apps,
+            vec!["game.exe".to_string(), "C:\\Games\\Racer.exe".to_string()]
+        );
 
         persist(&c, &loaded).unwrap();
         let stored: serde_json::Value =
             serde_json::from_str(&db::kv_get(&c, KEY).unwrap().unwrap()).unwrap();
         assert_eq!(stored, fixture);
+    }
+
+    #[test]
+    fn panel_appearance_migrates_from_bar_fields() {
+        let c = conn();
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path().join("data").to_string_lossy().to_string();
+        let stage = tmp.path().join("stage").to_string_lossy().to_string();
+        // 1.2 版存储：pods 里没有 panelMaterial / panelOpacity。
+        db::kv_set(
+            &c,
+            KEY,
+            &serde_json::json!({
+                "theme": "system",
+                "pods": [{
+                    "id": 1, "name": "匣", "edge": "left",
+                    "stagingFolder": stage, "opacity": 0.8, "material": "mica"
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let s = load(&c, &data_dir, "1.3.0").unwrap();
+        assert_eq!(s.pods[0].panel_material, "mica");
+        assert!((s.pods[0].panel_opacity - 0.8).abs() < 1e-9);
+        assert!(s.pods[0].auto_hide);
+        assert_eq!(s.pods[0].auto_hide_delay_ms, 320);
+        assert!(!s.auto_block.enabled);
+        assert!(s.auto_block.apps.is_empty());
+
+        // 重新持久化后字段已补齐，再次加载不再触发回填。
+        persist(&c, &s).unwrap();
+        let reloaded = load(&c, &data_dir, "1.3.0").unwrap();
+        assert_eq!(reloaded.pods[0].panel_material, "mica");
+        assert!((reloaded.pods[0].panel_opacity - 0.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn panel_and_auto_block_fields_validate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path().join("data").to_string_lossy().to_string();
+
+        for good in ["acrylic", "mica", "blur", "plain"] {
+            let mut candidate = pod(1, &tmp.path().join("stage"));
+            candidate.material = good.into();
+            candidate.panel_material = good.into();
+            let settings = Settings {
+                pods: vec![candidate],
+                ..Settings::default()
+            };
+            assert!(validate(&settings, &data_dir).is_ok(), "材质 {good} 应有效");
+        }
+        for bad in ["glass", "frosted", "MICA", ""] {
+            let mut candidate = pod(1, &tmp.path().join("stage"));
+            candidate.material = bad.into();
+            let settings = Settings {
+                pods: vec![candidate],
+                ..Settings::default()
+            };
+            assert!(validate(&settings, &data_dir).is_err(), "材质 {bad} 应无效");
+        }
+
+        let mut broken = pod(1, &tmp.path().join("stage"));
+        broken.panel_opacity = 0.05;
+        let settings = Settings {
+            pods: vec![broken],
+            ..Settings::default()
+        };
+        assert!(validate(&settings, &data_dir).is_err());
+
+        let mut broken = pod(1, &tmp.path().join("stage"));
+        broken.auto_hide_delay_ms = 5001;
+        let settings = Settings {
+            pods: vec![broken],
+            ..Settings::default()
+        };
+        assert!(validate(&settings, &data_dir).is_err());
+
+        let mut blocked = Settings::default();
+        blocked.auto_block = AutoBlock {
+            enabled: true,
+            apps: (0..65).map(|i| format!("app{i}.exe")).collect(),
+        };
+        assert!(validate(&blocked, &data_dir).is_err());
+
+        let mut blank = Settings::default();
+        blank.auto_block = AutoBlock {
+            enabled: true,
+            apps: vec!["   ".into()],
+        };
+        assert!(validate(&blank, &data_dir).is_err());
+    }
+
+    #[test]
+    fn merge_accepts_auto_block_patch() {
+        let c = conn();
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path().join("data").to_string_lossy().to_string();
+        db::kv_set(&c, KEY, r#"{"theme":"system","pods":[]}"#).unwrap();
+        let s = merge_persist(
+            &c,
+            serde_json::json!({"autoBlock":{"enabled":true,"apps":["Game.exe"]}}),
+            &data_dir,
+            "1.3.0",
+        )
+        .unwrap();
+        assert!(s.auto_block.enabled);
+        assert_eq!(s.auto_block.apps, vec!["Game.exe".to_string()]);
     }
 
     #[test]

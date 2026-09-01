@@ -1,4 +1,4 @@
-//! Win32 辅助：不抢焦点显示窗口、修饰键状态。
+//! Win32 辅助：不抢焦点显示窗口、修饰键状态、前台进程与窗口显隐。
 
 use core::ffi::c_void;
 
@@ -7,7 +7,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE,
-    SW_SHOWNOACTIVATE,
+    SW_SHOW, SW_SHOWNOACTIVATE,
 };
 
 fn key_down(vk: u16) -> bool {
@@ -49,6 +49,19 @@ pub fn show_no_activate(hwnd: isize) {
     }
 }
 
+/// SW_SHOW 显示并激活窗口 + 恢复置顶（右键菜单需要前台焦点才能用 blur 检测外部点击）。
+/// 必须与 hide_window 一样直接走 ShowWindow：Tauri 的 show() 会同步 WebView2
+/// 的可见性状态，与原生 SW_HIDE 路径混用时透明窗口内容停留在未恢复的合成状态，
+/// 菜单第二次起就再也显示不出来。
+pub fn show_window(hwnd: isize) {
+    let hwnd = hwnd as *mut c_void;
+    unsafe {
+        ShowWindow(hwnd, SW_SHOW);
+        // 不带 SWP_NOACTIVATE：让菜单成为前台窗口。
+        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+    }
+}
+
 /// 直接隐藏窗口。
 /// 不能走 Tauri 的 `hide()`：它对 WebView2 调用 `SetIsVisible(false)`，
 /// 会让顶层窗口重新显示（窗口可见但内容区占位），导致面板"收起后仍在屏幕上"。
@@ -56,6 +69,47 @@ pub fn hide_window(hwnd: isize) {
     let hwnd = hwnd as *mut c_void;
     unsafe {
         ShowWindow(hwnd, SW_HIDE);
+    }
+}
+
+/// 当前前台窗口所属进程的可执行文件名（如 "game.exe"）。
+/// 供「自动屏蔽」匹配用户配置的应用；拿不到（权限不足、系统进程等）返回 None。
+pub fn foreground_exe() -> Option<String> {
+    use std::path::Path;
+
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowThreadProcessId,
+    };
+
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_null() {
+            return None;
+        }
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid == 0 {
+            return None;
+        }
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return None;
+        }
+        let mut buf = [0u16; 1024];
+        let mut len = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(process, 0, buf.as_mut_ptr(), &mut len);
+        CloseHandle(process);
+        if ok == 0 {
+            return None;
+        }
+        let full = String::from_utf16_lossy(&buf[..len as usize]);
+        Path::new(&full)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
     }
 }
 

@@ -25,9 +25,12 @@ let closing = false;
 
 async function measureAndShow() {
   await nextTick();
-  const rect = anchorEl.value?.getBoundingClientRect();
-  const width = (rect?.width ?? 232) + MENU_MARGIN * 2;
-  const height = (rect?.height ?? 200) + MENU_MARGIN * 2;
+  // 必须用布局尺寸（offsetWidth/Height）：getBoundingClientRect 会带上
+  // 弹入动画进行中的 transform 缩放，量出来的窗口比最终内容小，
+  // 菜单卡片和阴影会被窗口边缘裁切。
+  const anchor = anchorEl.value;
+  const width = (anchor?.offsetWidth ?? 232) + MENU_MARGIN * 2;
+  const height = (anchor?.offsetHeight ?? 200) + MENU_MARGIN * 2;
   await ipc.resizeContextMenu(seq.value, width, height).catch((err) => {
     console.error("context menu resize failed", err);
   });

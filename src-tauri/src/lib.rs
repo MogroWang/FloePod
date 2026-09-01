@@ -95,6 +95,8 @@ pub fn run() {
                 logging::write(&format!("[hotkeys] {e}"));
             }
             manager::spawn_watchdog(app.handle().clone());
+            // 自动屏蔽轮询依赖 apply_settings 写入的内存快照，必须在之后启动。
+            manager::spawn_auto_block_watcher(app.handle().clone());
 
             // 首启（OOBE）或还没有任何匣：打开设置引导
             if !settings.first_run_done || settings.pods.is_empty() {

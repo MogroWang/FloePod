@@ -95,7 +95,15 @@ pub fn resize_and_show(app: &AppHandle, seq: u64, width: f64, height: f64) {
     let position = clamp_to_monitor(app, cursor_position(), size);
     let _ = window.set_size(size);
     let _ = window.set_position(position);
-    let _ = window.show();
+    // 显示必须与 hide 的原生 ShowWindow 路径对称：Tauri 的 show() 会同步
+    // WebView2 的可见性状态，与 SW_HIDE 混用后透明窗口内容停留在未恢复的
+    // 合成状态，菜单第二次起就再也显示不出来。
+    match window.hwnd() {
+        Ok(hwnd) => win::show_window(hwnd.0 as isize),
+        Err(_) => {
+            let _ = window.show();
+        }
+    }
     // 菜单抢焦点后才能用 blur 检测「点击菜单外部」并自动关闭。
     let _ = window.set_focus();
 }

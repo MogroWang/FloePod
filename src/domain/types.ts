@@ -1,7 +1,7 @@
 export type ItemKind = "file" | "folder" | "text" | "shortcut";
 export type DropAction = "ask" | "copy" | "move" | "shortcut";
 export type Edge = "top" | "right" | "bottom" | "left";
-export type Material = "acrylic" | "plain";
+export type Material = "acrylic" | "mica" | "blur" | "plain";
 export type ThemeMode = "system" | "light" | "dark";
 export type ExportMode = "copy" | "move";
 export type ConflictStrategy = "ask" | "overwrite" | "skip" | "rename";
@@ -43,8 +43,16 @@ export interface Pod {
   stagingFolder: string;
   opacity: number;
   material: Material;
+  /** 面板材质；与胶囊条材质独立设置。 */
+  panelMaterial: Material;
+  /** 面板不透明度 0.1-1；与胶囊条不透明度独立设置。 */
+  panelOpacity: number;
   panelWidth: number;
   hoverDelayMs: number;
+  /** 鼠标离开后是否自动收起面板。 */
+  autoHide: boolean;
+  /** 鼠标离开后到自动收起的延迟（毫秒）。 */
+  autoHideDelayMs: number;
   dropAction: DropAction;
   enabled: boolean;
   /** 胶囊条短边宽度（逻辑像素）。 */
@@ -87,11 +95,19 @@ export interface Hotkeys {
   openPanel: string;
 }
 
+/** 自动屏蔽：配置的应用位于前台时暂时隐藏全部匣，离开前台后自动恢复。 */
+export interface AutoBlock {
+  enabled: boolean;
+  /** 匹配前台应用的可执行文件名；允许完整路径，匹配时只取文件名。 */
+  apps: string[];
+}
+
 export interface Settings {
   theme: ThemeMode;
   firstRunDone: boolean;
   autostart: boolean;
   hotkeys: Hotkeys;
+  autoBlock: AutoBlock;
   pods: Pod[];
   /** 运行时信息，不写入设置文件。 */
   version: string;

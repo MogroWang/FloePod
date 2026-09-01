@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 右键菜单的纯渲染组件：浮匣设计语言（毛玻璃卡片、悬浮高亮、克制动效）。
+ * 右键菜单的纯渲染组件：浮匣设计语言（近实心卡片、悬浮高亮、克制动效）。
  * 宿主负责定位与动作执行——菜单窗口模式由 ContextMenuWindow 回传选择，
  * 浏览器预览降级时由 PodPanel 内嵌执行。
  */
@@ -75,10 +75,11 @@ function iconPaths(id: string): string[] {
   box-sizing: border-box;
   padding: 5px;
   border-radius: 12px;
-  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  /* 透明菜单窗口里不能使用 backdrop-filter：WebView2 会在透明背景上
+     渲染出整块发黑的伪影（阴影显示错误的根源），只保留近实心的表面色。 */
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
   border: 1px solid var(--glass-line);
   box-shadow: var(--shadow-panel);
-  backdrop-filter: blur(28px) saturate(1.2);
   transform-origin: top left;
   animation: menu-pop 160ms var(--ease-out);
 }

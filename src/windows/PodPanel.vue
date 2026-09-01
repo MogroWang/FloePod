@@ -41,7 +41,8 @@ const staging = useStagingStore();
 const pod = computed(() => settingsStore.pod(props.podId));
 const edge = computed(() => pod.value?.edge ?? "left");
 const panelStyle = computed<Record<string, string>>(() => {
-  const opacity = clampOpacity(pod.value?.opacity);
+  // 面板不透明度独立于胶囊条；旧配置缺失时回退匣的不透明度。
+  const opacity = clampOpacity(pod.value?.panelOpacity ?? pod.value?.opacity);
   return { "--pod-opacity": `${opacity * 100}%` };
 });
 
