@@ -273,9 +273,8 @@ pub fn apply_bar_material(hwnd: isize, material: &str) {
         _ => 0u32,
     };
     unsafe {
-        let module = windows_sys::Win32::System::LibraryLoader::GetModuleHandleA(
-            b"user32.dll\0".as_ptr(),
-        );
+        let module =
+            windows_sys::Win32::System::LibraryLoader::GetModuleHandleA(b"user32.dll\0".as_ptr());
         if module.is_null() {
             return;
         }
