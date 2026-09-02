@@ -406,7 +406,7 @@ async function confirmAddPod() {
       offset: 0.5,
       stagingFolder: folder,
       opacity: 1,
-      material: "acrylic",
+      material: "plain",
       panelMaterial: "acrylic",
       panelOpacity: 1,
       panelColor: "",
@@ -487,7 +487,8 @@ function oobePodConfig(): Omit<Pod, "id"> {
     offset: 0.5,
     stagingFolder: oobe.value.folder,
     opacity: Number(oobe.value.opacity),
-    material: oobe.value.material,
+    // 胶囊条无材质设置（固定普通）；OOBE 里选的材质只作用于面板。
+    material: "plain",
     panelMaterial: oobe.value.material,
     panelOpacity: Number(oobe.value.opacity),
     panelColor: "",
@@ -762,7 +763,7 @@ async function loadSettings() {
           monitor: existing.monitor,
           folder: existing.stagingFolder,
           opacity: existing.opacity,
-          material: existing.material,
+          material: existing.panelMaterial,
         };
         oobeStep.value = 3;
       } else {
@@ -886,7 +887,7 @@ const PAGES = [
               </div>
             </label>
             <label class="field">
-              <span>材质</span>
+              <span>面板材质</span>
               <SegmentedControl :options="MATERIALS" v-model="oobe.material" />
             </label>
           </div>
@@ -1197,12 +1198,6 @@ const PAGES = [
                         </div>
                       </div>
                       <div class="frow">
-                        <span class="flabel">材质</span>
-                        <div class="fctrl">
-                          <SegmentedControl :options="MATERIALS" :model-value="pod.material" @update:model-value="(v) => savePod(pod.id, { material: v as Material })" />
-                        </div>
-                      </div>
-                      <div class="frow">
                         <span class="flabel">边框颜色</span>
                         <div class="fctrl">
                           <label class="color-field">
@@ -1335,7 +1330,7 @@ const PAGES = [
                         </div>
                       </div>
                       <div class="frow">
-                        <span class="flabel">自动收起</span>
+                        <span class="flabel">自动隐藏</span>
                         <div class="fctrl">
                           <ToggleSwitch
                             :model-value="pod.autoHide"
@@ -1344,14 +1339,14 @@ const PAGES = [
                         </div>
                       </div>
                       <div v-if="pod.autoHide" class="frow">
-                        <span class="flabel">收起延迟</span>
+                        <span class="flabel">隐藏延迟</span>
                         <div class="fctrl">
                           <RangeSlider
                             :value="podNumberValue(pod, 'autoHideDelayMs')"
                             :min="0"
                             :max="2000"
                             :step="20"
-                            aria-label="收起延迟"
+                            aria-label="隐藏延迟"
                             @update:value="(v) => previewPodNumber(pod.id, 'autoHideDelayMs', v)"
                             @commit="(v) => commitPodNumber(pod, 'autoHideDelayMs', v)"
                           />

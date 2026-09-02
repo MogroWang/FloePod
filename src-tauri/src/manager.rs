@@ -245,63 +245,33 @@ fn bar_geometry_for_monitor(
     (x, y, w, h)
 }
 
-fn bar_geometry(
-    app: &AppHandle,
-    pod: &Pod,
-    accepting: bool,
-) -> Option<(MonitorGeometry, i32, i32, i32, i32)> {
-    // ((显示器几何, 缩放率), x, y, w, h)，位置尺寸为物理像素。
-    // 显示器几何一并返回：region 圆角必须用目标显示器的缩放率计算，
-    // 窗口还在旧显示器上时 bar.scale_factor() 会给出过期值导致圆角错位。
+fn bar_geometry(app: &AppHandle, pod: &Pod, accepting: bool) -> Option<(i32, i32, i32, i32)> {
+    // (x, y, w, h)，物理像素
     let target = monitor(app, pod)?;
-    let (x, y, w, h) = bar_geometry_for_monitor(
+    Some(bar_geometry_for_monitor(
         target.rect,
         &pod.edge,
         pod.offset,
         accepting,
         target.scale_factor,
         pod.bar_width,
-    );
-    Some((target, x, y, w, h))
+    ))
 }
 
 pub fn place_pod_bar(app: &AppHandle, pod: &Pod, accepting: bool) {
     let Some(bar) = pod_bar(app, pod.id) else {
         return;
     };
-    let Some((target, x, y, w, h)) = bar_geometry(app, pod, accepting) else {
+    let Some((x, y, w, h)) = bar_geometry(app, pod, accepting) else {
         return;
     };
     let _ = bar.set_size(PhysicalSize::new(w as u32, h as u32));
     let _ = bar.set_position(PhysicalPosition::new(x, y));
-    apply_bar_region(&bar, pod, w, h, target.scale_factor);
-}
-
-/// 材质 != plain 时把窗口裁剪成胶囊形状（贴屏侧直角、外侧圆角随设置），
-/// 让系统材质与胶囊条的 CSS 圆角一致；plain 时清除区域恢复矩形。
-fn apply_bar_region(bar: &WebviewWindow, pod: &Pod, w: i32, h: i32, scale: f64) {
-    let Ok(hwnd) = bar.hwnd() else {
-        return;
-    };
-    if pod.material == "plain" {
+    // 胶囊条材质已废弃（固定普通半透明），无需按材质裁剪区域；
+    // 以 radius=0 清除历史残留的区域，并顺带幂等清理非客户区样式。
+    if let Ok(hwnd) = bar.hwnd() {
         win::set_bar_region(hwnd.0 as isize, w, h, 0, &pod.edge);
-        return;
     }
-    let scale = if scale.is_finite() && scale > 0.0 {
-        scale
-    } else {
-        1.0
-    };
-    // 与 CSS 的圆角收敛规则对齐：外侧圆角不能超过短边，且两角之和不超过长边。
-    let (short, long) = if matches!(pod.edge.as_str(), "left" | "right") {
-        (w, h)
-    } else {
-        (h, w)
-    };
-    let radius = (pod.corner_radius as f64 * scale)
-        .round()
-        .clamp(0.0, (short.min(long / 2)) as f64) as i32;
-    win::set_bar_region(hwnd.0 as isize, w, h, radius, &pod.edge);
 }
 
 /// 把请求的面板矩形限制在显示器工作矩形内。
@@ -514,12 +484,12 @@ fn sync_pods_with_settings(app: &AppHandle, s: &Settings) {
     }
 }
 
-/// 面板材质：tauri 的 set_effects（Win11 22H2+ 走 DWM systembackdrop）。
-/// 面板是矩形窗口 + 系统圆角，systembackdrop 与 DWM 圆角轮廓天然对齐。
+/// 面板云母 / 普通材质：tauri 的 set_effects（Win11 22H2+ 走 DWM systembackdrop）。
+/// 面板是矩形窗口 + 系统圆角，systembackdrop 与 DWM 圆角轮廓天然对齐；
+/// 云母不随窗口焦点移除，可以放心使用。
 fn apply_material(window: &WebviewWindow, material: &str) {
     use tauri::window::{Effect, EffectsBuilder};
     let effect = match material {
-        "acrylic" => Some(Effect::Acrylic),
         // 云母仅在 Windows 11 可用；不支持的系统上 set_effects 返回 Err，
         // 忽略后表现为普通半透明。
         "mica" => Some(Effect::Mica),
@@ -536,19 +506,30 @@ fn apply_material(window: &WebviewWindow, material: &str) {
     }
 }
 
-/// 胶囊条材质：SWCA ACCENT 路径（见 win::apply_bar_material）。
-/// 胶囊条经 SetWindowRgn 裁剪成胶囊形状，systembackdrop 不遵循窗口 region
-/// 会在 CSS 圆角外露出材质直角，因此必须与面板走不同的材质机制。
-fn apply_bar_material(bar: &WebviewWindow, material: &str) {
-    if let Ok(hwnd) = bar.hwnd() {
-        win::apply_bar_material(hwnd.0 as isize, material);
+/// 面板材质落地：按材质分流到不同的系统机制，恒定下发、不随焦点降级。
+///
+/// 亚克力走 SWCA ACCENT（见 win::apply_panel_acrylic）：DWM 系统背景
+/// （tauri set_effects 的 systembackdrop）在窗口失焦后移除整个 backdrop，
+/// 而面板免激活显示、绝大多数时间不持有焦点，是「不聚焦就看不到材质」
+/// 的根源。云母无此限制（失焦不移除），仍走 tauri set_effects；普通即
+/// 无系统材质。任何分支都先清掉残留的 ACCENT 策略，避免从亚克力切换后
+/// 效果残留。
+fn apply_panel_material(window: &WebviewWindow, material: &str) {
+    let Ok(hwnd) = window.hwnd() else {
+        return;
+    };
+    win::disable_accent(hwnd.0 as isize);
+    match material {
+        "acrylic" => win::apply_panel_acrylic(hwnd.0 as isize),
+        "mica" => apply_material(window, "mica"),
+        _ => apply_material(window, "plain"),
     }
 }
 
-/// Win11 的亚克力在窗口失焦时会被系统移除。聚焦状态变化时按运行态缓存的
-/// 材质重放一次，保证无论窗口是否聚焦都显示底层材质。
-/// 胶囊条顺带幂等清理非客户区样式：任何来源恢复的标题栏样式位都在焦点
-/// 变化时被压掉，杜绝胶囊条上「窗口标题」伪影驻留。
+/// 焦点变化时幂等重放面板材质：亚克力与云母各自重发一次全量材质，
+/// 保证无论面板是否持有焦点，材质属性始终处于已下发状态。
+/// 胶囊条材质已废弃（固定普通），仅顺带幂等清理非客户区样式，
+/// 杜绝任何来源恢复的标题栏样式位驻留。
 pub fn refresh_window_material(app: &AppHandle, label: &str) {
     let target = match events::pod_window(label) {
         Some(events::PodWindow::Bar(id)) => pod_bar(app, id).map(|window| (id, window, true)),
@@ -558,46 +539,38 @@ pub fn refresh_window_material(app: &AppHandle, label: &str) {
     let Some((id, window, is_bar)) = target else {
         return;
     };
+    if is_bar {
+        if let Ok(hwnd) = window.hwnd() {
+            win::prepare_shaped_window(hwnd.0 as isize);
+        }
+        return;
+    }
     let material = {
         let state = app.state::<AppState>();
         let guard = state.pods.lock().unwrap();
-        match guard.get(&id) {
-            Some(runtime) => {
-                if is_bar {
-                    runtime.bar_material.clone()
-                } else {
-                    runtime.panel_material.clone()
-                }
-            }
-            None => None,
-        }
+        guard
+            .get(&id)
+            .and_then(|runtime| runtime.panel_material.clone())
     };
-    if let Some(material) = material.filter(|material| material != "plain") {
-        if is_bar {
-            apply_bar_material(&window, &material);
+    match material.as_deref() {
+        Some("acrylic") => {
             if let Ok(hwnd) = window.hwnd() {
-                win::prepare_shaped_window(hwnd.0 as isize);
+                win::apply_panel_acrylic(hwnd.0 as isize);
             }
-        } else {
-            apply_material(&window, &material);
         }
+        Some("mica") => apply_material(&window, "mica"),
+        _ => {}
     }
 }
 
-/// 把与运行态相关的配置同步进 PodRuntime（自动收起设置 + 胶囊条材质）。
-/// 返回胶囊条材质是否变化，供调用方只在变化时重设窗口效果。
+/// 把与运行态相关的配置同步进 PodRuntime（自动隐藏设置）。
 /// 面板材质不在这里处理：必须对隐藏的面板也落地，见 apply_panel_material_if_changed。
-fn sync_runtime_config(app: &AppHandle, pod: &Pod) -> bool {
+fn sync_runtime_config(app: &AppHandle, pod: &Pod) {
     let state = app.state::<AppState>();
     let mut guard = state.pods.lock().unwrap();
     let runtime = guard.entry(pod.id).or_default();
     runtime.auto_hide_enabled = pod.auto_hide;
     runtime.auto_hide_delay_ms = pod.auto_hide_delay_ms;
-    let bar_changed = runtime.bar_material.as_deref() != Some(pod.material.as_str());
-    if bar_changed {
-        runtime.bar_material = Some(pod.material.clone());
-    }
-    bar_changed
 }
 
 /// 面板材质只在变化时重设（每次显示都重设亚克力会引起重绘闪烁）。
@@ -619,7 +592,7 @@ fn apply_panel_material_if_changed(app: &AppHandle, pod: &Pod) {
     };
     if changed {
         if let Some(panel) = pod_panel(app, pod.id) {
-            apply_material(&panel, &pod.panel_material);
+            apply_panel_material(&panel, &pod.panel_material);
         }
     }
 }
@@ -755,6 +728,34 @@ pub fn set_panel_size(app: &AppHandle, id: u64, height: u32) {
     }
 }
 
+/// 面板淡出动画的时长；后端在此之后才真正隐藏原生窗口。
+/// 必须与 PodPanel.vue 的 .panel-fade-out 动画时长保持一致。
+const PANEL_FADE_OUT_MS: u64 = 220;
+
+/// 延迟隐藏面板窗口，给前端留出淡出动画的时间窗。
+/// 调用前提：transition_to_hidden_locked 已把运行态置为隐藏。
+/// 延迟期间面板可能被重新显示（指针重新悬停 / 主动弹出），
+/// 任务执行时按运行态自检，一旦 panel_visible 回到 true 就放弃隐藏，
+/// 避免「面板刚淡入又被藏掉」。
+fn schedule_delayed_panel_hide(app: &AppHandle, id: u64) {
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(PANEL_FADE_OUT_MS));
+        let state = handle.state::<AppState>();
+        let _operation = state.panel_ops.lock().unwrap();
+        let visible = state
+            .pods
+            .lock()
+            .unwrap()
+            .get(&id)
+            .map(|runtime| runtime.panel_visible)
+            .unwrap_or(false);
+        if !visible {
+            hide_panel_window(&handle, id);
+        }
+    });
+}
+
 /// 调用方必须持有 `AppState::panel_ops`。
 fn transition_to_hidden_locked<F>(app: &AppHandle, id: u64, predicate: F) -> bool
 where
@@ -776,7 +777,8 @@ where
     }
 
     // 运行态转换与原生副作用由 panel_ops 串行化；不会再出现旧 show 在新 hide 后补显。
-    hide_panel_window(app, id);
+    // 原生窗口不立即隐藏：先让前端播放淡出动画，延迟任务自检后再 SW_HIDE。
+    schedule_delayed_panel_hide(app, id);
     // 必须用 emit_to 定向发送：`emit` 是全局广播，会让其他仍可见的面板
     // 也收到 PANEL_HIDDEN 并把 DOM 置为透明（pre-show）。
     if pod_panel(app, id).is_some() {
@@ -801,8 +803,8 @@ fn hide_panel_window(app: &AppHandle, id: u64) {
 
 /// 单一活动面板：收起除 id 外所有「可见、未固定、列表模式」的面板。
 /// 固定（panel_pinned）以及正在拖入询问/冲突解决（mode != List）的面板不受影响。
-/// 关闭了自动收起的面板等价于固定，同样不被收起；OLE 拖出中的面板也不受影响。
-/// 直接 SW_HIDE（无收起动画，Windows 自带窗口关闭动画），消除切换时的重叠竞争闪烁。
+/// 关闭了自动隐藏的面板等价于固定，同样不被隐藏；OLE 拖出中的面板也不受影响。
+/// 走 transition_to_hidden_locked 的淡出路径，新面板弹出与旧面板淡出重叠不闪烁。
 /// 调用方必须持有 `AppState::panel_ops`。
 fn dismiss_other_panels_locked(app: &AppHandle, id: u64) {
     let state = app.state::<AppState>();
@@ -1010,9 +1012,9 @@ pub fn move_pod_bar(app: &AppHandle, id: u64, offset: f64) {
     place_pod_bar(app, &pod, false);
 }
 
-/// 看门狗：逐个匣检查--面板未固定、未在拖出、列表模式且指针离开超过宽限期 -> 直接隐藏。
-/// 单一活动面板由 show_panel / report_presence 主动维持；这里只负责指针离开后的兜底收起。
-/// 关闭了「自动收起」的匣不参与自动隐藏，面板保持到用户手动关闭。
+/// 看门狗：逐个匣检查--面板未固定、未在拖出、列表模式且指针离开超过宽限期 -> 淡出隐藏。
+/// 单一活动面板由 show_panel / report_presence 主动维持；这里只负责指针离开后的兜底隐藏。
+/// 关闭了「自动隐藏」的匣不参与自动隐藏，面板保持到用户手动关闭。
 pub fn spawn_watchdog(app: AppHandle) {
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_millis(100));
@@ -1125,16 +1127,10 @@ pub fn apply_settings(app: &AppHandle, s: &Settings) {
         sync_pods_with_settings(app, s);
 
         for pod in s.pods.iter().filter(|p| p.enabled) {
-            let bar_material_changed = sync_runtime_config(app, pod);
+            sync_runtime_config(app, pod);
             // 面板材质无论可见与否都要落地，否则未固定的面板改材质永远不生效。
             apply_panel_material_if_changed(app, pod);
             place_pod_bar(app, pod, false);
-            if let Some(bar) = pod_bar(app, pod.id) {
-                // 材质变化时走 SWCA 重放；region 已由 place_pod_bar 按新配置应用。
-                if bar_material_changed {
-                    apply_bar_material(&bar, &pod.material);
-                }
-            }
             if let Some(panel) = pod_panel(app, pod.id) {
                 let _ = panel.set_title(&format!("{} 面板", pod.name));
             }

@@ -130,11 +130,11 @@ pub fn disable_rounding(hwnd: isize) {
     }
 }
 
-/// 把窗口裁剪成「贴屏侧直角、外侧两角按 radius（物理像素）圆角」的胶囊区域。
+/// 设置 / 清除窗口的胶囊形区域（贴屏侧直角、外侧两角按 radius 物理像素圆角）。
 ///
-/// 系统材质绘制在整个窗口矩形上，无法跟随 WebView 里的
-/// CSS 圆角：不裁剪时材质会在胶囊圆角外露出直角。region 只在材质 != plain 时设置。
-/// 区域句柄交给系统接管，无需手动释放；radius <= 0 时清除区域恢复矩形。
+/// 胶囊条材质已废弃（固定普通半透明），当前仅在 place_pod_bar 时以 radius=0
+/// 调用清除区域：既覆盖旧版本升级后残留的裁剪，也让窗口矩形与 WebView 胶囊
+/// 保持同形的历史行为。radius <= 0 时清除区域恢复矩形。
 /// 贴屏侧通过把圆角矩形延伸出窗口外再由窗口自身裁掉的方式保持直角。
 ///
 /// 每次设置区域前都幂等清理样式与 DWM 非客户区渲染：SetWindowRgn 会触发
@@ -242,15 +242,10 @@ pub fn prefer_rounded_corners(hwnd: isize) {
     }
 }
 
-/// 胶囊条系统材质：走 SetWindowCompositionAttribute（SWCA）的 ACCENT 亚克力，
-/// 不走 tauri `set_effects` 所用的 DWM systembackdrop。
-///
-/// 根因：Win11 22H2+ 的 DWMWA_SYSTEMBACKDROP_TYPE 把材质铺在整个窗口矩形上，
-/// 不遵循 SetWindowRgn 裁剪出的胶囊区域，材质会在 CSS 圆角外露出直角；
-/// SWCA 亚克力作为窗口背景合成，会被窗口 region 正确裁剪，材质与胶囊圆角
-/// 完全贴合。云母与亚克力在几十像素高的胶囊条上观感无差别，统一按亚克力
-/// 处理以保证任意材质下形状都正确。
-pub fn apply_bar_material(hwnd: isize, material: &str) {
+/// SWCA（SetWindowCompositionAttribute，未公开 API）写入 ACCENT 策略。
+/// 与 DWM systembackdrop 不同，ACCENT 材质随窗口 region 与焦点即时可控，
+/// 是面板亚克力「失焦不消失」的关键。
+fn set_accent(hwnd: isize, accent_state: u32) {
     #[repr(C)]
     struct AccentPolicy {
         accent_state: u32,
@@ -267,11 +262,6 @@ pub fn apply_bar_material(hwnd: isize, material: &str) {
     type SetWindowCompositionAttributeFn =
         unsafe extern "system" fn(*mut c_void, *mut CompositionAttribData) -> i32;
 
-    // ACCENT_ENABLE_ACRYLICBLURBEHIND = 4，ACCENT_DISABLED = 0。
-    let accent_state = match material {
-        "acrylic" | "mica" => 4u32,
-        _ => 0u32,
-    };
     unsafe {
         // c"" 字面量给出 *const c_char，windows-sys 的 PCSTR 是 *const u8，cast 对齐。
         let module = windows_sys::Win32::System::LibraryLoader::GetModuleHandleA(
@@ -289,7 +279,7 @@ pub fn apply_bar_material(hwnd: isize, material: &str) {
         };
         let set_attribute: SetWindowCompositionAttributeFn = std::mem::transmute(function);
         // WCA_ACCENT_POLICY = 0x13。GradientColor 为 AABBGGRR：alpha 取 1 让系统
-        // 亚克力的模糊完整透出（0 会被系统当作禁用），着色交给 CSS 半透明层。
+        // 模糊完整透出（0 会被系统当作禁用），着色交给 CSS 半透明层。
         let mut policy = AccentPolicy {
             accent_state,
             accent_flags: 0,
@@ -303,4 +293,22 @@ pub fn apply_bar_material(hwnd: isize, material: &str) {
         };
         set_attribute(hwnd as *mut c_void, &mut data);
     }
+}
+
+/// 清除窗口上的 ACCENT 材质策略（ACCENT_DISABLED）。
+/// 从亚克力切回普通/云母时必须显式调用，否则 SWCA 效果残留。
+pub fn disable_accent(hwnd: isize) {
+    set_accent(hwnd, 0);
+}
+
+/// 面板亚克力材质：恒定下发全量亚克力（ACCENT_ENABLE_ACRYLICBLURBEHIND）。
+/// 聚焦与失焦使用同一份策略，不做任何降级替换。
+///
+/// 走 SWCA 而不是 tauri set_effects 的 DWM systembackdrop：后者在窗口
+/// 失焦后直接移除整个 backdrop（此前「不聚焦就看不到材质」的根源），
+/// 且重放属性无效；SWCA 亚克力随 ACCENT 策略常驻窗口，配合焦点变化时
+/// 的幂等重放，面板无论是否持有焦点材质都保持已下发状态。
+pub fn apply_panel_acrylic(hwnd: isize) {
+    // ACCENT_ENABLE_ACRYLICBLURBEHIND = 4
+    set_accent(hwnd, 4);
 }

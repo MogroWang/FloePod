@@ -72,6 +72,8 @@ pub struct Pod {
     pub offset: f64,
     pub staging_folder: String,
     pub opacity: f64,
+    /// 胶囊条材质；1.3.0 起废弃，normalize 时固定为 "plain"（普通半透明）。
+    /// 保留字段仅为兼容旧存储与 IPC 结构，应用层不再读取。
     pub material: String,
     /// 面板材质；与胶囊条材质独立设置。
     pub panel_material: String,
@@ -81,9 +83,9 @@ pub struct Pod {
     pub panel_color: String,
     pub panel_width: u32,
     pub hover_delay_ms: u64,
-    /// 鼠标离开后自动收起面板。
+    /// 鼠标离开后自动隐藏面板（淡出；重新悬停时淡入）。
     pub auto_hide: bool,
-    /// 鼠标离开后到自动收起的延迟（毫秒）。
+    /// 鼠标离开后到自动隐藏的延迟（毫秒）。
     pub auto_hide_delay_ms: u64,
     pub drop_action: String,
     pub enabled: bool,
@@ -107,7 +109,7 @@ impl Default for Pod {
             offset: 0.5,
             staging_folder: String::new(),
             opacity: 1.0,
-            material: "acrylic".into(),
+            material: "plain".into(),
             panel_material: "acrylic".into(),
             panel_opacity: 1.0,
             panel_color: String::new(),
@@ -378,7 +380,7 @@ fn validate_impl(s: &Settings, data_dir: &str, allow_missing_roots: bool) -> Res
             return Err(format!("匣「{}」的面板不透明度无效", pod.name));
         }
         if pod.auto_hide_delay_ms > 5000 {
-            return Err(format!("匣「{}」的自动收起延迟无效", pod.name));
+            return Err(format!("匣「{}」的自动隐藏延迟无效", pod.name));
         }
         if !(300..=520).contains(&pod.panel_width) {
             return Err(format!("匣「{}」的面板宽度无效", pod.name));
@@ -514,11 +516,11 @@ fn migrate_legacy(s: &mut Settings, v: &serde_json::Value) {
 
 /// 「模糊」（Win10 BlurBehind）与亚克力观感一致且在 Win11 上渲染异常，
 /// 已从材质列表移除：存量配置里的 blur 统一迁移为 acrylic。
+/// 胶囊条自 1.3.0 起不再提供材质设置（固定为普通半透明，见 Pod::material），
+/// 存量配置里的胶囊条材质在此一并废弃；面板材质仍可三选。
 fn normalize_materials(s: &mut Settings) {
     for pod in &mut s.pods {
-        if pod.material == "blur" {
-            pod.material = "acrylic".into();
-        }
+        pod.material = "plain".into();
         if pod.panel_material == "blur" {
             pod.panel_material = "acrylic".into();
         }
@@ -779,7 +781,7 @@ mod tests {
                     "offset": 1.0,
                     "stagingFolder": stage_two,
                     "opacity": 1.0,
-                    "material": "acrylic",
+                    "material": "plain",
                     "panelMaterial": "acrylic",
                     "panelOpacity": 1.0,
                     "panelColor": "",
@@ -961,7 +963,8 @@ mod tests {
         )
         .unwrap();
         let s = load(&c, &data_dir, "1.3.0").unwrap();
-        assert_eq!(s.pods[0].material, "acrylic");
+        // 胶囊条材质已废弃（固定普通）；面板的 blur 仍迁移为亚克力。
+        assert_eq!(s.pods[0].material, "plain");
         assert_eq!(s.pods[0].panel_material, "acrylic");
         // 迁移结果合法，可直接通过校验。
         assert!(validate(&s, &data_dir).is_ok());

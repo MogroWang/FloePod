@@ -39,13 +39,12 @@ pub struct PodRuntime {
     /// 面板的 CSS 逻辑像素高度；设置原生窗口尺寸时再且只再乘一次 scale factor。
     pub panel_height: u32,
     pub last_change: Option<Instant>,
-    /// 已应用的窗口材质（胶囊条 / 面板各自跟踪，避免重复重设引起闪烁）。
-    /// None 表示尚未应用过，下一次 apply / show 时必然落地。
-    pub bar_material: Option<String>,
+    /// 已应用的面板材质。None 表示尚未应用过，下一次 apply / show 时必然落地。
+    /// 胶囊条材质已废弃（固定普通），不再跟踪。
     pub panel_material: Option<String>,
-    /// 面板自动收起设置；apply_settings 时随配置刷新。
+    /// 面板自动隐藏设置；apply_settings 时随配置刷新。
     pub auto_hide_enabled: bool,
-    /// 鼠标离开后到自动收起的延迟（毫秒）。
+    /// 鼠标离开后到自动隐藏的延迟（毫秒）。
     pub auto_hide_delay_ms: u64,
 }
 
@@ -111,7 +110,6 @@ impl Default for PodRuntime {
             pending_drop: Vec::new(),
             panel_height: 0,
             last_change: None,
-            bar_material: None,
             panel_material: None,
             auto_hide_enabled: true,
             auto_hide_delay_ms: 320,

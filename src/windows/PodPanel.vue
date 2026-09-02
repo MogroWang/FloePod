@@ -1,7 +1,9 @@
 <script setup lang="ts">
 /**
  * 单个「匣」的弹出面板：列表 / 拖入询问 / 冲突解决 三种模式。
- * 不抢焦点显示（Rust 侧 SW_SHOWNOACTIVATE），悬停离开自动收回（Rust 看门狗）。
+ * 不抢焦点显示（Rust 侧 SW_SHOWNOACTIVATE），面板材质恒定全量下发、
+ * 不随焦点降级；指针离开超时后淡出隐藏（Rust 看门狗），
+ * 重新悬停或主动弹出时淡入。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -40,7 +42,6 @@ const settingsStore = useSettingsStore();
 const staging = useStagingStore();
 
 const pod = computed(() => settingsStore.pod(props.podId));
-const edge = computed(() => pod.value?.edge ?? "left");
 const panelStyle = computed<Record<string, string>>(() => {
   // 面板填充色与不透明度独立于胶囊条；旧配置缺失时回退匣的不透明度。
   const opacity = clampOpacity(pod.value?.panelOpacity ?? pod.value?.opacity);
@@ -72,31 +73,22 @@ const headEl = ref<HTMLElement | null>(null);
 const listEl = ref<HTMLElement | null>(null);
 const contentEl = ref<HTMLElement | null>(null);
 const footEl = ref<HTMLElement | null>(null);
-let lastSlideIn = Number.NEGATIVE_INFINITY;
+let lastFadeIn = Number.NEGATIVE_INFINITY;
 let modeRevision = 0;
 let pinRevision = 0;
 const { toast, showToast, disposeToast } = useToast(2200, isMounted);
 
-function slideDir(): string {
-  return edge.value;
-}
-
-function playSlideIn() {
+function playFadeIn() {
   const el = rootEl.value;
   if (!el) return;
   // 首挂载时 onMounted 与 PANEL_SHOWN 会先后触发，短窗内去重避免动画重播闪烁
   const now = performance.now();
-  if (now - lastSlideIn < 100) return;
-  lastSlideIn = now;
-  // 先清除隐藏后遗留的「待显示」透明态，再从头播放滑入
-  el.classList.remove("pre-show");
-  el.classList.remove("slide-in", ...slideDirs());
+  if (now - lastFadeIn < 100) return;
+  lastFadeIn = now;
+  // 清除隐藏阶段遗留的淡出态，再从头播放淡入
+  el.classList.remove("panel-fade-out", "panel-fade-in");
   void el.offsetWidth;
-  el.classList.add("slide-in", `slide-in-${slideDir()}`);
-}
-
-function slideDirs(): string[] {
-  return ["left", "right", "top", "bottom"].map((d) => `slide-in-${d}`);
+  el.classList.add("panel-fade-in");
 }
 
 async function onTogglePinned() {
@@ -659,8 +651,8 @@ onMounted(async () => {
       pinRevision += 1;
       applyPanelState(state);
     }),
-    /* 面板每次出现都重播滑入动画 */
-    listenCurrent<never>(Events.PanelShown, () => playSlideIn()),
+    /* 面板每次出现都重播淡入动画 */
+    listenCurrent<never>(Events.PanelShown, () => playFadeIn()),
     /* 固定状态同步 */
     listenCurrent<{ pinned: boolean }>(Events.PanelPinned, (p) => {
       pinRevision += 1;
@@ -679,13 +671,13 @@ onMounted(async () => {
         .setDraggingOut(props.podId, false)
         .catch((err) => console.error("menu presence restore failed", err));
     }),
-    /* 窗口已被隐藏：DOM 置为「待显示」透明态，下次显示第一帧不闪现完整内容 */
+    /* 面板开始隐藏：先播放淡出，后端延迟 220ms 再隐藏原生窗口。
+       全局临时隐藏也会触发该事件；运行态由其他定向事件同步，不能在此清空询问或冲突。 */
     listenCurrent<never>(Events.PanelHidden, () => {
-      // 全局临时隐藏也会触发该事件；运行态由其他定向事件同步，不能在此清空询问或冲突。
       const el = rootEl.value;
       if (!el) return;
-      el.classList.remove("slide-in", ...slideDirs());
-      el.classList.add("pre-show");
+      el.classList.remove("panel-fade-in");
+      el.classList.add("panel-fade-out");
     }),
   ]);
   for (const result of registrations) {
@@ -714,7 +706,7 @@ onMounted(async () => {
 
   await nextTick();
   scheduleResize();
-  playSlideIn();
+  playFadeIn();
 });
 
 onBeforeUnmount(() => {
@@ -1052,49 +1044,20 @@ function executeInlineMenu(spec: MenuItemSpec) {
   overflow: clip;
   box-sizing: border-box;
 }
-/* 隐藏后保持的「待显示」透明态：窗口显示第一帧不闪现完整内容 */
-.panel-root.pre-show {
-  opacity: 0;
-  transform: translateY(6px) scale(0.98);
+/* 显示动画：淡入 + 轻微缩放；悬停重新展开、拖入弹出与主动弹出统一 */
+.panel-root.panel-fade-in {
+  animation: panel-fade-in 260ms var(--ease-out) both;
 }
-/* 滑入 / 滑出：方向由匣所在屏幕边缘决定 */
-.panel-root.slide-in {
-  animation-duration: 260ms;
-  animation-timing-function: var(--ease-out);
-  animation-fill-mode: both;
+@keyframes panel-fade-in {
+  from { opacity: 0; transform: scale(0.985); }
 }
-.panel-root.slide-in-left {
-  animation-name: slide-in-left;
+/* 自动隐藏：先淡出（后端延迟 220ms 才隐藏原生窗口），之后 forwards 保持
+   透明，下次显示第一帧不闪现完整内容 */
+.panel-root.panel-fade-out {
+  animation: panel-fade-out 220ms ease both;
 }
-.panel-root.slide-in-right {
-  animation-name: slide-in-right;
-}
-.panel-root.slide-in-top {
-  animation-name: slide-in-top;
-}
-.panel-root.slide-in-bottom {
-  animation-name: slide-in-bottom;
-}
-/* 收回动画已移除：直接隐藏窗口，交由 Windows 自带的窗口关闭动画 */
-@keyframes slide-in-left {
-  from { opacity: 0; transform: translateX(-30px) scale(0.98); }
-}
-@keyframes slide-in-right {
-  from { opacity: 0; transform: translateX(30px) scale(0.98); }
-}
-@keyframes slide-in-top {
-  from { opacity: 0; transform: translateY(-30px) scale(0.98); }
-}
-@keyframes slide-in-bottom {
-  from { opacity: 0; transform: translateY(30px) scale(0.98); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .panel-root.slide-in {
-    animation: fade-only 150ms ease;
-  }
-  @keyframes fade-only {
-    from { opacity: 0; }
-  }
+@keyframes panel-fade-out {
+  to { opacity: 0; }
 }
 
 .panel-head {
