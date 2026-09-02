@@ -273,14 +273,16 @@ pub fn apply_bar_material(hwnd: isize, material: &str) {
         _ => 0u32,
     };
     unsafe {
-        let module =
-            windows_sys::Win32::System::LibraryLoader::GetModuleHandleA(b"user32.dll\0".as_ptr());
+        // c"" 字面量给出 *const c_char，windows-sys 的 PCSTR 是 *const u8，cast 对齐。
+        let module = windows_sys::Win32::System::LibraryLoader::GetModuleHandleA(
+            c"user32.dll".as_ptr().cast(),
+        );
         if module.is_null() {
             return;
         }
         let function = windows_sys::Win32::System::LibraryLoader::GetProcAddress(
             module,
-            b"SetWindowCompositionAttribute\0".as_ptr(),
+            c"SetWindowCompositionAttribute".as_ptr().cast(),
         );
         let Some(function) = function else {
             return;
