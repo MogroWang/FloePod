@@ -132,12 +132,18 @@ pub fn disable_rounding(hwnd: isize) {
 
 /// 把窗口裁剪成「贴屏侧直角、外侧两角按 radius（物理像素）圆角」的胶囊区域。
 ///
-/// 系统材质（亚克力/云母）绘制在整个窗口矩形上，无法跟随 WebView 里的
+/// 系统材质绘制在整个窗口矩形上，无法跟随 WebView 里的
 /// CSS 圆角：不裁剪时材质会在胶囊圆角外露出直角。region 只在材质 != plain 时设置。
 /// 区域句柄交给系统接管，无需手动释放；radius <= 0 时清除区域恢复矩形。
 /// 贴屏侧通过把圆角矩形延伸出窗口外再由窗口自身裁掉的方式保持直角。
+///
+/// 每次设置区域前都幂等清理样式与 DWM 非客户区渲染：SetWindowRgn 会触发
+/// 系统重算非客户区，窗口样式里残留的 WS_CAPTION / WS_THICKFRAME 位会被
+/// 画成旧式标题栏（表现为诡异的「窗口标题」），任何来源恢复的样式位都在
+/// 这里被压掉。
 pub fn set_bar_region(hwnd: isize, width: i32, height: i32, radius: i32, edge: &str) {
     use windows_sys::Win32::Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn};
+    prepare_shaped_window(hwnd);
     unsafe {
         let region = if radius <= 0 {
             std::ptr::null_mut()
@@ -151,6 +157,23 @@ pub fn set_bar_region(hwnd: isize, width: i32, height: i32, radius: i32, edge: &
             CreateRoundRectRgn(left, top, right, bottom, radius * 2, radius * 2)
         };
         // 返回 0 表示失败，此时需自行释放区域避免泄漏。
+        if SetWindowRgn(hwnd as *mut c_void, region, 1) == 0 && !region.is_null() {
+            DeleteObject(region);
+        }
+    }
+}
+
+/// 把窗口裁剪成四角圆角（radius 为物理像素）的矩形区域，radius <= 0 时清除。
+/// 供右键菜单窗口使用：圆角外的透明角落不再吞点击，点击穿透到下层窗口，
+/// 菜单随之失焦关闭。
+pub fn set_rounded_region(hwnd: isize, width: i32, height: i32, radius: i32) {
+    use windows_sys::Win32::Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn};
+    unsafe {
+        let region = if radius <= 0 {
+            std::ptr::null_mut()
+        } else {
+            CreateRoundRectRgn(0, 0, width, height, radius * 2, radius * 2)
+        };
         if SetWindowRgn(hwnd as *mut c_void, region, 1) == 0 && !region.is_null() {
             DeleteObject(region);
         }
@@ -216,5 +239,67 @@ pub fn prefer_rounded_corners(hwnd: isize) {
             &pref as *const i32 as *const c_void,
             std::mem::size_of::<i32>() as u32,
         );
+    }
+}
+
+/// 胶囊条系统材质：走 SetWindowCompositionAttribute（SWCA）的 ACCENT 亚克力，
+/// 不走 tauri `set_effects` 所用的 DWM systembackdrop。
+///
+/// 根因：Win11 22H2+ 的 DWMWA_SYSTEMBACKDROP_TYPE 把材质铺在整个窗口矩形上，
+/// 不遵循 SetWindowRgn 裁剪出的胶囊区域，材质会在 CSS 圆角外露出直角；
+/// SWCA 亚克力作为窗口背景合成，会被窗口 region 正确裁剪，材质与胶囊圆角
+/// 完全贴合。云母与亚克力在几十像素高的胶囊条上观感无差别，统一按亚克力
+/// 处理以保证任意材质下形状都正确。
+pub fn apply_bar_material(hwnd: isize, material: &str) {
+    #[repr(C)]
+    struct AccentPolicy {
+        accent_state: u32,
+        accent_flags: u32,
+        gradient_color: u32,
+        animation_id: u32,
+    }
+    #[repr(C)]
+    struct CompositionAttribData {
+        attrib: u32,
+        pv_data: *mut c_void,
+        cb_data: usize,
+    }
+    type SetWindowCompositionAttributeFn =
+        unsafe extern "system" fn(*mut c_void, *mut CompositionAttribData) -> i32;
+
+    // ACCENT_ENABLE_ACRYLICBLURBEHIND = 4，ACCENT_DISABLED = 0。
+    let accent_state = match material {
+        "acrylic" | "mica" => 4u32,
+        _ => 0u32,
+    };
+    unsafe {
+        let module = windows_sys::Win32::System::LibraryLoader::GetModuleHandleA(
+            b"user32.dll\0".as_ptr(),
+        );
+        if module.is_null() {
+            return;
+        }
+        let function = windows_sys::Win32::System::LibraryLoader::GetProcAddress(
+            module,
+            b"SetWindowCompositionAttribute\0".as_ptr(),
+        );
+        let Some(function) = function else {
+            return;
+        };
+        let set_attribute: SetWindowCompositionAttributeFn = std::mem::transmute(function);
+        // WCA_ACCENT_POLICY = 0x13。GradientColor 为 AABBGGRR：alpha 取 1 让系统
+        // 亚克力的模糊完整透出（0 会被系统当作禁用），着色交给 CSS 半透明层。
+        let mut policy = AccentPolicy {
+            accent_state,
+            accent_flags: 0,
+            gradient_color: 0x01000000,
+            animation_id: 0,
+        };
+        let mut data = CompositionAttribData {
+            attrib: 0x13,
+            pv_data: &mut policy as *mut AccentPolicy as *mut c_void,
+            cb_data: std::mem::size_of::<AccentPolicy>(),
+        };
+        set_attribute(hwnd as *mut c_void, &mut data);
     }
 }

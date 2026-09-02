@@ -76,10 +76,10 @@ function iconPaths(id: string): string[] {
   padding: 5px;
   border-radius: 12px;
   /* 透明菜单窗口里不能使用 backdrop-filter：WebView2 会在透明背景上
-     渲染出整块发黑的伪影（阴影显示错误的根源），只保留近实心的表面色。 */
+     渲染出整块发黑的伪影；阴影同样会溢出窗口矩形导致裁切发灰，菜单
+     不再使用阴影，窗口区域与卡片完全同形。 */
   background: color-mix(in srgb, var(--surface) 96%, transparent);
   border: 1px solid var(--glass-line);
-  box-shadow: var(--shadow-panel);
   transform-origin: top left;
   animation: menu-pop 160ms var(--ease-out);
 }

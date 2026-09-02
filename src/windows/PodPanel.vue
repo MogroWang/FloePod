@@ -896,81 +896,85 @@ function executeInlineMenu(spec: MenuItemSpec) {
           @cancel="cancelConflict"
         />
 
-        <div v-else-if="textOpen" class="text-stash">
-          <label class="text-field">
-            <span>文件标题</span>
-            <input
-              v-model="textTitle"
-              maxlength="48"
-              placeholder="可选，默认取正文第一行前 10 个字"
-              :disabled="textBusy"
-              autofocus
-              @keydown.enter.prevent
-            />
-          </label>
-          <div class="text-field">
-            <div class="text-field-head">
-              <label class="text-field-label" for="stash-text-body">正文</label>
-              <button
-                type="button"
-                class="text-clip-btn"
-                :disabled="textBusy"
-                title="读取剪贴板文字填入正文"
-                @click="pasteClipboard"
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <rect x="8" y="3" width="8" height="4" rx="1" />
-                  <path d="M16 5h2a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h2" />
-                </svg>
-                获取剪贴板
-              </button>
-            </div>
-            <textarea
-              id="stash-text-body"
-              v-model="textValue"
-              placeholder="粘贴或输入要暂存的文字…"
-              rows="5"
-              :disabled="textBusy"
-            />
-          </div>
-          <div class="text-actions">
-            <button type="button" class="act primary" :disabled="textBusy" @click="stashText">
-              {{ textBusy ? "暂存中…" : "暂存" }}
-            </button>
-            <button type="button" class="act ghost" :disabled="textBusy" @click="textOpen = false">
-              取消
-            </button>
-          </div>
-        </div>
-
         <template v-else>
-          <div v-if="items.length === 0" class="empty">
-            <div class="empty-title">「{{ pod?.name ?? "匣" }}」是空的</div>
-            <div class="empty-hint">把文件或图片拖到屏幕边缘的这个匣上<br />将按当前匣的动作设置暂存</div>
-          </div>
-          <TransitionGroup
-            v-else
-            name="list"
-            tag="div"
-            class="items"
-            role="listbox"
-            aria-label="暂存项目"
-            aria-multiselectable="true"
-          >
-            <ItemRow
-              v-for="item in items"
-              :key="item.id"
-              :item="item"
-              :selected="staging.selectedIds.has(item.id)"
-              :get-drag-paths="() => selectedOrSingle(item)"
-              @select="onSelect"
-              @open="openItem"
-              @reveal="revealItem"
-              @remove="removeItem"
-              @context-menu="onItemContextMenu"
-              @drag-out="onDragOut"
-            />
-          </TransitionGroup>
+          <Transition name="stash-swap" mode="out-in">
+            <div v-if="textOpen" key="text-stash" class="text-stash">
+              <label class="text-field">
+                <span>文件标题</span>
+                <input
+                  v-model="textTitle"
+                  maxlength="48"
+                  placeholder="可选，默认取正文第一行前 10 个字"
+                  :disabled="textBusy"
+                  autofocus
+                  @keydown.enter.prevent
+                />
+              </label>
+              <div class="text-field">
+                <div class="text-field-head">
+                  <label class="text-field-label" for="stash-text-body">正文</label>
+                  <button
+                    type="button"
+                    class="text-clip-btn"
+                    :disabled="textBusy"
+                    title="读取剪贴板文字填入正文"
+                    @click="pasteClipboard"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <rect x="8" y="3" width="8" height="4" rx="1" />
+                      <path d="M16 5h2a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h2" />
+                    </svg>
+                    获取剪贴板
+                  </button>
+                </div>
+                <textarea
+                  id="stash-text-body"
+                  v-model="textValue"
+                  placeholder="粘贴或输入要暂存的文字…"
+                  rows="5"
+                  :disabled="textBusy"
+                />
+              </div>
+              <div class="text-actions">
+                <button type="button" class="act primary" :disabled="textBusy" @click="stashText">
+                  {{ textBusy ? "暂存中…" : "暂存" }}
+                </button>
+                <button type="button" class="act ghost" :disabled="textBusy" @click="textOpen = false">
+                  取消
+                </button>
+              </div>
+            </div>
+
+            <div v-else key="list-view" class="list-view">
+              <div v-if="items.length === 0" class="empty">
+                <div class="empty-title">「{{ pod?.name ?? "匣" }}」是空的</div>
+                <div class="empty-hint">把文件或图片拖到屏幕边缘的这个匣上<br />将按当前匣的动作设置暂存</div>
+              </div>
+              <TransitionGroup
+                v-else
+                name="list"
+                tag="div"
+                class="items"
+                role="listbox"
+                aria-label="暂存项目"
+                aria-multiselectable="true"
+              >
+                <ItemRow
+                  v-for="item in items"
+                  :key="item.id"
+                  :item="item"
+                  :selected="staging.selectedIds.has(item.id)"
+                  :get-drag-paths="() => selectedOrSingle(item)"
+                  @select="onSelect"
+                  @open="openItem"
+                  @reveal="revealItem"
+                  @remove="removeItem"
+                  @context-menu="onItemContextMenu"
+                  @drag-out="onDragOut"
+                />
+              </TransitionGroup>
+            </div>
+          </Transition>
         </template>
       </div>
     </div>
@@ -1292,6 +1296,29 @@ function executeInlineMenu(spec: MenuItemSpec) {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+.list-view {
+  min-width: 0;
+}
+/* 列表 <-> 文字暂存的模式切换：先收起旧视图再展开新视图（out-in）。
+   进入慢而远、离开快而短，全程用 --ease-out 出程缓动，观感流畅不生硬。 */
+.stash-swap-enter-active {
+  transition:
+    opacity 220ms var(--ease-out),
+    transform 320ms var(--ease-out);
+}
+.stash-swap-enter-from {
+  opacity: 0;
+  transform: translateY(12px) scale(0.985);
+}
+.stash-swap-leave-active {
+  transition:
+    opacity 140ms var(--ease-out),
+    transform 160ms var(--ease-out);
+}
+.stash-swap-leave-to {
+  opacity: 0;
+  transform: translateY(-8px) scale(0.99);
 }
 .text-field {
   display: flex;

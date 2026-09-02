@@ -3,7 +3,8 @@
  * 右键菜单窗口视图（全局唯一 context_menu 窗口）。
  * 收到 SHOW 事件后渲染菜单、测量内容尺寸交由后端定位显示；
  * 用户选择 → 回传来源面板执行；失焦 / Escape → 关闭。
- * 菜单四周留 12px 透明余量承载阴影，测量值需一并上报。
+ * 窗口与菜单卡片同形（不留阴影余量，四角由后端按卡片圆角裁剪），
+ * 点击卡片外任意位置都会让菜单失焦而关闭。
  */
 import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import ContextMenu from "@/components/ContextMenu.vue";
@@ -11,8 +12,6 @@ import type { MenuItemSpec } from "@/domain/menu";
 import { ipc } from "@/ipc/client";
 import { Events, listenCurrent } from "@/ipc/events";
 import { useSettingsStore } from "@/stores/settings";
-
-const MENU_MARGIN = 12;
 
 const settingsStore = useSettingsStore();
 const seq = ref(0);
@@ -27,10 +26,10 @@ async function measureAndShow() {
   await nextTick();
   // 必须用布局尺寸（offsetWidth/Height）：getBoundingClientRect 会带上
   // 弹入动画进行中的 transform 缩放，量出来的窗口比最终内容小，
-  // 菜单卡片和阴影会被窗口边缘裁切。
+  // 菜单卡片会被窗口边缘裁切。
   const anchor = anchorEl.value;
-  const width = (anchor?.offsetWidth ?? 232) + MENU_MARGIN * 2;
-  const height = (anchor?.offsetHeight ?? 200) + MENU_MARGIN * 2;
+  const width = anchor?.offsetWidth ?? 232;
+  const height = anchor?.offsetHeight ?? 200;
   await ipc.resizeContextMenu(seq.value, width, height).catch((err) => {
     console.error("context menu resize failed", err);
   });
@@ -108,14 +107,14 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .menu-window {
-  /* 全窗口透明；内容锚点带 12px 阴影余量 */
+  /* 全窗口透明；内容锚点与窗口左上角对齐（窗口与卡片同形，无余量） */
   width: 100vw;
   height: 100vh;
   overflow: hidden;
 }
 .menu-anchor {
   position: fixed;
-  left: 12px;
-  top: 12px;
+  left: 0;
+  top: 0;
 }
 </style>

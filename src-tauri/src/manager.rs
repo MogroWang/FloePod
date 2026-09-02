@@ -245,34 +245,41 @@ fn bar_geometry_for_monitor(
     (x, y, w, h)
 }
 
-fn bar_geometry(app: &AppHandle, pod: &Pod, accepting: bool) -> Option<(i32, i32, i32, i32)> {
-    // (x, y, w, h)，物理像素
+fn bar_geometry(
+    app: &AppHandle,
+    pod: &Pod,
+    accepting: bool,
+) -> Option<(MonitorGeometry, i32, i32, i32, i32)> {
+    // ((显示器几何, 缩放率), x, y, w, h)，位置尺寸为物理像素。
+    // 显示器几何一并返回：region 圆角必须用目标显示器的缩放率计算，
+    // 窗口还在旧显示器上时 bar.scale_factor() 会给出过期值导致圆角错位。
     let target = monitor(app, pod)?;
-    Some(bar_geometry_for_monitor(
+    let (x, y, w, h) = bar_geometry_for_monitor(
         target.rect,
         &pod.edge,
         pod.offset,
         accepting,
         target.scale_factor,
         pod.bar_width,
-    ))
+    );
+    Some((target, x, y, w, h))
 }
 
 pub fn place_pod_bar(app: &AppHandle, pod: &Pod, accepting: bool) {
     let Some(bar) = pod_bar(app, pod.id) else {
         return;
     };
-    let Some((x, y, w, h)) = bar_geometry(app, pod, accepting) else {
+    let Some((target, x, y, w, h)) = bar_geometry(app, pod, accepting) else {
         return;
     };
     let _ = bar.set_size(PhysicalSize::new(w as u32, h as u32));
     let _ = bar.set_position(PhysicalPosition::new(x, y));
-    apply_bar_region(&bar, pod, w, h);
+    apply_bar_region(&bar, pod, w, h, target.scale_factor);
 }
 
 /// 材质 != plain 时把窗口裁剪成胶囊形状（贴屏侧直角、外侧圆角随设置），
 /// 让系统材质与胶囊条的 CSS 圆角一致；plain 时清除区域恢复矩形。
-fn apply_bar_region(bar: &WebviewWindow, pod: &Pod, w: i32, h: i32) {
+fn apply_bar_region(bar: &WebviewWindow, pod: &Pod, w: i32, h: i32, scale: f64) {
     let Ok(hwnd) = bar.hwnd() else {
         return;
     };
@@ -280,7 +287,6 @@ fn apply_bar_region(bar: &WebviewWindow, pod: &Pod, w: i32, h: i32) {
         win::set_bar_region(hwnd.0 as isize, w, h, 0, &pod.edge);
         return;
     }
-    let scale = bar.scale_factor().unwrap_or(1.0);
     let scale = if scale.is_finite() && scale > 0.0 {
         scale
     } else {
@@ -412,9 +418,11 @@ fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
     let bar_label = events::pod_bar_label(pod.id);
     let panel_label = events::pod_panel_label(pod.id);
     if app.get_webview_window(&bar_label).is_none() {
+        // 胶囊条不设置标题文字：即使非客户区渲染被系统事件短暂恢复，
+        // 也不会显示出「匣名称」标题栏。
         if let Err(err) =
             WebviewWindowBuilder::new(app, &bar_label, tauri::WebviewUrl::App("index.html".into()))
-                .title(&pod.name)
+                .title("")
                 .decorations(false)
                 .transparent(true)
                 .always_on_top(true)
@@ -506,6 +514,8 @@ fn sync_pods_with_settings(app: &AppHandle, s: &Settings) {
     }
 }
 
+/// 面板材质：tauri 的 set_effects（Win11 22H2+ 走 DWM systembackdrop）。
+/// 面板是矩形窗口 + 系统圆角，systembackdrop 与 DWM 圆角轮廓天然对齐。
 fn apply_material(window: &WebviewWindow, material: &str) {
     use tauri::window::{Effect, EffectsBuilder};
     let effect = match material {
@@ -526,8 +536,19 @@ fn apply_material(window: &WebviewWindow, material: &str) {
     }
 }
 
+/// 胶囊条材质：SWCA ACCENT 路径（见 win::apply_bar_material）。
+/// 胶囊条经 SetWindowRgn 裁剪成胶囊形状，systembackdrop 不遵循窗口 region
+/// 会在 CSS 圆角外露出材质直角，因此必须与面板走不同的材质机制。
+fn apply_bar_material(bar: &WebviewWindow, material: &str) {
+    if let Ok(hwnd) = bar.hwnd() {
+        win::apply_bar_material(hwnd.0 as isize, material);
+    }
+}
+
 /// Win11 的亚克力在窗口失焦时会被系统移除。聚焦状态变化时按运行态缓存的
 /// 材质重放一次，保证无论窗口是否聚焦都显示底层材质。
+/// 胶囊条顺带幂等清理非客户区样式：任何来源恢复的标题栏样式位都在焦点
+/// 变化时被压掉，杜绝胶囊条上「窗口标题」伪影驻留。
 pub fn refresh_window_material(app: &AppHandle, label: &str) {
     let target = match events::pod_window(label) {
         Some(events::PodWindow::Bar(id)) => pod_bar(app, id).map(|window| (id, window, true)),
@@ -552,7 +573,14 @@ pub fn refresh_window_material(app: &AppHandle, label: &str) {
         }
     };
     if let Some(material) = material.filter(|material| material != "plain") {
-        apply_material(&window, &material);
+        if is_bar {
+            apply_bar_material(&window, &material);
+            if let Ok(hwnd) = window.hwnd() {
+                win::prepare_shaped_window(hwnd.0 as isize);
+            }
+        } else {
+            apply_material(&window, &material);
+        }
     }
 }
 
@@ -1102,9 +1130,9 @@ pub fn apply_settings(app: &AppHandle, s: &Settings) {
             apply_panel_material_if_changed(app, pod);
             place_pod_bar(app, pod, false);
             if let Some(bar) = pod_bar(app, pod.id) {
-                let _ = bar.set_title(&pod.name);
+                // 材质变化时走 SWCA 重放；region 已由 place_pod_bar 按新配置应用。
                 if bar_material_changed {
-                    apply_material(&bar, &pod.material);
+                    apply_bar_material(&bar, &pod.material);
                 }
             }
             if let Some(panel) = pod_panel(app, pod.id) {

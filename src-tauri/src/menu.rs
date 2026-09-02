@@ -19,6 +19,10 @@ pub const MENU_SHOW: &str = "floepod://context-menu-show";
 pub const MENU_CHOICE: &str = "floepod://context-menu-choice";
 pub const MENU_CLOSED: &str = "floepod://context-menu-closed";
 
+/// 菜单卡片的 CSS 圆角（逻辑像素），与 ContextMenu.vue 的 .menu-card 保持一致。
+/// 窗口按此圆角裁剪后，卡片圆角外的透明角落不再吞掉本应落在下层的点击。
+pub const CARD_RADIUS: f64 = 12.0;
+
 static MENU_SEQ: AtomicU64 = AtomicU64::new(0);
 /// 菜单窗口 WebView 已挂载并上报就绪；未就绪时 open 直接报错，面板走内嵌降级。
 static MENU_READY: AtomicBool = AtomicBool::new(false);
@@ -88,13 +92,21 @@ pub fn resize_and_show(app: &AppHandle, seq: u64, width: f64, height: f64) {
         return;
     };
     let scale = window.scale_factor().unwrap_or(1.0);
-    let size = PhysicalSize::new(
-        (width.max(1.0) * scale).round() as u32,
-        (height.max(1.0) * scale).round() as u32,
-    );
+    let width_px = (width.max(1.0) * scale).round() as i32;
+    let height_px = (height.max(1.0) * scale).round() as i32;
+    let size = PhysicalSize::new(width_px as u32, height_px as u32);
     let position = clamp_to_monitor(app, cursor_position(), size);
     let _ = window.set_size(size);
     let _ = window.set_position(position);
+    // 窗口必须与菜单卡片同形：四周不留阴影余量（阴影已移除），四角按卡片
+    // 圆角裁剪。否则透明余量会吞掉落在其上的点击——点击不会让菜单失焦，
+    // 也不会作用于下层窗口，表现为「点左键菜单不消失」。
+    if let Ok(hwnd) = window.hwnd() {
+        // 区域半径比 CSS 圆角大 1px：region 无抗锯齿，略大可避免卡片
+        // 边框的圆角弧被裁掉半像素，代价仅是角落 1px 的透明区域。
+        let radius = (CARD_RADIUS * scale).round() as i32 + 1;
+        win::set_rounded_region(hwnd.0 as isize, width_px, height_px, radius);
+    }
     // 显示必须与 hide 的原生 ShowWindow 路径对称：Tauri 的 show() 会同步
     // WebView2 的可见性状态，与 SW_HIDE 混用后透明窗口内容停留在未恢复的
     // 合成状态，菜单第二次起就再也显示不出来。
