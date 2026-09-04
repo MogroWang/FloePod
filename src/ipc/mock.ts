@@ -4,6 +4,7 @@ import type {
   ExportResult,
   Hotkeys,
   MonitorInfo,
+  OperationEntry,
   PanelMode,
   PanelState,
   Pod,
@@ -18,6 +19,7 @@ const HOTKEY_DEFAULTS: Hotkeys = {
   toggleBar: "Alt+Shift+F",
   collectClipboard: "Alt+Shift+S",
   openPanel: "Alt+Shift+P",
+  lockSensitive: "Alt+Shift+L",
 };
 
 let settings: Settings = {
@@ -26,6 +28,16 @@ let settings: Settings = {
   autostart: false,
   hotkeys: { ...HOTKEY_DEFAULTS },
   autoBlock: { enabled: false, apps: [] },
+  accessibility: {
+    enabled: false,
+    scale: 1,
+    highContrast: false,
+    reduceTransparency: false,
+    reduceMotion: false,
+    simpleLanguage: false,
+    confirmDangerous: true,
+    sendToMenu: false,
+  },
   pods: [
     {
       id: 1,
@@ -41,6 +53,7 @@ let settings: Settings = {
       panelColor: "",
       panelWidth: 380,
       hoverDelayMs: 120,
+      hoverOpen: true,
       autoHide: true,
       autoHideDelayMs: 320,
       dropAction: "ask",
@@ -49,6 +62,29 @@ let settings: Settings = {
       cornerRadius: 22,
       borderColor: "",
       borderOpacity: 1,
+      rules: {
+        enabled: false,
+        template: "manual",
+        allowedExtensions: [],
+        nameContains: "",
+        sourceFolder: "",
+        maxSizeMb: 0,
+        renamePattern: "{name}",
+        subfolderPattern: "",
+        duplicatePolicy: "allow",
+        checksumSidecar: false,
+        expireDays: 0,
+        removeAfterExport: false,
+      },
+      security: {
+        enabled: false,
+        requireWindowsHello: true,
+        autoLockMinutes: 10,
+        retentionDays: 0,
+        cleanupAfterExport: false,
+        suppressThumbnails: true,
+        suppressIndex: true,
+      },
     },
   ],
   version: "1.3.0-mock",
@@ -126,6 +162,35 @@ let items: StagedItem[] = [
   },
 ];
 
+let operations: OperationEntry[] = [
+  {
+    id: 1,
+    kind: "stage",
+    podId: 1,
+    summary: "复制 2 项到「我的匣」",
+    status: "completed",
+    createdAt: Date.now() - 8 * 60_000,
+    undoableUntil: Date.now() + 23 * 60 * 60_000,
+    undoneAt: null,
+    undoable: true,
+    retryable: false,
+    items: [
+      {
+        id: 1,
+        itemId: 1,
+        name: "蓝图参考.webp",
+        sourcePath: "C:\\src\\blueprint.webp",
+        targetPath: "D:\\staging\\blueprint.webp",
+        action: "copy",
+        status: "completed",
+        error: null,
+      },
+    ],
+  },
+];
+const annotations = new Map<number, { tags: string[]; note: string }>();
+const unlockedPods = new Set<number>();
+
 const panelStates = new Map<number, PanelState>();
 const cuts = new Map<DragCutToken, { podId: number; paths: string[] }>();
 let cutSequence = 0;
@@ -173,6 +238,7 @@ export async function mockInvoke<T>(command: CommandName, args?: Record<string, 
       panelColor: "",
         panelWidth: 380,
         hoverDelayMs: 120,
+        hoverOpen: true,
         autoHide: true,
         autoHideDelayMs: 320,
         dropAction: "ask",
@@ -181,6 +247,29 @@ export async function mockInvoke<T>(command: CommandName, args?: Record<string, 
         cornerRadius: 22,
         borderColor: "",
         borderOpacity: 1,
+        rules: {
+          enabled: false,
+          template: "manual",
+          allowedExtensions: [],
+          nameContains: "",
+          sourceFolder: "",
+          maxSizeMb: 0,
+          renamePattern: "{name}",
+          subfolderPattern: "",
+          duplicatePolicy: "allow",
+          checksumSidecar: false,
+          expireDays: 0,
+          removeAfterExport: false,
+        },
+        security: {
+          enabled: false,
+          requireWindowsHello: true,
+          autoLockMinutes: 10,
+          retentionDays: 0,
+          cleanupAfterExport: false,
+          suppressThumbnails: true,
+          suppressIndex: true,
+        },
         ...(args?.config as object),
       };
       settings = { ...settings, pods: [...settings.pods, pod] };
@@ -262,6 +351,138 @@ export async function mockInvoke<T>(command: CommandName, args?: Record<string, 
       items = items.filter((item) => !ids.has(item.id));
       return result(undefined);
     }
+    case Commands.ListOperations:
+      return result(operations);
+    case Commands.UndoOperation: {
+      const operationId = Number(args?.operationId);
+      operations = operations.map((operation) =>
+        operation.id === operationId
+          ? { ...operation, status: "undone", undoneAt: Date.now(), undoable: false }
+          : operation,
+      );
+      return result({ operationId, restored: 1, failed: [] });
+    }
+    case Commands.RetryOperation:
+      return result({ operationId: Number(args?.operationId), kind: "stage", result: {} });
+    case Commands.PreviewRemoveItems:
+      return result({
+        title: "将从暂存中移出项目",
+        details: [],
+        warnings: ["文件会先进入 24 小时可撤销区。"],
+        requiresConfirmation: true,
+      });
+    case Commands.PreviewExportItems:
+      return result({
+        title: "将导出所选项目",
+        details: [],
+        warnings: [],
+        requiresConfirmation: Boolean(args?.mode === "move"),
+      });
+    case Commands.ScanPrivacy:
+      return result({
+        filesScanned: 2,
+        issues: [
+          {
+            path: "D:\\staging\\照片.jpg",
+            code: "exif-gps",
+            severity: "high",
+            message: "图片 EXIF 中包含 GPS 位置信息",
+            canClean: true,
+          },
+        ],
+        duplicates: [],
+        disclaimer: "本地规则只能提示常见风险，不代表完全匿名，也不构成合规认证。",
+      });
+    case Commands.SafeExportItems:
+      return result({ completed: [], failed: [] });
+    case Commands.CreateHandoff:
+      return result({
+        directory: "D:\\交接包",
+        files: [],
+        missing: [],
+        warnings: [],
+      });
+    case Commands.VerifyHandoff:
+      return result({ checked: 2, valid: 2, issues: [] });
+    case Commands.RebuildSearchIndex:
+      return result({ indexed: items.length, skipped: 0, failures: [], ocrAvailable: true });
+    case Commands.SearchItems: {
+      const query = String(args?.query ?? "").toLowerCase();
+      const podId = args?.podId == null ? null : Number(args.podId);
+      return result(items
+        .filter((item) => podId === null || item.podId === podId)
+        .filter((item) => {
+          const annotation = annotations.get(item.id) ?? { tags: [], note: "" };
+          return [item.name, item.originalPath ?? "", annotation.note, ...annotation.tags]
+            .join(" ")
+            .toLowerCase()
+            .includes(query);
+        })
+        .map((item) => ({
+          item,
+          ...(annotations.get(item.id) ?? { tags: [], note: "" }),
+          snippet: item.kind === "text" ? "浏览器预览中的本地索引示例" : "",
+          matchedOn: ["文件名"],
+        })));
+    }
+    case Commands.UpdateItemAnnotation:
+      annotations.set(Number(args?.itemId), {
+        tags: Array.isArray(args?.tags) ? args.tags.map(String) : [],
+        note: String(args?.note ?? ""),
+      });
+      return result(undefined);
+    case Commands.GetItemAnnotation:
+      return result(annotations.get(Number(args?.itemId)) ?? { tags: [], note: "" });
+    case Commands.GetPodSecurityStatus: {
+      const podId = Number(args?.podId);
+      const sensitive = Boolean(settings.pods.find((pod) => pod.id === podId)?.security.enabled);
+      return result({
+        podId,
+        sensitive,
+        locked: sensitive && !unlockedPods.has(podId),
+        efsEncrypted: sensitive,
+        expiresSoon: 0,
+      });
+    }
+    case Commands.UnlockSensitivePod: {
+      const podId = Number(args?.podId);
+      unlockedPods.add(podId);
+      return result({ podId, sensitive: true, locked: false, efsEncrypted: true, expiresSoon: 0 });
+    }
+    case Commands.LockSensitivePod:
+      unlockedPods.delete(Number(args?.podId));
+      return result(undefined);
+    case Commands.LockAllSensitivePods:
+      unlockedPods.clear();
+      return result(undefined);
+    case Commands.GetOrganizationPolicy:
+      return result({
+        managed: false,
+        source: "C:\\ProgramData\\FloePod\\organization-policy.json",
+        policy: {
+          organizationName: "",
+          disableMove: false,
+          requireCopyDefault: false,
+          requirePrivacyScan: false,
+          lockRules: false,
+          disableFulltextIndex: false,
+          allowedDataRoots: [],
+          maximumHistoryDays: 90,
+          mandatoryRetentionDays: 0,
+          diagnosticIncludePaths: false,
+          supportContact: "",
+          managedHotkeys: null,
+          managedPods: [],
+        },
+      });
+    case Commands.ExportAuditLog:
+      return result({ path: "D:\\FloePod-audit.json", records: operations.length });
+    case Commands.ExportDiagnosticBundle:
+      return result({ path: "D:\\FloePod-diagnostics.zip", records: operations.length });
+    case Commands.ExportSettingsFile:
+      return result({ path: "D:\\FloePod-settings.json", records: 1 });
+    case Commands.ImportSettingsFile:
+      return result(settings);
     case Commands.ExportItems: {
       const ids = Array.isArray(args?.ids) ? args.ids.map(Number) : [];
       if (args?.mode === "move") {
@@ -345,6 +566,8 @@ export async function mockInvoke<T>(command: CommandName, args?: Record<string, 
       void navigator.clipboard?.writeText(text).catch(() => {});
       return result(undefined);
     }
+    case Commands.ReadClipboardFiles:
+      return result([]);
     default:
       // 浏览器预览没有原生窗口，这些命令直接返回成功。
       return result(undefined);

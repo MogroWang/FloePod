@@ -8,9 +8,18 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask, open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useToast } from "@/composables/useToast";
 import { normalizeWindowsPathKey } from "@/domain/settings";
-import type { AutoBlock, DropAction, Edge, Material, Pod, ThemeMode } from "@/domain/types";
+import type {
+  AccessibilitySettings,
+  AutoBlock,
+  DropAction,
+  Edge,
+  Material,
+  Pod,
+  ThemeMode,
+} from "@/domain/types";
 import { ipc } from "@/ipc/client";
 import { BROWSER_PREVIEW_STAGING_ROOT } from "@/lib/env";
 import { useSettingsStore } from "@/stores/settings";
@@ -21,12 +30,17 @@ import HotkeyRecorder from "@/components/HotkeyRecorder.vue";
 import BrandMark from "@/components/BrandMark.vue";
 import RangeSlider from "@/components/RangeSlider.vue";
 import PodEdgeDiagram from "@/components/PodEdgeDiagram.vue";
+import SafetyCenter from "@/components/SafetyCenter.vue";
+import PodRulesEditor from "@/components/PodRulesEditor.vue";
+import SearchCenter from "@/components/SearchCenter.vue";
+import PodSecurityEditor from "@/components/PodSecurityEditor.vue";
+import OrganizationCenter from "@/components/OrganizationCenter.vue";
 
 const settingsStore = useSettingsStore();
 const s = computed(() => settingsStore.settings);
 const monitors = computed(() => settingsStore.monitors);
 
-const page = ref<"general" | "block" | "pods" | "hotkeys" | "about">("general");
+const page = ref<"general" | "safety" | "block" | "pods" | "hotkeys" | "about">("general");
 const { toast, showToast, disposeToast } = useToast(2400);
 const hotkeyError = ref("");
 const loading = ref(true);
@@ -105,6 +119,8 @@ const THEMES: { value: ThemeMode; label: string }[] = [
 const NAV_ICONS: Record<string, string> = {
   general:
     '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M2 14h4M10 8h4M18 16h4"/>',
+  safety:
+    '<path d="M12 3l7 3v5c0 4.6-2.9 8.5-7 10-4.1-1.5-7-5.4-7-10V6l7-3z"/><path d="M8.5 12h7M12 8.5v7"/>',
   block:
     '<path d="M12 3l7 2.8v5.1c0 4.4-2.9 8.4-7 10.1-4.1-1.7-7-5.7-7-10.1V5.8L12 3z"/><path d="m9 12 2 2 4-4.5"/>',
   pods: '<rect x="3.5" y="3.5" width="17" height="17" rx="3"/><path d="M12 8v8M8 12h8"/>',
@@ -120,6 +136,14 @@ function monitorLabel(pod: Pod): string {
 
 function appLog(msg: string) {
   void ipc.appLog(msg).catch((err) => console.warn("app log failed", err));
+}
+
+async function checkUpdates() {
+  try {
+    await openUrl("https://github.com/MogroWang/FloePod/releases/latest");
+  } catch (error) {
+    showToast(`无法打开版本页面：${String(error)}`);
+  }
 }
 
 /** 带超时的等待：Promise 15 秒不返回则抛错，避免永远卡在「创建中」 */
@@ -163,6 +187,12 @@ async function save(patch: SettingsPatch): Promise<boolean> {
     showToast("保存失败，请重试");
     return false;
   }
+}
+
+function saveAccessibility(patch: Partial<AccessibilitySettings>) {
+  const current = s.value?.accessibility;
+  if (!current) return;
+  void save({ accessibility: { ...current, ...patch } });
 }
 
 async function saveAutostart(enabled: boolean) {
@@ -412,6 +442,7 @@ async function confirmAddPod() {
       panelColor: "",
       panelWidth: 380,
       hoverDelayMs: 120,
+      hoverOpen: true,
       autoHide: true,
       autoHideDelayMs: 320,
       dropAction: "ask",
@@ -420,6 +451,29 @@ async function confirmAddPod() {
       cornerRadius: 22,
       borderColor: "",
       borderOpacity: 1,
+      rules: {
+        enabled: false,
+        template: "manual",
+        allowedExtensions: [],
+        nameContains: "",
+        sourceFolder: "",
+        maxSizeMb: 0,
+        renamePattern: "{name}",
+        subfolderPattern: "",
+        duplicatePolicy: "allow",
+        checksumSidecar: false,
+        expireDays: 0,
+        removeAfterExport: false,
+      },
+      security: {
+        enabled: false,
+        requireWindowsHello: true,
+        autoLockMinutes: 10,
+        retentionDays: 0,
+        cleanupAfterExport: false,
+        suppressThumbnails: true,
+        suppressIndex: true,
+      },
     });
     await settingsStore.refreshPods();
     selectedPodId.value = pod.id;
@@ -494,6 +548,7 @@ function oobePodConfig(): Omit<Pod, "id"> {
     panelColor: "",
     panelWidth: 380,
     hoverDelayMs: 120,
+    hoverOpen: true,
     autoHide: true,
     autoHideDelayMs: 320,
     dropAction: "ask",
@@ -502,6 +557,29 @@ function oobePodConfig(): Omit<Pod, "id"> {
     cornerRadius: 22,
     borderColor: "",
     borderOpacity: 1,
+    rules: {
+      enabled: false,
+      template: "manual",
+      allowedExtensions: [],
+      nameContains: "",
+      sourceFolder: "",
+      maxSizeMb: 0,
+      renamePattern: "{name}",
+      subfolderPattern: "",
+      duplicatePolicy: "allow",
+      checksumSidecar: false,
+      expireDays: 0,
+      removeAfterExport: false,
+    },
+    security: {
+      enabled: false,
+      requireWindowsHello: true,
+      autoLockMinutes: 10,
+      retentionDays: 0,
+      cleanupAfterExport: false,
+      suppressThumbnails: true,
+      suppressIndex: true,
+    },
   };
 }
 
@@ -607,7 +685,10 @@ function nextFromStep2() {
   oobeStep.value = 3;
 }
 
-async function saveHotkey(key: "toggleBar" | "collectClipboard" | "openPanel", combo: string) {
+async function saveHotkey(
+  key: "toggleBar" | "collectClipboard" | "openPanel" | "lockSensitive",
+  combo: string,
+) {
   const revision = ++hotkeySaveRevision;
   hotkeyError.value = "";
   try {
@@ -784,6 +865,7 @@ onBeforeUnmount(() => disposeToast());
 
 const PAGES = [
   { id: "general", label: "常规" },
+  { id: "safety", label: "安心中心" },
   { id: "block", label: "自动屏蔽" },
   { id: "pods", label: "匣" },
   { id: "hotkeys", label: "快捷键" },
@@ -957,6 +1039,7 @@ const PAGES = [
                   <div class="sep" />
                   <SettingsRow label="开机自启" hint="以托盘常驻方式随 Windows 启动">
                     <ToggleSwitch
+                      label="开机自启"
                       :model-value="s.autostart"
                       :disabled="autostartBusy"
                       @update:model-value="saveAutostart"
@@ -969,12 +1052,101 @@ const PAGES = [
                 </div>
               </template>
 
+              <template v-else-if="page === 'safety'">
+                <h2 class="page-title">安心中心</h2>
+                <p class="page-desc">放大界面、减少干扰，并查看或恢复每一步文件操作。</p>
+                <div class="settings-card safety-settings">
+                  <SettingsRow label="启用安心模式" hint="集中启用更易读、更易点按的交互方式">
+                    <ToggleSwitch
+                      label="启用安心模式"
+                      :model-value="s.accessibility.enabled"
+                      @update:model-value="(value) => saveAccessibility({ enabled: value })"
+                    />
+                  </SettingsRow>
+                  <div class="sep" />
+                  <SettingsRow label="界面大小" hint="同时放大文字、按钮和点击目标">
+                    <select
+                      class="input compact-select"
+                      :value="s.accessibility.scale"
+                      :disabled="!s.accessibility.enabled"
+                      aria-label="安心模式界面大小"
+                      @change="saveAccessibility({ scale: Number(($event.target as HTMLSelectElement).value) })"
+                    >
+                      <option :value="1">100%</option>
+                      <option :value="1.25">125%</option>
+                      <option :value="1.5">150%</option>
+                      <option :value="2">200%</option>
+                    </select>
+                  </SettingsRow>
+                  <div class="sep" />
+                  <SettingsRow label="高对比度" hint="使用黑底、白字和高可见焦点框">
+                    <ToggleSwitch
+                      label="高对比度"
+                      :model-value="s.accessibility.highContrast"
+                      :disabled="!s.accessibility.enabled"
+                      @update:model-value="(value) => saveAccessibility({ highContrast: value })"
+                    />
+                  </SettingsRow>
+                  <div class="sep" />
+                  <SettingsRow label="减少透明效果" hint="关闭模糊和玻璃效果，提高文字清晰度">
+                    <ToggleSwitch
+                      label="减少透明效果"
+                      :model-value="s.accessibility.reduceTransparency"
+                      :disabled="!s.accessibility.enabled"
+                      @update:model-value="(value) => saveAccessibility({ reduceTransparency: value })"
+                    />
+                  </SettingsRow>
+                  <div class="sep" />
+                  <SettingsRow label="减少动画" hint="关闭弹入、缩放和过渡动画">
+                    <ToggleSwitch
+                      label="减少动画"
+                      :model-value="s.accessibility.reduceMotion"
+                      :disabled="!s.accessibility.enabled"
+                      @update:model-value="(value) => saveAccessibility({ reduceMotion: value })"
+                    />
+                  </SettingsRow>
+                  <div class="sep" />
+                  <SettingsRow label="简明语言" hint="用完整问题代替术语和仅图标提示">
+                    <ToggleSwitch
+                      label="简明语言"
+                      :model-value="s.accessibility.simpleLanguage"
+                      :disabled="!s.accessibility.enabled"
+                      @update:model-value="(value) => saveAccessibility({ simpleLanguage: value })"
+                    />
+                  </SettingsRow>
+                  <div class="sep" />
+                  <SettingsRow label="危险操作确认" hint="移动、批量移出前始终显示将要发生的事情">
+                    <ToggleSwitch
+                      label="危险操作确认"
+                      :model-value="s.accessibility.confirmDangerous"
+                      :disabled="!s.accessibility.enabled"
+                      @update:model-value="(value) => saveAccessibility({ confirmDangerous: value })"
+                    />
+                  </SettingsRow>
+                  <div class="sep" />
+                  <SettingsRow label="资源管理器“发送到 FloePod”" hint="右键文件即可复制到第一个可用匣，作为拖拽替代">
+                    <ToggleSwitch
+                      label="资源管理器发送到 FloePod"
+                      :model-value="s.accessibility.sendToMenu"
+                      @update:model-value="(value) => saveAccessibility({ sendToMenu: value })"
+                    />
+                  </SettingsRow>
+                </div>
+                <h3 class="section-title">操作时间线与一键恢复</h3>
+                <SafetyCenter />
+                <h3 class="section-title search-section-title">本地 OCR、全文搜索与标签</h3>
+                <SearchCenter />
+                <h3 class="section-title search-section-title">机构策略、审计与诊断</h3>
+                <OrganizationCenter />
+              </template>
+
               <template v-else-if="page === 'block'">
                 <h2 class="page-title">自动屏蔽</h2>
                 <p class="page-desc">列表内的应用位于前台时自动隐藏全部浮匣，切走后自动恢复。</p>
                 <div class="settings-card">
                   <SettingsRow label="启用自动屏蔽" hint="按下方列表匹配前台应用">
                     <ToggleSwitch
+                      label="启用自动屏蔽"
                       :model-value="s.autoBlock.enabled"
                       @update:model-value="toggleAutoBlock"
                     />
@@ -1084,6 +1256,7 @@ const PAGES = [
                     </template>
                     <div class="pod-head-ops">
                       <ToggleSwitch
+                        :label="`启用匣 ${pod.name}`"
                         :model-value="pod.enabled"
                         :disabled="podEnabledBusyIds.has(pod.id)"
                         @update:model-value="(v) => savePodEnabled(pod, v)"
@@ -1315,6 +1488,16 @@ const PAGES = [
                         </div>
                       </div>
                       <div class="frow">
+                        <span class="flabel">悬停自动打开</span>
+                        <div class="fctrl">
+                          <ToggleSwitch
+                            label="悬停自动打开"
+                            :model-value="pod.hoverOpen"
+                            @update:model-value="(v) => savePod(pod.id, { hoverOpen: v })"
+                          />
+                        </div>
+                      </div>
+                      <div v-if="pod.hoverOpen" class="frow">
                         <span class="flabel">悬停展开延迟</span>
                         <div class="fctrl">
                           <RangeSlider
@@ -1333,6 +1516,7 @@ const PAGES = [
                         <span class="flabel">自动隐藏</span>
                         <div class="fctrl">
                           <ToggleSwitch
+                            label="自动隐藏"
                             :model-value="pod.autoHide"
                             @update:model-value="(v) => savePod(pod.id, { autoHide: v })"
                           />
@@ -1372,6 +1556,24 @@ const PAGES = [
                         </div>
                       </div>
                     </div>
+                    <div class="pod-group rules-group">
+                      <div class="group-title">规则匣</div>
+                      <p class="group-hint">按文件类型、名称、来源和大小过滤，并自动命名、归档或生成校验值。</p>
+                      <PodRulesEditor
+                        :rules="pod.rules"
+                        @update="(rules) => savePod(pod.id, { rules })"
+                      />
+                    </div>
+                    <div class="pod-group rules-group">
+                      <div class="group-title">敏感匣、自动锁定与保留期限</div>
+                      <p class="group-hint">使用 Windows EFS 与 Windows Hello；不上传内容，也不保存自制密码。</p>
+                      <PodSecurityEditor
+                        :pod-id="pod.id"
+                        :folder="pod.stagingFolder"
+                        :security="pod.security"
+                        @update="(security) => savePod(pod.id, { security })"
+                      />
+                    </div>
                   </div>
                 </div>
               </template>
@@ -1390,6 +1592,10 @@ const PAGES = [
                   <div class="sep" />
                   <SettingsRow label="打开第一匣面板">
                     <HotkeyRecorder :model-value="s.hotkeys.openPanel" @update:model-value="(v) => saveHotkey('openPanel', v)" />
+                  </SettingsRow>
+                  <div class="sep" />
+                  <SettingsRow label="紧急锁定敏感匣" hint="立即清除所有内存中的敏感匣解锁状态">
+                    <HotkeyRecorder :model-value="s.hotkeys.lockSensitive" @update:model-value="(v) => saveHotkey('lockSensitive', v)" />
                   </SettingsRow>
                 </div>
                 <p v-if="hotkeyError" class="error">{{ hotkeyError }}</p>
@@ -1416,6 +1622,9 @@ const PAGES = [
                     <span class="about-key">匣的数量</span>
                     <span class="about-val">{{ s.pods.length }} 个</span>
                   </div>
+                </div>
+                <div class="reset-line">
+                  <button type="button" class="btn" @click="checkUpdates">查看最新版本与下载</button>
                 </div>
               </template>
             </section>
@@ -1753,6 +1962,20 @@ const PAGES = [
 .settings-card :deep(.row) {
   padding: 14px 16px;
 }
+.safety-settings {
+  margin-bottom: 20px;
+}
+.compact-select {
+  width: 116px;
+}
+.section-title {
+  margin: 0 0 10px;
+  font-size: 14px;
+  font-weight: 700;
+}
+.search-section-title {
+  margin-top: 24px;
+}
 
 .page-enter-active,
 .page-leave-active {
@@ -1992,6 +2215,14 @@ select.input {
 }
 .pod-group:first-child .group-title {
   margin-top: 0;
+}
+.group-hint {
+  margin: 0 0 8px;
+  color: var(--ink-3);
+  font-size: 11.5px;
+}
+.rules-group {
+  margin-top: 6px;
 }
 .frow {
   display: flex;

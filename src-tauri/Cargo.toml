@@ -33,6 +33,22 @@ image = { version = "0.25", default-features = false, features = [
   "webp",
   "bmp",
   "ico",
+  "tiff",
+] }
+sha2 = "0.10"
+regex = "1"
+kamadak-exif = "0.6"
+lopdf = { version = "0.44", default-features = false }
+zip = { version = "6.0", default-features = false, features = ["deflate"] }
+winreg = "0.55"
+windows = { version = "0.61", features = [
+  "Foundation",
+  "Graphics_Imaging",
+  "Media_Ocr",
+  "Security_Credentials_UI",
+  "Storage",
+  "Storage_Streams",
+  "Win32_System_WinRT",
 ] }
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation",
@@ -45,6 +61,7 @@ windows-sys = { version = "0.59", features = [
   "Win32_System_Ole",
   "Win32_System_Threading",
   "Win32_System_LibraryLoader",
+  "Win32_Storage_FileSystem",
   "Win32_UI_WindowsAndMessaging",
   "Win32_UI_Input_KeyboardAndMouse",
 ] }

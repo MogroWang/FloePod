@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{db, settings};
@@ -21,6 +21,13 @@ pub fn unique_target(
     desired_name: &str,
     reserved: &mut HashSet<String>,
 ) -> Result<PathBuf, String> {
+    let mut components = Path::new(desired_name).components();
+    if desired_name.is_empty()
+        || !matches!(components.next(), Some(Component::Normal(_)))
+        || components.next().is_some()
+    {
+        return Err("目标名称必须是单个文件名，不能包含路径".into());
+    }
     let mut name = desired_name.to_string();
     let mut suffix = 1;
     loop {
@@ -67,6 +74,7 @@ pub fn is_internal_temp_name(name: &str) -> bool {
     name.starts_with(".floepod-inflight-")
         || name.starts_with(".floepod-move-source-")
         || name.starts_with(".floepod-export-")
+        || name.starts_with(".floepod-privacy-")
         || name.starts_with(".floepod-overwrite-backup-")
 }
 
@@ -432,6 +440,15 @@ mod tests {
     }
 
     #[test]
+    fn unique_target_rejects_path_components() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut reserved = HashSet::new();
+        assert!(unique_target(temporary.path(), "../outside.txt", &mut reserved).is_err());
+        assert!(unique_target(temporary.path(), r"folder\\file.txt", &mut reserved).is_err());
+        assert!(unique_target(temporary.path(), "", &mut reserved).is_err());
+    }
+
+    #[test]
     fn copy_path_never_overwrites_or_merges() {
         let temporary = tempfile::tempdir().unwrap();
         let source = temporary.path().join("source");
@@ -472,6 +489,7 @@ mod tests {
             ".floepod-inflight-1-0000000000000001",
             ".floepod-move-source-1-0000000000000002",
             ".floepod-export-1-1",
+            ".floepod-privacy-1-1",
             ".floepod-overwrite-backup-1-1",
         ] {
             assert!(is_internal_temp_name(name), "{name}");

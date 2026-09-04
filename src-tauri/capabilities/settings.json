@@ -11,6 +11,7 @@
     "core:window:allow-set-theme",
     "core:window:allow-theme",
     "dialog:allow-open",
-    "dialog:allow-ask"
+    "dialog:allow-ask",
+    "opener:allow-open-url"
   ]
 }

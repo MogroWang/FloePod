@@ -6,7 +6,7 @@
 
 本地优先的 Windows 屏幕边缘文件暂存工具。把文件、图片、文字拖到屏幕边缘的浮匣里集中保管，需要时再拖出去或批量导出。不联网、无遥测，所有数据只存在你自己的电脑上。
 
-当前源码版本 **1.0.0**，提供 x64 Windows 便携包和 NSIS 安装包。
+当前源码版本 **1.3.0**，提供 x64 Windows 便携包、NSIS、MSI 和 MSIX 构建路径。
 
 ## 功能
 
@@ -20,6 +20,13 @@
 - **多窗口定向事件**：每个匣的事件只发给自己的窗口，多匣并存互不串扰
 - **系统集成**：托盘菜单、全局快捷键（默认 `Alt+Shift+F` 显示/隐藏匣、`Alt+Shift+S` 收集剪贴板、`Alt+Shift+P` 打开面板）、开机自启（可选）
 - **显式便携模式**：便携包带 marker，数据写入 exe 旁 `FloePodData/`；安装版写入 `%APPDATA%\FloePod`，已有便携数据继续自动识别
+- **操作时间线与一键恢复**：持久记录暂存、导出、移出、隐私清理和交接操作；免费提供最近 24 小时的保守撤销，文件内容变化后拒绝误删，并可只重试失败项
+- **安心模式**：100%～200% 放大、高对比度、减少透明/动画、44px 点击目标、简明语言、危险操作预览；支持文件选择器、Ctrl+V、资源管理器“发送到 FloePod”和 `Alt+1…9`，核心流程无需拖拽
+- **规则匣**：按扩展名、文件名、来源、大小和 SHA-256 重复内容过滤，支持日期重命名、年月子目录、校验文件、到期提醒和导出后移出
+- **可信交接与安全导出**：生成清单 CSV、机器可读 JSON、交接说明 HTML 和 `SHA256SUMS.txt`；本地提示并清理图片 EXIF/GPS、PDF 与 Office/OpenDocument 属性，原文件保持不变
+- **本地 OCR 与全文搜索**：索引文件名、来源、标签、备注、文本、PDF、Office/OpenDocument 和 Windows OCR；支持日期、类型、来源和标签筛选，不上传索引内容
+- **敏感匣**：使用 Windows EFS 加密目录、Windows Hello/PIN 解锁、自动/紧急锁定、缩略图与索引禁止、保留期限和导出后清理，不自制加密算法
+- **机构策略与诊断**：可选 `%PROGRAMDATA%\FloePod\organization-policy.json` 限制移动、目录、规则、索引和保留期限；本地导出审计、脱敏诊断包与设置备份
 
 ## 技术栈
 
@@ -38,6 +45,7 @@ pnpm tauri dev        # 开发运行（Rust + Vite 联动）
 cargo test --manifest-path src-tauri/Cargo.toml --locked
 pnpm build            # 前端类型检查 + 产物构建
 pnpm tauri build      # 发布构建（NSIS 安装包 + 裸 exe）
+pwsh -File scripts/package-msix.ps1 # 构建 MSIX（需要 Windows SDK）
 pnpm tauri icon app-icon.png             # 由源图生成全套图标
 ```
 
@@ -58,7 +66,11 @@ src-tauri/src/
   pods.rs staging.rs    # 匣配置与暂存条目管理
   file_ops.rs export.rs # 文件操作、批量导出与错误处理
   drag_out.rs thumbnail.rs # OLE 拖出与缩略图读取
-  db.rs settings.rs state.rs   # SQLite 持久化与运行态
+      db.rs settings.rs state.rs   # SQLite 持久化与运行态
+      operations.rs rules.rs       # 操作时间线/撤销与规则匣
+      handoff.rs privacy.rs        # 可信交接包与本地隐私清理
+      search.rs security.rs        # 本地 OCR/全文索引与 EFS 敏感匣
+      policy.rs shell_integration.rs # 机构策略、诊断与资源管理器入口
   clipboard.rs menu.rs   # 系统剪贴板写入、右键菜单窗口管理
   watcher.rs            # 暂存文件夹监听与按匣同步（notify）
   autostart.rs          # 开机自启（HKCU 注册表同步）
@@ -90,5 +102,8 @@ node scripts/package-portable.mjs
 
 - 需要 WebView2 运行时（Windows 10/11 一般自带）
 - 发布前请按 [Windows 发布检查单](docs/release-checklist.md) 完成自动检查和人工验证
+- 无障碍范围见 [安心模式说明](docs/accessibility.md)，本地数据边界见 [隐私说明](docs/privacy.md)
+- 机构离线部署、MSI/MSIX、签名和策略见 [部署指南](docs/deployment.md)
+- 功能覆盖与需要外部主体完成的边界见 [安心工作台能力对照](docs/trusted-workbench.md)
 - 图标为正式 FP Logo（`docs/fp-logo.png` 横向字标 / `app-icon.png` 应用图标）；如需重新生成图标执行
   `pnpm tauri icon app-icon.png && pnpm tauri build` 即可

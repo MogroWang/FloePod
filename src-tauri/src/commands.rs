@@ -8,7 +8,10 @@ use crate::export::ExportResult;
 use crate::settings::{Hotkeys, Pod, Settings};
 use crate::staging::StagePathsResult;
 use crate::thumbnail::ThumbnailPayload;
-use crate::{drag_out, export, logging, manager, pods, staging, thumbnail};
+use crate::{
+    drag_out, export, handoff, logging, manager, operations, pods, policy, privacy, search,
+    security, staging, thumbnail,
+};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -87,10 +90,52 @@ pub async fn stage_paths(
     paths: Vec<String>,
     action: String,
 ) -> Result<StagePathsResult, String> {
-    blocking("文件暂存", move || {
+    let history_app = app.clone();
+    let history_paths = paths.clone();
+    let history_action = action.clone();
+    let result = blocking("文件暂存", move || {
         staging::stage_paths(app, pod_id, paths, action)
     })
-    .await
+    .await;
+    if let Err(error) = &result {
+        let state = history_app.state::<crate::state::AppState>();
+        let items = history_paths
+            .iter()
+            .map(|path| operations::OperationItemDraft {
+                item_id: None,
+                name: std::path::Path::new(path)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.clone()),
+                source_path: Some(path.clone()),
+                target_path: None,
+                action: history_action.clone(),
+                status: "failed".into(),
+                error: Some(error.clone()),
+                snapshot: None,
+                compensation: None,
+            })
+            .collect();
+        let _ = operations::record(
+            &state.db.lock().unwrap(),
+            operations::OperationDraft {
+                kind: "stage".into(),
+                pod_id: Some(pod_id as i64),
+                summary: format!("暂存 {} 项失败", history_paths.len()),
+                status: "failed".into(),
+                undoable_until: None,
+                metadata: serde_json::json!({
+                    "retry": {
+                        "podId": pod_id,
+                        "paths": history_paths,
+                        "action": history_action,
+                    }
+                }),
+                items,
+            },
+        );
+    }
+    result
 }
 
 #[tauri::command]
@@ -115,6 +160,216 @@ pub fn list_pod_items(app: AppHandle, pod_id: u64) -> Result<Vec<StagedItem>, St
 pub async fn remove_items(app: AppHandle, ids: Vec<i64>, delete_files: bool) -> Result<(), String> {
     blocking("移出暂存项目", move || {
         staging::remove_items(app, ids, delete_files)
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn list_operations(
+    app: AppHandle,
+    hours: Option<u32>,
+    limit: Option<u32>,
+) -> Result<Vec<operations::OperationEntry>, String> {
+    operations::list(&app, hours.unwrap_or(24), limit.unwrap_or(100))
+}
+
+#[tauri::command]
+pub async fn undo_operation(
+    app: AppHandle,
+    operation_id: i64,
+) -> Result<operations::UndoResult, String> {
+    blocking("撤销操作", move || operations::undo(app, operation_id)).await
+}
+
+#[tauri::command]
+pub async fn retry_operation(
+    app: AppHandle,
+    operation_id: i64,
+) -> Result<operations::RetryResult, String> {
+    blocking("重试失败项", move || {
+        operations::retry(app, operation_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn preview_remove_items(
+    app: AppHandle,
+    ids: Vec<i64>,
+    delete_files: bool,
+) -> Result<operations::OperationPreview, String> {
+    blocking("预览移出操作", move || {
+        operations::preview_remove(&app, &ids, delete_files)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn preview_export_items(
+    app: AppHandle,
+    ids: Vec<i64>,
+    dest_dir: String,
+    mode: String,
+) -> Result<operations::OperationPreview, String> {
+    blocking("预览导出操作", move || {
+        operations::preview_export(&app, &ids, &dest_dir, &mode)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn scan_privacy(
+    app: AppHandle,
+    ids: Vec<i64>,
+) -> Result<privacy::PrivacyScanResult, String> {
+    blocking("本地隐私检查", move || {
+        privacy::scan_items(&app, &ids)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn safe_export_items(
+    app: AppHandle,
+    ids: Vec<i64>,
+    dest_dir: String,
+) -> Result<privacy::SafeExportResult, String> {
+    blocking("生成隐私清理副本", move || {
+        privacy::safe_export(app, ids, dest_dir)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn create_handoff(
+    app: AppHandle,
+    ids: Vec<i64>,
+    dest_dir: String,
+    title: String,
+    note: String,
+    clean_metadata: bool,
+) -> Result<handoff::HandoffResult, String> {
+    blocking("生成可信交接包", move || {
+        handoff::create(app, ids, dest_dir, title, note, clean_metadata)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn verify_handoff(directory: String) -> Result<handoff::VerifyResult, String> {
+    blocking("验证可信交接包", move || handoff::verify(directory)).await
+}
+
+#[tauri::command]
+pub async fn rebuild_search_index(
+    app: AppHandle,
+    pod_id: Option<u64>,
+) -> Result<search::IndexResult, String> {
+    blocking("重建本地搜索索引", move || {
+        search::rebuild(&app, pod_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn search_items(
+    app: AppHandle,
+    query: String,
+    pod_id: Option<u64>,
+) -> Result<Vec<search::SearchHit>, String> {
+    blocking("本地搜索", move || search::search(&app, query, pod_id)).await
+}
+
+#[tauri::command]
+pub async fn update_item_annotation(
+    app: AppHandle,
+    item_id: i64,
+    tags: Vec<String>,
+    note: String,
+) -> Result<(), String> {
+    blocking("保存标签和备注", move || {
+        search::update_annotation(&app, item_id, tags, note)
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn get_item_annotation(app: AppHandle, item_id: i64) -> Result<search::Annotation, String> {
+    search::annotation(&app, item_id)
+}
+
+#[tauri::command]
+pub fn get_pod_security_status(
+    app: AppHandle,
+    pod_id: u64,
+) -> Result<security::SecurityStatus, String> {
+    security::status(&app, pod_id)
+}
+
+#[tauri::command]
+pub async fn unlock_sensitive_pod(
+    app: AppHandle,
+    pod_id: u64,
+) -> Result<security::SecurityStatus, String> {
+    blocking("Windows Hello 解锁", move || {
+        security::unlock(&app, pod_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn lock_sensitive_pod(app: AppHandle, pod_id: u64) {
+    security::lock(&app, pod_id);
+}
+
+#[tauri::command]
+pub fn lock_all_sensitive_pods(app: AppHandle) {
+    security::lock_all(&app);
+}
+
+#[tauri::command]
+pub fn get_organization_policy() -> Result<policy::PolicyStatus, String> {
+    policy::load()
+}
+
+#[tauri::command]
+pub async fn export_audit_log(
+    app: AppHandle,
+    dest_dir: String,
+    format: String,
+) -> Result<policy::ExportedArtifact, String> {
+    blocking("导出本地审计记录", move || {
+        policy::export_audit(&app, dest_dir, format)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn export_diagnostic_bundle(
+    app: AppHandle,
+    dest_dir: String,
+) -> Result<policy::ExportedArtifact, String> {
+    blocking("生成本地诊断包", move || {
+        policy::diagnostic_bundle(&app, dest_dir)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn export_settings_file(
+    app: AppHandle,
+    dest_dir: String,
+) -> Result<policy::ExportedArtifact, String> {
+    blocking("导出设置", move || {
+        policy::export_settings(&app, dest_dir)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn import_settings_file(app: AppHandle, source: String) -> Result<Settings, String> {
+    blocking("导入设置", move || {
+        policy::import_settings(&app, source)
     })
     .await
 }
@@ -263,6 +518,11 @@ pub async fn reveal_staged_items(app: AppHandle, item_ids: Vec<i64>) -> Result<(
 #[tauri::command]
 pub fn write_clipboard_text(text: String) -> Result<(), String> {
     crate::clipboard::copy_text(&text)
+}
+
+#[tauri::command]
+pub async fn read_clipboard_files() -> Result<Vec<String>, String> {
+    blocking("读取剪贴板文件", crate::clipboard::read_files).await
 }
 
 // ---- 右键菜单窗口 ----

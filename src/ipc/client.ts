@@ -8,15 +8,29 @@ import type {
   DropAction,
   ExportMode,
   ExportResult,
+  ExportedArtifact,
   Hotkeys,
+  HandoffResult,
+  IndexResult,
+  ItemAnnotation,
   ModifierState,
+  OperationEntry,
+  OperationPreview,
   PanelMode,
   PanelState,
+  PolicyStatus,
+  PrivacyScanResult,
   Pod,
   Settings,
   StagePathsResult,
   StagedItem,
   ThumbnailPayload,
+  RetryResult,
+  SafeExportResult,
+  SearchHit,
+  SecurityStatus,
+  UndoResult,
+  VerifyResult,
 } from "@/domain/types";
 import { Commands, type CommandName } from "./commands";
 
@@ -62,6 +76,58 @@ export const ipc = {
     invoke(Commands.ListPodItems, { podId }),
   removeItems: (ids: number[], deleteFiles: boolean): Promise<void> =>
     invoke(Commands.RemoveItems, { ids, deleteFiles }),
+  listOperations: (hours = 24, limit = 100): Promise<OperationEntry[]> =>
+    invoke(Commands.ListOperations, { hours, limit }),
+  undoOperation: (operationId: number): Promise<UndoResult> =>
+    invoke(Commands.UndoOperation, { operationId }),
+  retryOperation: (operationId: number): Promise<RetryResult> =>
+    invoke(Commands.RetryOperation, { operationId }),
+  previewRemoveItems: (ids: number[], deleteFiles: boolean): Promise<OperationPreview> =>
+    invoke(Commands.PreviewRemoveItems, { ids, deleteFiles }),
+  previewExportItems: (
+    ids: number[],
+    destDir: string,
+    mode: ExportMode,
+  ): Promise<OperationPreview> =>
+    invoke(Commands.PreviewExportItems, { ids, destDir, mode }),
+  scanPrivacy: (ids: number[]): Promise<PrivacyScanResult> =>
+    invoke(Commands.ScanPrivacy, { ids }),
+  safeExportItems: (ids: number[], destDir: string): Promise<SafeExportResult> =>
+    invoke(Commands.SafeExportItems, { ids, destDir }),
+  createHandoff: (
+    ids: number[],
+    destDir: string,
+    title: string,
+    note: string,
+    cleanMetadata: boolean,
+  ): Promise<HandoffResult> =>
+    invoke(Commands.CreateHandoff, { ids, destDir, title, note, cleanMetadata }),
+  verifyHandoff: (directory: string): Promise<VerifyResult> =>
+    invoke(Commands.VerifyHandoff, { directory }),
+  rebuildSearchIndex: (podId?: number): Promise<IndexResult> =>
+    invoke(Commands.RebuildSearchIndex, { podId: podId ?? null }),
+  searchItems: (query: string, podId?: number): Promise<SearchHit[]> =>
+    invoke(Commands.SearchItems, { query, podId: podId ?? null }),
+  updateItemAnnotation: (itemId: number, tags: string[], note: string): Promise<void> =>
+    invoke(Commands.UpdateItemAnnotation, { itemId, tags, note }),
+  getItemAnnotation: (itemId: number): Promise<ItemAnnotation> =>
+    invoke(Commands.GetItemAnnotation, { itemId }),
+  getPodSecurityStatus: (podId: number): Promise<SecurityStatus> =>
+    invoke(Commands.GetPodSecurityStatus, { podId }),
+  unlockSensitivePod: (podId: number): Promise<SecurityStatus> =>
+    invoke(Commands.UnlockSensitivePod, { podId }),
+  lockSensitivePod: (podId: number): Promise<void> =>
+    invoke(Commands.LockSensitivePod, { podId }),
+  lockAllSensitivePods: (): Promise<void> => invoke(Commands.LockAllSensitivePods),
+  getOrganizationPolicy: (): Promise<PolicyStatus> => invoke(Commands.GetOrganizationPolicy),
+  exportAuditLog: (destDir: string, format: "json" | "csv"): Promise<ExportedArtifact> =>
+    invoke(Commands.ExportAuditLog, { destDir, format }),
+  exportDiagnosticBundle: (destDir: string): Promise<ExportedArtifact> =>
+    invoke(Commands.ExportDiagnosticBundle, { destDir }),
+  exportSettingsFile: (destDir: string): Promise<ExportedArtifact> =>
+    invoke(Commands.ExportSettingsFile, { destDir }),
+  importSettingsFile: (source: string): Promise<Settings> =>
+    invoke(Commands.ImportSettingsFile, { source }),
 
   exportItems: (
     ids: number[],
@@ -104,6 +170,7 @@ export const ipc = {
     invoke(Commands.RevealStagedItems, { itemIds }),
   writeClipboardText: (text: string): Promise<void> =>
     invoke(Commands.WriteClipboardText, { text }),
+  readClipboardFiles: (): Promise<string[]> => invoke(Commands.ReadClipboardFiles),
 
   contextMenuReady: (): Promise<void> => invoke(Commands.ContextMenuReady),
   openContextMenu: (podId: number, items: MenuItemSpec[]): Promise<void> =>

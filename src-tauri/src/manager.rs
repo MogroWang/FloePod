@@ -590,20 +590,29 @@ fn sync_runtime_config(app: &AppHandle, pod: &Pod) {
 /// 已经记录了新材质，显示路径的变化检测就再也不触发，导致「改材质时
 /// 面板没固定」永远不生效。
 fn apply_panel_material_if_changed(app: &AppHandle, pod: &Pod) {
+    let material = if app
+        .state::<AppState>()
+        .accessibility_reduce_transparency
+        .load(Ordering::Relaxed)
+    {
+        "plain"
+    } else {
+        pod.panel_material.as_str()
+    };
     let changed = {
         let state = app.state::<AppState>();
         let mut guard = state.pods.lock().unwrap();
         let runtime = guard.entry(pod.id).or_default();
-        if runtime.panel_material.as_deref() == Some(pod.panel_material.as_str()) {
+        if runtime.panel_material.as_deref() == Some(material) {
             false
         } else {
-            runtime.panel_material = Some(pod.panel_material.clone());
+            runtime.panel_material = Some(material.to_string());
             true
         }
     };
     if changed {
         if let Some(panel) = pod_panel(app, pod.id) {
-            let _ = apply_window_material(&panel, &pod.panel_material);
+            let _ = apply_window_material(&panel, material);
         }
     }
 }
@@ -1123,6 +1132,9 @@ pub fn sync_autostart(_app: &AppHandle, enabled: bool) -> Result<(), String> {
 /// 设置落地：同步匣窗口、材质、监听、托盘全量应用。
 /// 自启动属于可失败的系统副作用，由保存设置和启动流程显式调用 `sync_autostart`。
 pub fn apply_settings(app: &AppHandle, s: &Settings) {
+    if let Err(error) = crate::shell_integration::sync(s.accessibility.send_to_menu) {
+        crate::logging::write(&format!("[shell] 同步资源管理器菜单失败: {error}"));
+    }
     // 自动屏蔽配置驻留内存：轮询线程每几百毫秒读取一次，不能每次都查库。
     {
         let state = app.state::<AppState>();
@@ -1130,6 +1142,10 @@ pub fn apply_settings(app: &AppHandle, s: &Settings) {
             .auto_block_enabled
             .store(s.auto_block.enabled, Ordering::Relaxed);
         *state.auto_block_apps.lock().unwrap() = s.auto_block.apps.clone();
+        state.accessibility_reduce_transparency.store(
+            s.accessibility.enabled && s.accessibility.reduce_transparency,
+            Ordering::Relaxed,
+        );
     }
 
     // 窗口创建/销毁与所有面板显隐串行。对已固定、可见的面板立即应用新的

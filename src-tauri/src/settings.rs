@@ -18,6 +18,8 @@ pub struct Hotkeys {
     pub collect_clipboard: String,
     #[serde(default = "d_open_panel")]
     pub open_panel: String,
+    #[serde(default = "d_lock_sensitive")]
+    pub lock_sensitive: String,
 }
 
 fn d_toggle_bar() -> String {
@@ -29,6 +31,9 @@ fn d_collect_clipboard() -> String {
 fn d_open_panel() -> String {
     "Alt+Shift+P".into()
 }
+fn d_lock_sensitive() -> String {
+    "Alt+Shift+L".into()
+}
 
 impl Hotkeys {
     pub fn with_defaults() -> Self {
@@ -36,6 +41,7 @@ impl Hotkeys {
             toggle_bar: d_toggle_bar(),
             collect_clipboard: d_collect_clipboard(),
             open_panel: d_open_panel(),
+            lock_sensitive: d_lock_sensitive(),
         }
     }
 }
@@ -48,6 +54,104 @@ pub struct AutoBlock {
     pub enabled: bool,
     #[serde(default)]
     pub apps: Vec<String>,
+}
+
+/// 免费的「安心模式」设置：提高可读性、提供非拖拽替代并减少认知负担。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Accessibility {
+    pub enabled: bool,
+    /// WebView 内容缩放，范围 1.0 - 2.0。
+    pub scale: f64,
+    pub high_contrast: bool,
+    pub reduce_transparency: bool,
+    pub reduce_motion: bool,
+    pub simple_language: bool,
+    pub confirm_dangerous: bool,
+    pub send_to_menu: bool,
+}
+
+/// 单个匣的本地规则。规则只做可解释的过滤、命名、归档和校验，不执行任意脚本。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PodRules {
+    pub enabled: bool,
+    pub template: String,
+    pub allowed_extensions: Vec<String>,
+    pub name_contains: String,
+    pub source_folder: String,
+    pub max_size_mb: u64,
+    /// 支持 {name}、{stem}、{ext}、{date}、{year}、{month}、{day}。
+    pub rename_pattern: String,
+    /// 支持日期令牌；必须是相对目录且不能含 ..。
+    pub subfolder_pattern: String,
+    /// allow / reject
+    pub duplicate_policy: String,
+    pub checksum_sidecar: bool,
+    pub expire_days: u32,
+    pub remove_after_export: bool,
+}
+
+impl Default for PodRules {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            template: "manual".into(),
+            allowed_extensions: Vec::new(),
+            name_contains: String::new(),
+            source_folder: String::new(),
+            max_size_mb: 0,
+            rename_pattern: "{name}".into(),
+            subfolder_pattern: String::new(),
+            duplicate_policy: "allow".into(),
+            checksum_sidecar: false,
+            expire_days: 0,
+            remove_after_export: false,
+        }
+    }
+}
+
+/// 敏感匣使用 Windows EFS 加密目录，并以 Windows Hello 控制应用内解锁。
+/// 不保存自制密码或密钥；不支持 EFS 的卷会拒绝启用而不是假装已加密。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PodSecurity {
+    pub enabled: bool,
+    pub require_windows_hello: bool,
+    pub auto_lock_minutes: u32,
+    pub retention_days: u32,
+    pub cleanup_after_export: bool,
+    pub suppress_thumbnails: bool,
+    pub suppress_index: bool,
+}
+
+impl Default for PodSecurity {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            require_windows_hello: true,
+            auto_lock_minutes: 10,
+            retention_days: 0,
+            cleanup_after_export: false,
+            suppress_thumbnails: true,
+            suppress_index: true,
+        }
+    }
+}
+
+impl Default for Accessibility {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            scale: 1.0,
+            high_contrast: false,
+            reduce_transparency: false,
+            reduce_motion: false,
+            simple_language: false,
+            confirm_dangerous: true,
+            send_to_menu: false,
+        }
+    }
 }
 
 /// 窗口材质取值：亚克力 / 云母（Win11）/ 普通无材质。
@@ -83,6 +187,8 @@ pub struct Pod {
     pub panel_color: String,
     pub panel_width: u32,
     pub hover_delay_ms: u64,
+    /// 是否允许悬停自动弹出；关闭后仍可单击或用键盘打开面板。
+    pub hover_open: bool,
     /// 鼠标离开后自动隐藏面板（淡出；重新悬停时淡入）。
     pub auto_hide: bool,
     /// 鼠标离开后到自动隐藏的延迟（毫秒）。
@@ -97,6 +203,10 @@ pub struct Pod {
     pub border_color: String,
     /// 胶囊条边框不透明度 0.0 - 1.0，作用于 border_color 或主题默认边框色。
     pub border_opacity: f64,
+    #[serde(default)]
+    pub rules: PodRules,
+    #[serde(default)]
+    pub security: PodSecurity,
 }
 
 impl Default for Pod {
@@ -115,6 +225,7 @@ impl Default for Pod {
             panel_color: String::new(),
             panel_width: 380,
             hover_delay_ms: 120,
+            hover_open: true,
             auto_hide: true,
             auto_hide_delay_ms: 320,
             drop_action: "ask".into(),
@@ -123,6 +234,8 @@ impl Default for Pod {
             corner_radius: 22,
             border_color: String::new(),
             border_opacity: 1.0,
+            rules: PodRules::default(),
+            security: PodSecurity::default(),
         }
     }
 }
@@ -140,6 +253,8 @@ pub struct Settings {
     pub hotkeys: Hotkeys,
     #[serde(default)]
     pub auto_block: AutoBlock,
+    #[serde(default)]
+    pub accessibility: Accessibility,
     #[serde(default)]
     pub pods: Vec<Pod>,
     /// 只读：由应用在读取时注入并返回前端，但不接受数据库中的旧值。
@@ -162,6 +277,7 @@ impl Default for Settings {
             autostart: false,
             hotkeys: Hotkeys::with_defaults(),
             auto_block: AutoBlock::default(),
+            accessibility: Accessibility::default(),
             pods: Vec::new(),
             version: String::new(),
             data_dir: String::new(),
@@ -181,6 +297,7 @@ pub fn load(conn: &Connection, data_dir: &str, version: &str) -> Result<Settings
         }
         None => Settings::default(),
     };
+    crate::policy::apply_to_settings(&mut s)?;
     s.version = version.to_string();
     s.data_dir = data_dir.to_string();
     Ok(s)
@@ -341,6 +458,9 @@ fn validate_impl(s: &Settings, data_dir: &str, allow_missing_roots: bool) -> Res
     if s.auto_block.apps.len() > 64 {
         return Err("自动屏蔽应用列表过长".into());
     }
+    if !s.accessibility.scale.is_finite() || !(1.0..=2.0).contains(&s.accessibility.scale) {
+        return Err("安心模式缩放比例必须在 100% 到 200% 之间".into());
+    }
     for app in &s.auto_block.apps {
         if app.trim().trim_matches('"').is_empty() {
             return Err("自动屏蔽应用名不能为空".into());
@@ -375,6 +495,38 @@ fn validate_impl(s: &Settings, data_dir: &str, allow_missing_roots: bool) -> Res
         }
         if !valid_material(&pod.panel_material) {
             return Err(format!("匣「{}」的面板材质无效", pod.name));
+        }
+        if pod.rules.allowed_extensions.len() > 64
+            || pod
+                .rules
+                .allowed_extensions
+                .iter()
+                .any(|extension| extension.len() > 32 || extension.contains(['/', '\\']))
+        {
+            return Err(format!("匣「{}」的扩展名规则无效", pod.name));
+        }
+        if pod.rules.name_contains.chars().count() > 128 {
+            return Err(format!("匣「{}」的文件名规则过长", pod.name));
+        }
+        if pod.rules.max_size_mb > 102_400 {
+            return Err(format!("匣「{}」的文件大小规则超过 100GB", pod.name));
+        }
+        if !matches!(pod.rules.duplicate_policy.as_str(), "allow" | "reject") {
+            return Err(format!("匣「{}」的重复文件规则无效", pod.name));
+        }
+        if pod.rules.expire_days > 3_650 {
+            return Err(format!("匣「{}」的到期天数不能超过 10 年", pod.name));
+        }
+        if pod.security.auto_lock_minutes > 24 * 60 {
+            return Err(format!("匣「{}」的自动锁定时间不能超过 24 小时", pod.name));
+        }
+        if pod.security.retention_days > 3_650 {
+            return Err(format!("匣「{}」的保留期限不能超过 10 年", pod.name));
+        }
+        for pattern in [&pod.rules.rename_pattern, &pod.rules.subfolder_pattern] {
+            if pattern.chars().count() > 180 || pattern.contains("..") {
+                return Err(format!("匣「{}」的规则路径模板无效", pod.name));
+            }
         }
         if !pod.panel_opacity.is_finite() || !(0.1..=1.0).contains(&pod.panel_opacity) {
             return Err(format!("匣「{}」的面板不透明度无效", pod.name));
@@ -576,7 +728,7 @@ pub fn merge_persist(
         .ok_or_else(|| "设置补丁必须是对象".to_string())?;
     for (k, v) in obj {
         match k.as_str() {
-            "theme" | "firstRunDone" | "autostart" | "hotkeys" | "autoBlock" => {
+            "theme" | "firstRunDone" | "autostart" | "hotkeys" | "autoBlock" | "accessibility" => {
                 stored.insert(k.clone(), v.clone());
             }
             "version" | "dataDir" | "pods" => {}
@@ -828,7 +980,21 @@ mod tests {
         persist(&c, &loaded).unwrap();
         let stored: serde_json::Value =
             serde_json::from_str(&db::kv_get(&c, KEY).unwrap().unwrap()).unwrap();
-        assert_eq!(stored, fixture);
+        assert_eq!(stored["accessibility"]["enabled"], false);
+        assert_eq!(stored["pods"][0]["hoverOpen"], true);
+        assert_eq!(stored["pods"][0]["rules"]["enabled"], false);
+        let mut legacy_view = stored;
+        legacy_view.as_object_mut().unwrap().remove("accessibility");
+        legacy_view["hotkeys"]
+            .as_object_mut()
+            .unwrap()
+            .remove("lockSensitive");
+        for pod in legacy_view["pods"].as_array_mut().unwrap() {
+            pod.as_object_mut().unwrap().remove("hoverOpen");
+            pod.as_object_mut().unwrap().remove("rules");
+            pod.as_object_mut().unwrap().remove("security");
+        }
+        assert_eq!(legacy_view, fixture);
     }
 
     #[test]

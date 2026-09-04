@@ -93,11 +93,15 @@ jobs:
       - name: Run Rust lints
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
 
-      - name: Build Tauri application and NSIS installer
+      - name: Build Tauri application, NSIS, and MSI installers
         run: pnpm tauri build --ci
 
       - name: Build portable package
         run: node scripts/package-portable.mjs
+
+      - name: Build unsigned MSIX package
+        shell: pwsh
+        run: ./scripts/package-msix.ps1
 
       - name: Collect Windows artifacts
         shell: pwsh
@@ -108,7 +112,9 @@ jobs:
 
           $binary = Get-Item "src-tauri/target/release/FloePod.exe"
           $installers = @(Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "*.exe" -File)
+          $msiPackages = @(Get-ChildItem "src-tauri/target/release/bundle/msi" -Filter "*.msi" -File)
           $portablePackages = @(Get-ChildItem "dist" -Filter "FloePod-*-win-x64-portable.zip" -File)
+          $msixPackages = @(Get-ChildItem "dist" -Filter "FloePod-*-win-x64.msix" -File)
 
           if ($installers.Count -eq 0) {
             throw "Tauri did not produce an NSIS installer."
@@ -116,12 +122,20 @@ jobs:
           if ($portablePackages.Count -ne 1) {
             throw "Expected exactly one portable package, found $($portablePackages.Count)."
           }
+          if ($msiPackages.Count -ne 1) {
+            throw "Expected exactly one MSI package, found $($msiPackages.Count)."
+          }
+          if ($msixPackages.Count -ne 1) {
+            throw "Expected exactly one MSIX package, found $($msixPackages.Count)."
+          }
 
           Copy-Item -LiteralPath $binary.FullName -Destination $artifactDir
           $installers | ForEach-Object {
             Copy-Item -LiteralPath $_.FullName -Destination $artifactDir
           }
+          Copy-Item -LiteralPath $msiPackages[0].FullName -Destination $artifactDir
           Copy-Item -LiteralPath $portablePackages[0].FullName -Destination $artifactDir
+          Copy-Item -LiteralPath $msixPackages[0].FullName -Destination $artifactDir
 
           $checksums = Get-ChildItem $artifactDir -File |
             Sort-Object Name |

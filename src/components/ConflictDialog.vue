@@ -4,6 +4,7 @@ import { computed } from "vue";
 import { exportVerb } from "@/domain/exportPresentation";
 import type { ConflictStrategy } from "@/domain/types";
 import { previewSlice } from "@/lib/format";
+import { useSettingsStore } from "@/stores/settings";
 
 const props = withDefaults(
   defineProps<{ names: string[]; mode: "copy" | "move"; busy?: boolean }>(),
@@ -16,11 +17,15 @@ const emit = defineEmits<{
 
 const preview = computed(() => previewSlice(props.names));
 const verb = computed(() => exportVerb(props.mode));
+const settingsStore = useSettingsStore();
+const simpleLanguage = computed(() =>
+  Boolean(settingsStore.settings?.accessibility.enabled && settingsStore.settings.accessibility.simpleLanguage),
+);
 </script>
 
 <template>
-  <div class="conflict">
-    <div class="title">{{ verb }}时目标位置已有同名文件</div>
+  <div class="conflict" role="dialog" aria-modal="true" aria-labelledby="conflict-title">
+    <div id="conflict-title" class="title">{{ verb }}时目标位置已经有同名文件，你想怎么办？</div>
     <ul class="names">
       <li v-for="(n, i) in preview.shown" :key="i">{{ n }}</li>
       <li v-if="preview.extra > 0" class="more">以及另外 {{ preview.extra }} 个</li>
@@ -32,16 +37,16 @@ const verb = computed(() => exportVerb(props.mode));
         :disabled="busy"
         @click="emit('resolve', 'rename')"
       >
-        保留两者
+        {{ simpleLanguage ? "两个都保留（自动改名）" : "保留两者" }}
       </button>
       <button type="button" class="act" :disabled="busy" @click="emit('resolve', 'overwrite')">
-        覆盖
+        {{ simpleLanguage ? "用新文件替换原文件" : "覆盖" }}
       </button>
       <button type="button" class="act ghost" :disabled="busy" @click="emit('resolve', 'skip')">
-        跳过
+        {{ simpleLanguage ? "不处理这些文件" : "跳过" }}
       </button>
       <button type="button" class="act ghost" :disabled="busy" @click="emit('cancel')">
-        取消
+        {{ simpleLanguage ? "返回" : "取消" }}
       </button>
     </div>
   </div>

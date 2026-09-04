@@ -1,0 +1,18 @@
+{
+  "organizationName": "示例公益服务中心",
+  "disableMove": true,
+  "requireCopyDefault": true,
+  "requirePrivacyScan": true,
+  "lockRules": false,
+  "disableFulltextIndex": false,
+  "allowedDataRoots": [
+    "D:\\机构资料",
+    "E:\\离线交接"
+  ],
+  "maximumHistoryDays": 90,
+  "mandatoryRetentionDays": 30,
+  "diagnosticIncludePaths": false,
+  "supportContact": "本机构信息技术支持",
+  "managedHotkeys": null,
+  "managedPods": []
+}

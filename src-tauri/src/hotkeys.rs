@@ -15,6 +15,7 @@ fn validate(hotkeys: &Hotkeys) -> Result<(), String> {
         ("显示 / 隐藏浮匣", hotkeys.toggle_bar.as_str()),
         ("收集剪贴板", hotkeys.collect_clipboard.as_str()),
         ("打开面板", hotkeys.open_panel.as_str()),
+        ("紧急锁定敏感匣", hotkeys.lock_sensitive.as_str()),
     ];
     let mut seen: HashMap<u32, &str> = HashMap::new();
     for (label, combo) in entries {
@@ -63,7 +64,35 @@ pub fn register(app: &AppHandle, s: &Settings) -> Result<(), String> {
                 );
             }
         })?;
-        reg(&s.hotkeys.open_panel, on_open_panel)
+        reg(&s.hotkeys.open_panel, on_open_panel)?;
+        reg(&s.hotkeys.lock_sensitive, crate::security::lock_all)?;
+
+        // 安心模式提供完全不依赖拖拽的 Alt+数字投递入口：先打开对应匣面板，
+        // 再让该面板弹出原生文件选择器。最多映射前 9 个已启用匣。
+        if s.accessibility.enabled {
+            for (index, pod) in s.pods.iter().filter(|pod| pod.enabled).take(9).enumerate() {
+                let combo = format!("Alt+{}", index + 1);
+                let pod_id = pod.id;
+                if let Err(error) = gs.on_shortcut(combo.as_str(), move |app, _shortcut, event| {
+                    if event.state() != ShortcutState::Pressed {
+                        return;
+                    }
+                    manager::show_panel(app, pod_id);
+                    let _ = app.emit_to(
+                        events::pod_panel_label(pod_id),
+                        events::REQUEST_FILE_PICKER,
+                        serde_json::json!({ "podId": pod_id }),
+                    );
+                }) {
+                    // 单个 Alt+数字与其他软件冲突时不能让用户原有的三组快捷键
+                    // 一起失效；保留其余映射并在日志中给出明确诊断。
+                    crate::logging::write(&format!(
+                        "[hotkeys] 安心模式快捷键「{combo}」注册失败，可能与其他软件冲突（{error}）"
+                    ));
+                }
+            }
+        }
+        Ok(())
     })();
 
     if let Err(error) = registration {
@@ -122,6 +151,7 @@ mod tests {
             toggle_bar: "Alt+Shift+F".into(),
             collect_clipboard: "shift+alt+KeyF".into(),
             open_panel: String::new(),
+            lock_sensitive: String::new(),
         };
         assert!(validate(&hotkeys).is_err());
     }
@@ -132,7 +162,15 @@ mod tests {
             toggle_bar: "Alt+NotARealKey".into(),
             collect_clipboard: String::new(),
             open_panel: String::new(),
+            lock_sensitive: String::new(),
         };
         assert!(validate(&hotkeys).is_err());
+    }
+
+    #[test]
+    fn accessibility_number_shortcuts_use_supported_syntax() {
+        for number in 1..=9 {
+            assert!(Shortcut::from_str(&format!("Alt+{number}")).is_ok());
+        }
     }
 }

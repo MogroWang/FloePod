@@ -17,6 +17,26 @@ function applyDocumentTheme(theme: "light" | "dark") {
   root.classList.add("theme-ready");
 }
 
+function applyAccessibility(settings: Settings) {
+  const root = document.documentElement;
+  const accessibility = settings.accessibility;
+  root.classList.toggle("safety-mode", accessibility.enabled);
+  root.classList.toggle("high-contrast", accessibility.enabled && accessibility.highContrast);
+  root.classList.toggle(
+    "reduce-transparency",
+    accessibility.enabled && accessibility.reduceTransparency,
+  );
+  root.classList.toggle("reduce-motion", accessibility.enabled && accessibility.reduceMotion);
+  root.classList.toggle("simple-language", accessibility.enabled && accessibility.simpleLanguage);
+  const scale = accessibility.enabled
+    ? Math.min(2, Math.max(1, accessibility.scale || 1))
+    : 1;
+  // WebView2 支持 CSS zoom；缩放整个交互表面，固定 px 的旧组件也能同步放大。
+  document.body.style.setProperty("zoom", String(scale));
+  document.body.style.setProperty("width", `${100 / scale}%`);
+  document.body.style.setProperty("height", `${100 / scale}%`);
+}
+
 async function applyNativeTheme(mode: ThemeMode) {
   if (!("__TAURI_INTERNALS__" in window)) return;
   try {
@@ -50,6 +70,7 @@ export const useSettingsStore = defineStore("settings", {
       const theme = resolveTheme(settings.theme, this.systemDark);
       this.dark = theme === "dark";
       applyDocumentTheme(theme);
+      applyAccessibility(settings);
       void applyNativeTheme(settings.theme);
     },
 
