@@ -30,7 +30,7 @@
       {
         "label": "context_menu",
         "url": "index.html",
-        "title": "FloePod 菜单",
+        "title": "",
         "width": 260,
         "height": 300,
         "visible": false,

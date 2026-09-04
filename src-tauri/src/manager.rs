@@ -487,7 +487,7 @@ fn sync_pods_with_settings(app: &AppHandle, s: &Settings) {
 /// 面板云母 / 普通材质：tauri 的 set_effects（Win11 22H2+ 走 DWM systembackdrop）。
 /// 面板是矩形窗口 + 系统圆角，systembackdrop 与 DWM 圆角轮廓天然对齐；
 /// 云母不随窗口焦点移除，可以放心使用。
-fn apply_material(window: &WebviewWindow, material: &str) {
+fn apply_material(window: &WebviewWindow, material: &str) -> bool {
     use tauri::window::{Effect, EffectsBuilder};
     let effect = match material {
         // 云母仅在 Windows 11 可用；不支持的系统上 set_effects 返回 Err，
@@ -498,31 +498,40 @@ fn apply_material(window: &WebviewWindow, material: &str) {
     match effect {
         Some(effect) => {
             let config = EffectsBuilder::new().effects([effect]).build();
-            let _ = window.set_effects(Some(config));
+            window.set_effects(Some(config)).is_ok()
         }
-        None => {
-            let _ = window.set_effects(None);
-        }
+        None => window.set_effects(None).is_ok(),
     }
 }
 
-/// 面板材质落地：按材质分流到不同的系统机制，恒定下发、不随焦点降级。
+/// 透明浮层材质落地：供匣面板与右键菜单共用，按材质分流到不同系统机制。
 ///
 /// 亚克力走 SWCA ACCENT（见 win::apply_panel_acrylic）：DWM 系统背景
 /// （tauri set_effects 的 systembackdrop）在窗口失焦后移除整个 backdrop，
 /// 而面板免激活显示、绝大多数时间不持有焦点，是「不聚焦就看不到材质」
 /// 的根源。云母无此限制（失焦不移除），仍走 tauri set_effects；普通即
-/// 无系统材质。任何分支都先清掉残留的 ACCENT 策略，避免从亚克力切换后
-/// 效果残留。
-fn apply_panel_material(window: &WebviewWindow, material: &str) {
+/// 无系统材质。任何分支都先清掉 ACCENT 与 DWM effect 两个通道，避免
+/// 云母切到亚克力时旧 systembackdrop 与新 ACCENT 叠加。
+pub(crate) fn apply_window_material(window: &WebviewWindow, material: &str) -> bool {
     let Ok(hwnd) = window.hwnd() else {
-        return;
+        return false;
     };
     win::disable_accent(hwnd.0 as isize);
+    let _ = apply_material(window, "plain");
     match material {
         "acrylic" => win::apply_panel_acrylic(hwnd.0 as isize),
         "mica" => apply_material(window, "mica"),
-        _ => apply_material(window, "plain"),
+        _ => true,
+    }
+}
+
+/// 强制刷新指定匣胶囊条的无边框状态。透明 WebView2 的幽灵标题栏可能由
+/// 兄弟面板或右键菜单获得焦点触发，因此不能只在胶囊条自身收到焦点事件时修复。
+pub(crate) fn refresh_pod_bar_chrome(app: &AppHandle, id: u64) {
+    if let Some(bar) = pod_bar(app, id) {
+        if let Ok(hwnd) = bar.hwnd() {
+            win::prepare_shaped_window(hwnd.0 as isize);
+        }
     }
 }
 
@@ -539,10 +548,10 @@ pub fn refresh_window_material(app: &AppHandle, label: &str) {
     let Some((id, window, is_bar)) = target else {
         return;
     };
+    // 任一匣窗口的焦点变化都同步刷新其胶囊条。用户点击面板时胶囊条通常
+    // 不会收到新的 Focused 事件，但 WebView2 仍可能重绘它的幽灵标题栏。
+    refresh_pod_bar_chrome(app, id);
     if is_bar {
-        if let Ok(hwnd) = window.hwnd() {
-            win::prepare_shaped_window(hwnd.0 as isize);
-        }
         return;
     }
     let material = {
@@ -555,10 +564,12 @@ pub fn refresh_window_material(app: &AppHandle, label: &str) {
     match material.as_deref() {
         Some("acrylic") => {
             if let Ok(hwnd) = window.hwnd() {
-                win::apply_panel_acrylic(hwnd.0 as isize);
+                let _ = win::apply_panel_acrylic(hwnd.0 as isize);
             }
         }
-        Some("mica") => apply_material(&window, "mica"),
+        Some("mica") => {
+            let _ = apply_material(&window, "mica");
+        }
         _ => {}
     }
 }
@@ -592,7 +603,7 @@ fn apply_panel_material_if_changed(app: &AppHandle, pod: &Pod) {
     };
     if changed {
         if let Some(panel) = pod_panel(app, pod.id) {
-            apply_panel_material(&panel, &pod.panel_material);
+            let _ = apply_window_material(&panel, &pod.panel_material);
         }
     }
 }
@@ -850,6 +861,8 @@ fn show_panel_locked(app: &AppHandle, id: u64, pod: &Pod, pin_on_show: bool) -> 
     let _ = panel.set_title(&format!("{} 面板", pod.name));
     win::prefer_rounded_corners(hwnd.0 as isize);
     win::show_no_activate(hwnd.0 as isize);
+    // 显示兄弟面板本身也可能触发透明 WebView 的非客户区合成回归。
+    refresh_pod_bar_chrome(app, id);
 
     {
         let mut guard = state.pods.lock().unwrap();

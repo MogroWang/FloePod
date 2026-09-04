@@ -9,6 +9,7 @@
 import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import ContextMenu from "@/components/ContextMenu.vue";
 import type { MenuItemSpec } from "@/domain/menu";
+import type { Material } from "@/domain/types";
 import { ipc } from "@/ipc/client";
 import { Events, listenCurrent } from "@/ipc/events";
 import { useSettingsStore } from "@/stores/settings";
@@ -17,6 +18,7 @@ const settingsStore = useSettingsStore();
 const seq = ref(0);
 const podId = ref(0);
 const items = ref<MenuItemSpec[]>([]);
+const material = ref<Material>("plain");
 const visible = ref(false);
 const anchorEl = ref<HTMLElement | null>(null);
 let disposeShow: (() => void) | null = null;
@@ -78,11 +80,13 @@ onMounted(async () => {
     seq: number;
     podId: number;
     items: MenuItemSpec[];
+    material?: Material;
   }>(Events.ContextMenuShow, (payload) => {
     closing = false;
     seq.value = payload.seq;
     podId.value = payload.podId;
     items.value = payload.items;
+    material.value = payload.material ?? "plain";
     visible.value = true;
     void measureAndShow();
   });
@@ -98,7 +102,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="menu-window">
+  <div class="menu-window" :data-material="material">
     <div v-if="visible" ref="anchorEl" class="menu-anchor">
       <ContextMenu :items="items" @execute="onExecute" />
     </div>
@@ -111,6 +115,15 @@ onBeforeUnmount(() => {
   width: 100vw;
   height: 100vh;
   overflow: hidden;
+}
+.menu-window[data-material="acrylic"],
+.menu-window[data-material="mica"] {
+  /* 原生系统材质已经负责模糊 / 云母纹理；WebView 只叠加适度主题着色。
+     旧版 96% 近实心底色会把云母完全遮住，看起来像材质失效。 */
+  --context-menu-surface: color-mix(in srgb, var(--surface) 76%, transparent);
+}
+.menu-window[data-material="plain"] {
+  --context-menu-surface: color-mix(in srgb, var(--surface) 96%, transparent);
 }
 .menu-anchor {
   position: fixed;
