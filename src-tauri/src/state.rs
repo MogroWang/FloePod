@@ -169,6 +169,8 @@ pub struct AppState {
     pub file_ops: Mutex<()>,
     /// 一次性剪切拖出令牌。令牌在 finalize 时先消费；取消或超时后也不能复用。
     pub drag_cut_tokens: Mutex<HashMap<String, DragCutSnapshot>>,
+    /// 敏感匣解锁截止时间；不保存到磁盘，应用重启后一律重新锁定。
+    pub unlocked_pods: Mutex<HashMap<u64, Instant>>,
     pub next_drag_cut_token: AtomicU64,
     /// 用户的“显示 / 隐藏全部匣”选择。隐藏是临时暂停，不应销毁 pin/Ask 上下文。
     pub bars_visible: AtomicBool,
@@ -178,6 +180,8 @@ pub struct AppState {
     pub auto_block_apps: Mutex<Vec<String>>,
     /// 进入屏蔽前匣的可见性；解除屏蔽后据此恢复，不覆盖用户的手动隐藏。
     pub auto_block_restore: AtomicBool,
+    /// 安心模式要求关闭透明效果时，所有面板按 plain 材质落地。
+    pub accessibility_reduce_transparency: AtomicBool,
     /// 最近一次应用自身文件写入。必须使用单调时钟；系统墙钟回拨不能让 watcher
     /// 永久停留在“刚写入”的抑制窗口。
     pub last_stage: Mutex<Option<Instant>>,
@@ -197,11 +201,13 @@ impl AppState {
             settings_ops: Mutex::new(()),
             file_ops: Mutex::new(()),
             drag_cut_tokens: Mutex::new(HashMap::new()),
+            unlocked_pods: Mutex::new(HashMap::new()),
             next_drag_cut_token: AtomicU64::new(1),
             bars_visible: AtomicBool::new(true),
             auto_block_enabled: AtomicBool::new(false),
             auto_block_apps: Mutex::new(Vec::new()),
             auto_block_restore: AtomicBool::new(false),
+            accessibility_reduce_transparency: AtomicBool::new(false),
             last_stage: Mutex::new(None),
             watcher_dirty: AtomicBool::new(false),
             watcher: Mutex::new(HashMap::new()),

@@ -11,6 +11,8 @@ pub const PANEL_PINNED: &str = "floepod://panel-pinned";
 pub const PANEL_STATE: &str = "floepod://panel-state";
 pub const PANEL_HIDDEN: &str = "floepod://panel-hidden";
 pub const COLLECT_CLIPBOARD: &str = "floepod://collect-clipboard";
+pub const REQUEST_FILE_PICKER: &str = "floepod://request-file-picker";
+pub const POD_LOCK_CHANGED: &str = "floepod://pod-lock-changed";
 
 pub fn pod_bar_label(pod_id: u64) -> String {
     format!("pod_{pod_id}")

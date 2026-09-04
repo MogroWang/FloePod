@@ -8,14 +8,22 @@ mod drag_out;
 mod events;
 mod export;
 mod file_ops;
+mod handoff;
 mod hotkeys;
 mod lnk;
 mod logging;
 mod manager;
 mod menu;
+mod operations;
 mod paths;
 mod pods;
+mod policy;
+mod privacy;
+mod rules;
+mod search;
+mod security;
 mod settings;
+mod shell_integration;
 mod staging;
 mod state;
 mod thumbnail;
@@ -38,9 +46,12 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(app_state)
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            // 二次启动：唤起已有实例
-            manager::open_settings(app);
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            // 资源管理器菜单通过二次启动把文件复制投递到第一个已解锁匣；
+            // 普通二次启动仍唤起设置窗口。
+            if !shell_integration::handle_args(app, argv) {
+                manager::open_settings(app);
+            }
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -68,8 +79,11 @@ pub fn run() {
                 }
             };
 
-            // 先恢复被中断的跨盘移动，再启动 watcher，避免对账抢在恢复之前。
+            security::ensure_configured(&settings);
+            // 先恢复被中断的跨盘移动并执行保留策略，再启动 watcher，避免对账抢先。
             staging::recover_pending_moves(app.handle());
+            operations::purge_expired(app.handle());
+            security::purge_retention(app.handle());
             tray::init(app.handle())?;
             watcher::spawn(app.handle().clone());
 
@@ -97,6 +111,9 @@ pub fn run() {
             manager::spawn_watchdog(app.handle().clone());
             // 自动屏蔽轮询依赖 apply_settings 写入的内存快照，必须在之后启动。
             manager::spawn_auto_block_watcher(app.handle().clone());
+
+            let initial_args = std::env::args().collect::<Vec<_>>();
+            let _ = shell_integration::handle_args(app.handle(), initial_args);
 
             // 首启（OOBE）或还没有任何匣：打开设置引导
             if !settings.first_run_done || settings.pods.is_empty() {
@@ -146,6 +163,28 @@ pub fn run() {
             commands::stage_text,
             commands::list_pod_items,
             commands::remove_items,
+            commands::list_operations,
+            commands::undo_operation,
+            commands::retry_operation,
+            commands::preview_remove_items,
+            commands::preview_export_items,
+            commands::scan_privacy,
+            commands::safe_export_items,
+            commands::create_handoff,
+            commands::verify_handoff,
+            commands::rebuild_search_index,
+            commands::search_items,
+            commands::update_item_annotation,
+            commands::get_item_annotation,
+            commands::get_pod_security_status,
+            commands::unlock_sensitive_pod,
+            commands::lock_sensitive_pod,
+            commands::lock_all_sensitive_pods,
+            commands::get_organization_policy,
+            commands::export_audit_log,
+            commands::export_diagnostic_bundle,
+            commands::export_settings_file,
+            commands::import_settings_file,
             commands::prepare_drag_cut,
             commands::finalize_drag_cut,
             commands::cancel_drag_cut,
@@ -169,6 +208,7 @@ pub fn run() {
             commands::copy_staged_to_clipboard,
             commands::reveal_staged_items,
             commands::write_clipboard_text,
+            commands::read_clipboard_files,
             commands::context_menu_ready,
             commands::open_context_menu,
             commands::resize_context_menu,

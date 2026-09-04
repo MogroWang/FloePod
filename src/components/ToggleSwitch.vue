@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /** 开关：按下即反馈，状态变化有弹性 */
-const props = defineProps<{ modelValue: boolean; disabled?: boolean }>();
+const props = defineProps<{ modelValue: boolean; label: string; disabled?: boolean }>();
 const emit = defineEmits<{ (e: "update:modelValue", v: boolean): void }>();
 
 function toggle() {
@@ -13,6 +13,7 @@ function toggle() {
     type="button"
     role="switch"
     :aria-checked="modelValue"
+    :aria-label="label"
     :disabled="disabled"
     class="switch"
     :class="{ on: modelValue }"

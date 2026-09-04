@@ -91,6 +91,10 @@ function onKeydown(e: KeyboardEvent) {
   } else if (e.key === " ") {
     e.preventDefault();
     emit("select", props.item.id, e.shiftKey ? "range" : "toggle");
+  } else if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+    e.preventDefault();
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    emit("contextMenu", props.item, { x: rect.left + 24, y: rect.top + rect.height / 2 });
   }
 }
 

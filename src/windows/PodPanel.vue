@@ -6,7 +6,7 @@
  * 重新悬停或主动弹出时淡入。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { open } from "@tauri-apps/plugin-dialog";
+import { ask, open } from "@tauri-apps/plugin-dialog";
 import { readText } from "@tauri-apps/plugin-clipboard-manager";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useUnlisteners } from "@/composables/useUnlisteners";
@@ -19,8 +19,10 @@ import type {
   DropAction,
   ExportMode,
   ExportResult,
+  OperationPreview,
   PanelMode,
   PanelState,
+  SecurityStatus,
   StagedItem,
 } from "@/domain/types";
 import { buildItemMenu, type MenuItemSpec } from "@/domain/menu";
@@ -35,6 +37,7 @@ import ActionChooser from "@/components/ActionChooser.vue";
 import ConflictDialog from "@/components/ConflictDialog.vue";
 import ContextMenu from "@/components/ContextMenu.vue";
 import SegmentedControl from "@/components/SegmentedControl.vue";
+import TrustExportDialog from "@/components/TrustExportDialog.vue";
 
 const props = defineProps<{ podId: number }>();
 
@@ -55,6 +58,10 @@ const dragMode = ref<"copy" | "move">("copy");
 const textOpen = ref(false);
 const textTitle = ref("");
 const textValue = ref("");
+const trustOpen = ref(false);
+const securityStatus = ref<SecurityStatus | null>(null);
+const unlocking = ref(false);
+let securityTimer: number | undefined;
 let anchorId: number | null = null;
 let confirmClearTimer: number | undefined;
 const { retainUnlistener, disposeUnlisteners, isMounted } = useUnlisteners();
@@ -115,6 +122,9 @@ const conflict = ref<{ names: string[]; ids: number[]; dest: string; mode: Expor
 );
 
 const items = computed(() => staging.activeItems);
+const sensitiveLocked = computed(
+  () => Boolean(pod.value?.security.enabled && securityStatus.value?.locked !== false),
+);
 const selectedItems = computed(() => staging.selectedItems);
 const selectedCount = computed(() => selectedItems.value.length);
 
@@ -332,9 +342,11 @@ async function removeItem(item: StagedItem) {
   if (anyBusy.value) return;
   listActionBusy.value = true;
   try {
+    const preview = await ipc.previewRemoveItems([item.id], true);
+    if (!(await confirmPreview(preview))) return;
     await staging.removeItems([item.id], true);
     if (anchorId === item.id) anchorId = null;
-    showToast("已移出暂存（文件进回收站）");
+    showToast("已移出暂存，24 小时内可在安心中心恢复");
   } catch (err) {
     console.error("remove item failed", err);
     showToast("移出失败，请重试");
@@ -348,9 +360,12 @@ async function removeSelected() {
   const n = selectedCount.value;
   listActionBusy.value = true;
   try {
-    await staging.removeItems(currentSelectedIds(), true);
+    const ids = currentSelectedIds();
+    const preview = await ipc.previewRemoveItems(ids, true);
+    if (!(await confirmPreview(preview))) return;
+    await staging.removeItems(ids, true);
     anchorId = null;
-    showToast(`已移出 ${n} 项（文件进回收站）`);
+    showToast(`已移出 ${n} 项，24 小时内可恢复`);
   } catch (err) {
     console.error("remove selected failed", err);
     showToast("移出失败，请重试");
@@ -363,6 +378,133 @@ async function pickDest(): Promise<string | null> {
   if (!ipc.inTauri) return BROWSER_PREVIEW_EXPORT_ROOT;
   const dir = await open({ directory: true, multiple: false, title: "选择目标文件夹" });
   return typeof dir === "string" ? dir : null;
+}
+
+async function stageAccessiblePaths(paths: string[]) {
+  if (!paths.length || !pod.value || anyBusy.value) return;
+  listActionBusy.value = true;
+  try {
+    const configured = pod.value.dropAction;
+    const action = configured === "ask"
+      ? settingsStore.settings?.accessibility.enabled
+        ? "copy"
+        : null
+      : configured;
+    if (!action) {
+      await ipc.holdPendingDrop(props.podId, paths);
+      return;
+    }
+    const result = await ipc.stagePaths(props.podId, paths, action);
+    await refreshAfterMutation("暂存");
+    showToast(
+      result.warnings.length
+        ? `已暂存，另有 ${result.warnings.length} 条提醒`
+        : `已${action === "move" ? "移动" : action === "shortcut" ? "创建快捷方式" : "复制"} ${result.items.length} 项`,
+    );
+  } catch (error) {
+    console.error("accessible stage failed", error);
+    showToast(`暂存失败：${String(error)}`);
+  } finally {
+    listActionBusy.value = false;
+  }
+}
+
+async function pickPaths(directory: boolean) {
+  if (anyBusy.value) return;
+  if (!ipc.inTauri) {
+    await stageAccessiblePaths([directory ? "D:\\示例文件夹" : "D:\\示例文件.txt"]);
+    return;
+  }
+  await ipc.setDraggingOut(props.podId, true).catch(() => {});
+  try {
+    const selected = await open({
+      directory,
+      multiple: !directory,
+      title: directory ? "选择要暂存的文件夹" : "选择要暂存的文件",
+    });
+    const paths = Array.isArray(selected) ? selected : typeof selected === "string" ? [selected] : [];
+    await stageAccessiblePaths(paths);
+  } finally {
+    await ipc.setDraggingOut(props.podId, false).catch(() => {});
+  }
+}
+
+async function pasteClipboardFiles() {
+  if (anyBusy.value) return;
+  try {
+    const paths = await ipc.readClipboardFiles();
+    if (!paths.length) {
+      showToast("剪贴板里没有文件；请先在资源管理器中复制文件");
+      return;
+    }
+    await stageAccessiblePaths(paths);
+  } catch (error) {
+    showToast(`无法读取剪贴板文件：${String(error)}`);
+  }
+}
+
+async function openTrustCenter() {
+  if (!selectedCount.value || anyBusy.value) return;
+  trustOpen.value = true;
+  await ipc.setDraggingOut(props.podId, true).catch(() => {});
+  scheduleResize();
+}
+
+async function closeTrustCenter() {
+  trustOpen.value = false;
+  await ipc.setDraggingOut(props.podId, false).catch(() => {});
+  scheduleResize();
+}
+
+function completeTrustAction(message: string) {
+  showToast(message);
+  void closeTrustCenter();
+}
+
+async function refreshSecurityStatus() {
+  if (!pod.value?.security.enabled && !pod.value?.rules.expireDays) {
+    securityStatus.value = null;
+    return;
+  }
+  try {
+    securityStatus.value = await ipc.getPodSecurityStatus(props.podId);
+  } catch (error) {
+    console.error("security status failed", error);
+  }
+}
+
+async function unlockSensitivePod() {
+  if (unlocking.value) return;
+  unlocking.value = true;
+  try {
+    securityStatus.value = await ipc.unlockSensitivePod(props.podId);
+    await staging.refresh(props.podId);
+    showToast("敏感匣已解锁");
+  } catch (error) {
+    showToast(`解锁失败：${String(error)}`);
+  } finally {
+    unlocking.value = false;
+  }
+}
+
+async function lockSensitivePod() {
+  await ipc.lockSensitivePod(props.podId);
+  securityStatus.value = securityStatus.value
+    ? { ...securityStatus.value, locked: true }
+    : null;
+}
+
+async function confirmPreview(preview: OperationPreview): Promise<boolean> {
+  if (!preview.requiresConfirmation) return true;
+  const lines = [
+    preview.title,
+    ...preview.warnings.map((warning) => `注意：${warning}`),
+    ...preview.details.slice(0, 6),
+  ];
+  if (preview.details.length > 6) lines.push(`另有 ${preview.details.length - 6} 项…`);
+  const message = lines.join("\n\n");
+  if (!ipc.inTauri) return window.confirm(message);
+  return ask(message, { title: "操作前预览", kind: "warning" });
 }
 
 async function applyExportResult(result: ExportResult, exportMode: ExportMode) {
@@ -387,6 +529,8 @@ async function exportSelected(exportMode: ExportMode) {
     await ipc.setDraggingOut(props.podId, true);
     const dest = await pickDest();
     if (!dest) return;
+    const preview = await ipc.previewExportItems(ids, dest, exportMode);
+    if (!(await confirmPreview(preview))) return;
     const result = await staging.exportItems(ids, dest, exportMode);
     if (result.conflicts.length > 0) {
       conflict.value = { names: result.conflicts, ids, dest, mode: exportMode };
@@ -570,7 +714,8 @@ function onKeydown(e: KeyboardEvent) {
     return;
   }
   if (e.key === "Escape") {
-    if (mode.value === "conflict") void cancelConflict();
+    if (trustOpen.value) void closeTrustCenter();
+    else if (mode.value === "conflict") void cancelConflict();
     else if (mode.value === "ask") void cancelAsk();
     else if (textOpen.value) textOpen.value = false;
     else if (selectedCount.value) clearSelection();
@@ -580,6 +725,9 @@ function onKeydown(e: KeyboardEvent) {
   } else if (e.ctrlKey && e.key.toLowerCase() === "a") {
     e.preventDefault();
     if (mode.value === "list" && !textOpen.value && !anyBusy.value) selectAll();
+  } else if (e.ctrlKey && e.key.toLowerCase() === "v" && mode.value === "list" && !textOpen.value) {
+    e.preventDefault();
+    void pasteClipboardFiles();
   } else if (e.key === "Delete" && mode.value === "list" && !textOpen.value && selectedCount.value) {
     void removeSelected();
   }
@@ -671,6 +819,15 @@ onMounted(async () => {
         .setDraggingOut(props.podId, false)
         .catch((err) => console.error("menu presence restore failed", err));
     }),
+    /* 安心模式 Alt+数字：打开对应面板后直接提供非拖拽文件选择器。 */
+    listenCurrent<{ podId: number }>(Events.RequestFilePicker, (p) => {
+      if (p.podId !== props.podId) return;
+      void pickPaths(false);
+    }),
+    listenCurrent<{ podId: number; locked: boolean }>(Events.PodLockChanged, (p) => {
+      if (p.podId !== props.podId) return;
+      if (securityStatus.value) securityStatus.value = { ...securityStatus.value, locked: p.locked };
+    }),
     /* 面板开始隐藏：先播放淡出，后端延迟 220ms 再隐藏原生窗口。
        全局临时隐藏也会触发该事件；运行态由其他定向事件同步，不能在此清空询问或冲突。 */
     listenCurrent<never>(Events.PanelHidden, () => {
@@ -692,7 +849,8 @@ onMounted(async () => {
       .listenChanges()
       .catch((err) => console.error("settings listener failed", err));
     await settingsStore.load();
-    await staging.refresh(props.podId);
+    await refreshSecurityStatus();
+    if (!sensitiveLocked.value) await staging.refresh(props.podId);
   } catch (err) {
     console.error("pod panel initialization failed", err);
     showToast("面板内容加载失败，请重新打开");
@@ -700,6 +858,7 @@ onMounted(async () => {
   if (!isMounted()) return;
 
   window.addEventListener("keydown", onKeydown);
+  securityTimer = window.setInterval(refreshSecurityStatus, 30_000);
 
   ro = new ResizeObserver(() => scheduleResize());
   if (contentEl.value) ro.observe(contentEl.value);
@@ -716,6 +875,7 @@ onBeforeUnmount(() => {
   ro?.disconnect();
   window.clearTimeout(confirmClearTimer);
   window.clearTimeout(sizeTimer);
+  window.clearInterval(securityTimer);
   resizeSequence += 1;
 });
 
@@ -835,11 +995,55 @@ function executeInlineMenu(spec: MenuItemSpec) {
         <span v-if="items.length" class="item-count">{{ items.length }}</span>
       </div>
       <div class="head-right">
+        <span
+          v-if="securityStatus?.expiresSoon"
+          class="expiry-badge"
+          :title="`${securityStatus.expiresSoon} 项已达到规则提醒或保留期限`"
+        >
+          到期 {{ securityStatus.expiresSoon }}
+        </span>
+        <button
+          v-if="pod?.security.enabled && !sensitiveLocked"
+          type="button"
+          class="head-btn"
+          title="立即锁定敏感匣"
+          aria-label="立即锁定敏感匣"
+          @click="lockSensitivePod"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="5" y="10" width="14" height="10" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" />
+          </svg>
+        </button>
+        <button
+          v-if="mode === 'list' && !textOpen"
+          type="button"
+          class="head-btn"
+          title="选择文件暂存"
+          aria-label="选择文件暂存，不需要拖拽"
+          @click="pickPaths(false)"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        </button>
+        <button
+          v-if="mode === 'list' && !textOpen"
+          type="button"
+          class="head-btn"
+          title="选择文件夹暂存"
+          aria-label="选择文件夹暂存，不需要拖拽"
+          @click="pickPaths(true)"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 7h6l2 2h10v10H3z" />
+          </svg>
+        </button>
         <button
           v-if="mode === 'list' && !textOpen"
           type="button"
           class="head-btn"
           title="暂存一段文字"
+          aria-label="暂存一段文字"
           @click="textOpen = true"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
@@ -871,8 +1075,27 @@ function executeInlineMenu(spec: MenuItemSpec) {
 
     <div ref="listEl" class="panel-body">
       <div ref="contentEl" class="panel-content">
+        <section v-if="sensitiveLocked" class="locked-panel" aria-labelledby="locked-title">
+          <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <rect x="4" y="10" width="16" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" />
+          </svg>
+          <h2 id="locked-title">敏感匣已锁定</h2>
+          <p>文件由 Windows EFS 在磁盘上保护。通过 Windows Hello 或系统 PIN 后才能查看、搜索、复制或导出。</p>
+          <button type="button" class="act primary" :disabled="unlocking" @click="unlockSensitivePod">
+            {{ unlocking ? "正在验证…" : "使用 Windows Hello 解锁" }}
+          </button>
+        </section>
+
+        <TrustExportDialog
+          v-else-if="trustOpen"
+          :ids="currentSelectedIds()"
+          :pod-name="pod?.name ?? '匣'"
+          @close="closeTrustCenter"
+          @completed="completeTrustAction"
+        />
+
         <ActionChooser
-          v-if="mode === 'ask' && pendingPaths.length"
+          v-else-if="mode === 'ask' && pendingPaths.length"
           :paths="pendingPaths"
           :busy="askBusy"
           @choose="chooseAction"
@@ -981,6 +1204,9 @@ function executeInlineMenu(spec: MenuItemSpec) {
           <button type="button" class="foot-btn" :disabled="anyBusy" @click="exportSelected('move')">
             移动到…
           </button>
+          <button type="button" class="foot-btn" :disabled="anyBusy" @click="openTrustCenter">
+            安全交接…
+          </button>
           <button type="button" class="foot-btn danger" :disabled="anyBusy" @click="removeSelected">
             移出
           </button>
@@ -1011,7 +1237,7 @@ function executeInlineMenu(spec: MenuItemSpec) {
     </footer>
 
     <Transition name="toast">
-      <div v-if="toast" class="toast">{{ toast }}</div>
+      <div v-if="toast" class="toast" role="status" aria-live="polite">{{ toast }}</div>
     </Transition>
 
     <!-- 菜单窗口不可用时的内嵌降级菜单（浏览器预览 / 就绪前） -->
@@ -1100,7 +1326,17 @@ function executeInlineMenu(spec: MenuItemSpec) {
 }
 .head-right {
   display: flex;
+  align-items: center;
   gap: 2px;
+}
+.expiry-badge {
+  margin-right: 3px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+  font-size: 10px;
+  white-space: nowrap;
 }
 .head-btn {
   border: 0;
@@ -1135,6 +1371,28 @@ function executeInlineMenu(spec: MenuItemSpec) {
 }
 .panel-content {
   min-width: 0;
+}
+.locked-panel {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 28px 18px;
+  text-align: center;
+}
+.locked-panel svg {
+  color: var(--accent);
+}
+.locked-panel h2,
+.locked-panel p {
+  margin: 0;
+}
+.locked-panel h2 {
+  font-size: 16px;
+}
+.locked-panel p {
+  max-width: 330px;
+  color: var(--ink-2);
+  font-size: 12px;
 }
 
 .empty {

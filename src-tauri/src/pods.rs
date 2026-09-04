@@ -7,6 +7,8 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::db;
 use crate::events;
 use crate::manager;
+use crate::policy;
+use crate::security;
 use crate::settings::{self, Pod, Settings};
 use crate::staging;
 use crate::state::AppState;
@@ -60,6 +62,11 @@ fn apply_patch(pod: &mut Pod, patch: &serde_json::Value) -> Result<(), String> {
                     .map_err(|_| format!("字段 {field} 超出有效范围"))?;
             }
             "hoverDelayMs" => pod.hover_delay_ms = unsigned(value, field)?,
+            "hoverOpen" => {
+                pod.hover_open = value
+                    .as_bool()
+                    .ok_or_else(|| format!("字段 {field} 必须是布尔值"))?;
+            }
             "autoHide" => {
                 pod.auto_hide = value
                     .as_bool()
@@ -77,6 +84,14 @@ fn apply_patch(pod: &mut Pod, patch: &serde_json::Value) -> Result<(), String> {
             }
             "borderColor" => pod.border_color = string(value, field)?,
             "borderOpacity" => pod.border_opacity = numeric(value, field)?,
+            "rules" => {
+                pod.rules = serde_json::from_value(value.clone())
+                    .map_err(|error| format!("字段 {field} 无效: {error}"))?;
+            }
+            "security" => {
+                pod.security = serde_json::from_value(value.clone())
+                    .map_err(|error| format!("字段 {field} 无效: {error}"))?;
+            }
             "enabled" => {
                 pod.enabled = value
                     .as_bool()
@@ -133,6 +148,10 @@ pub fn create(
             existing.clone()
         } else {
             pod.id = settings::next_pod_id_from(&connection, &current)?;
+            policy::enforce_pod(&app, &pod, false)?;
+            if pod.security.enabled {
+                security::ensure_efs(Path::new(&pod.staging_folder))?;
+            }
             settings::upsert_pod_from(&connection, &mut current, &pod, &staging::data_dir(&state))?;
             pod
         }
@@ -161,8 +180,13 @@ pub fn update(app: AppHandle, pod_id: u64, patch: serde_json::Value) -> Result<P
             .ok_or_else(|| "匣不存在".to_string())?;
         let old_folder = pod.staging_folder.clone();
         let old_enabled = pod.enabled;
+        let old_sensitive = pod.security.enabled;
         apply_patch(&mut pod, &patch)?;
+        policy::enforce_pod(&app, &pod, patch.get("rules").is_some())?;
         let folder_changed = staging_folder_changed(&old_folder, &pod.staging_folder)?;
+        if pod.security.enabled && (!old_sensitive || folder_changed) {
+            security::ensure_efs(Path::new(&pod.staging_folder))?;
+        }
         let transaction = connection
             .transaction()
             .map_err(|error| error.to_string())?;

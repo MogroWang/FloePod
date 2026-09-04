@@ -8,11 +8,12 @@ use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{GlobalFree, HGLOBAL, POINT};
 use windows_sys::Win32::System::DataExchange::{
-    CloseClipboard, EmptyClipboard, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
+    CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
+    RegisterClipboardFormatW, SetClipboardData,
 };
 use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows_sys::Win32::System::Ole::{CF_HDROP, CF_UNICODETEXT};
-use windows_sys::Win32::UI::Shell::DROPFILES;
+use windows_sys::Win32::UI::Shell::{DragQueryFileW, DROPFILES};
 
 const DROPEFFECT_COPY: u32 = 1;
 /// 其他进程持有剪贴板时的重试窗口；失败要有明确报错而不是静默丢动作。
@@ -129,6 +130,34 @@ pub fn copy_text(text: &str) -> Result<(), String> {
     with_clipboard(|| unsafe {
         EmptyClipboard();
         set_data(CF_UNICODETEXT, &bytes)
+    })
+}
+
+/// 读取资源管理器复制到剪贴板的文件列表，作为拖拽之外的完整替代路径。
+pub fn read_files() -> Result<Vec<String>, String> {
+    with_clipboard(|| unsafe {
+        if IsClipboardFormatAvailable(CF_HDROP as u32) == 0 {
+            return Ok(Vec::new());
+        }
+        let handle = GetClipboardData(CF_HDROP as u32);
+        if handle.is_null() {
+            return Err("剪贴板文件列表不可用".into());
+        }
+        let drop = handle as windows_sys::Win32::UI::Shell::HDROP;
+        let count = DragQueryFileW(drop, u32::MAX, std::ptr::null_mut(), 0);
+        let mut paths = Vec::with_capacity(count as usize);
+        for index in 0..count {
+            let length = DragQueryFileW(drop, index, std::ptr::null_mut(), 0);
+            if length == 0 {
+                continue;
+            }
+            let mut buffer = vec![0u16; length as usize + 1];
+            let written = DragQueryFileW(drop, index, buffer.as_mut_ptr(), buffer.len() as u32);
+            if written > 0 {
+                paths.push(String::from_utf16_lossy(&buffer[..written as usize]));
+            }
+        }
+        Ok(paths)
     })
 }
 

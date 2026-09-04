@@ -81,6 +81,50 @@ pub fn migrate(conn: &Connection) -> Result<(), String> {
           original_path TEXT NOT NULL,
           target_path TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS operations (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          kind TEXT NOT NULL,
+          pod_id INTEGER,
+          summary TEXT NOT NULL,
+          status TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          undoable_until INTEGER,
+          undone_at INTEGER,
+          metadata TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_operations_created ON operations(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_operations_pod ON operations(pod_id, created_at DESC);
+        CREATE TABLE IF NOT EXISTS operation_items (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          operation_id INTEGER NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+          item_id INTEGER,
+          name TEXT NOT NULL,
+          source_path TEXT,
+          target_path TEXT,
+          action TEXT NOT NULL,
+          status TEXT NOT NULL,
+          error TEXT,
+          snapshot TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_operation_items_operation ON operation_items(operation_id);
+        CREATE TABLE IF NOT EXISTS compensations (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          operation_item_id INTEGER NOT NULL REFERENCES operation_items(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL,
+          source_path TEXT,
+          target_path TEXT,
+          expected_signature TEXT,
+          status TEXT NOT NULL DEFAULT 'pending',
+          error TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_compensations_item ON compensations(operation_item_id);
+        CREATE TABLE IF NOT EXISTS item_annotations (
+          item_id INTEGER PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+          tags TEXT NOT NULL DEFAULT '[]',
+          note TEXT NOT NULL DEFAULT '',
+          indexed_text TEXT NOT NULL DEFAULT '',
+          indexed_at INTEGER
+        );
         "#,
     )
     .map_err(|e| e.to_string())?;
@@ -88,7 +132,7 @@ pub fn migrate(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StagedItem {
     pub id: i64,
@@ -179,7 +223,6 @@ pub fn find_by_path(conn: &Connection, path: &str) -> Result<Option<StagedItem>,
     .map_err(|e| e.to_string())
 }
 
-#[cfg(test)]
 pub fn list_items(conn: &Connection) -> Result<Vec<StagedItem>, String> {
     let mut stmt = conn
         .prepare(&format!(

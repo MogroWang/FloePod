@@ -3,6 +3,7 @@
 import { computed } from "vue";
 import type { DropAction } from "@/domain/types";
 import { previewSlice } from "@/lib/format";
+import { useSettingsStore } from "@/stores/settings";
 
 const props = withDefaults(defineProps<{ paths: string[]; busy?: boolean }>(), {
   busy: false,
@@ -13,14 +14,21 @@ const emit = defineEmits<{
 }>();
 
 const remember = defineModel<boolean>("remember", { default: false });
+const settingsStore = useSettingsStore();
 
 const names = computed(() => props.paths.map((p) => p.split(/[\\/]/).pop() ?? p));
 const preview = computed(() => previewSlice(names.value));
+const simpleLanguage = computed(() =>
+  Boolean(settingsStore.settings?.accessibility.enabled && settingsStore.settings.accessibility.simpleLanguage),
+);
+const chooserTitle = computed(() => simpleLanguage.value
+  ? `你想把这 ${props.paths.length} 项怎样放进匣？`
+  : `暂存 ${props.paths.length} 项`);
 </script>
 
 <template>
-  <div class="chooser">
-    <div class="chooser-title">暂存 {{ paths.length }} 项</div>
+  <div class="chooser" role="dialog" aria-modal="true" aria-labelledby="stage-choice-title">
+    <div id="stage-choice-title" class="chooser-title">{{ chooserTitle }}</div>
     <ul class="chooser-list">
       <li v-for="(n, i) in preview.shown" :key="i" :title="paths[i]">{{ n }}</li>
       <li v-if="preview.extra > 0" class="more">以及另外 {{ preview.extra }} 项</li>
@@ -33,10 +41,10 @@ const preview = computed(() => previewSlice(names.value));
         :disabled="busy"
         @click="emit('choose', 'copy', remember)"
       >
-        复制
+        {{ simpleLanguage ? "复制（原位置仍保留）" : "复制" }}
       </button>
       <button type="button" class="act" :disabled="busy" @click="emit('choose', 'move', remember)">
-        移动
+        {{ simpleLanguage ? "移动（原位置不再保留）" : "移动" }}
       </button>
       <button
         type="button"
@@ -44,9 +52,11 @@ const preview = computed(() => previewSlice(names.value));
         :disabled="busy"
         @click="emit('choose', 'shortcut', remember)"
       >
-        创建快捷方式
+        {{ simpleLanguage ? "只创建入口（不复制文件）" : "创建快捷方式" }}
       </button>
-      <button type="button" class="act ghost" :disabled="busy" @click="emit('cancel')">取消</button>
+      <button type="button" class="act ghost" :disabled="busy" @click="emit('cancel')">
+        {{ simpleLanguage ? "先不处理" : "取消" }}
+      </button>
     </div>
 
     <label class="remember">

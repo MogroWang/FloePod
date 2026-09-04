@@ -10,6 +10,10 @@ use crate::db::{self, StagedItem};
 use crate::events;
 use crate::file_ops::{self, StagedMove};
 use crate::lnk;
+use crate::operations::{self, CompensationDraft, OperationDraft, OperationItemDraft};
+use crate::policy;
+use crate::rules;
+use crate::security;
 use crate::settings::{self, Pod, Settings};
 use crate::state::AppState;
 
@@ -120,6 +124,8 @@ pub fn stage_paths(
     action: String,
 ) -> Result<StagePathsResult, String> {
     let state = app.state::<AppState>();
+    policy::enforce_stage(&action)?;
+    security::require_unlocked(&app, pod_id)?;
     let _operation = state.file_ops.lock().unwrap();
     if !matches!(action.as_str(), "copy" | "move" | "shortcut") {
         return Err(format!("未知动作: {action}"));
@@ -207,6 +213,16 @@ pub fn stage_paths(
                 }
             }
             operation @ ("copy" | "move") => {
+                let mut duplicate_candidates =
+                    if pod.rules.enabled && pod.rules.duplicate_policy == "reject" {
+                        let connection = state.db.lock().unwrap();
+                        db::items_of_pod(&connection, pod.id as i64)?
+                            .into_iter()
+                            .map(|item| PathBuf::from(item.staging_path))
+                            .collect::<Vec<_>>()
+                    } else {
+                        Vec::new()
+                    };
                 for source in &sources {
                     let metadata = fs::symlink_metadata(source)
                         .map_err(|error| format!("无法读取 {}: {error}", source.display()))?;
@@ -216,21 +232,40 @@ pub fn stage_paths(
                             source.display()
                         ));
                     }
+                    rules::validate_source(&pod, source, &metadata)?;
+                    if pod.rules.enabled && pod.rules.duplicate_policy == "reject" {
+                        if let Some(duplicate) = rules::duplicate_of(source, &duplicate_candidates)?
+                        {
+                            return Err(format!(
+                                "规则拒绝「{}」：内容与 {} 重复",
+                                source.display(),
+                                duplicate.display()
+                            ));
+                        }
+                    }
                     let resolved_source = settings::resolve_path(source)?;
                     if resolved_source.parent().is_none() {
                         return Err(format!("不能暂存文件系统根目录: {}", source.display()));
                     }
                     let is_directory = metadata.is_dir();
                     let original_path = resolved_source.to_string_lossy().to_string();
-                    let name = source
+                    let source_name = source
                         .file_name()
                         .map(|name| name.to_string_lossy().to_string())
                         .unwrap_or_else(|| "未命名".into());
-                    let target = file_ops::unique_target(&directory, &name, &mut reserved)?;
+                    let planned = rules::target(&directory, source, &pod)?;
+                    fs::create_dir_all(&planned.directory).map_err(|error| {
+                        format!(
+                            "无法创建规则子目录 {}: {error}",
+                            planned.directory.display()
+                        )
+                    })?;
+                    let target =
+                        file_ops::unique_target(&planned.directory, &planned.name, &mut reserved)?;
                     file_ops::ensure_distinct_target(source, &target)?;
                     if operation == "move" {
                         let record = file_ops::move_into_staging(source, &target)
-                            .map_err(|error| format!("移动 {name} 失败: {error}"))?;
+                            .map_err(|error| format!("移动 {source_name} 失败: {error}"))?;
                         // 隔离件在入库前登记台账：崩溃后才能区分"移动已提交"与"未提交"。
                         if let Some(quarantine) = record.quarantine.as_ref() {
                             let resolved_target = settings::resolve_path(&target)?;
@@ -247,9 +282,10 @@ pub fn stage_paths(
                         moves.push(record);
                     } else if let Err(error) = file_ops::copy_path(source, &target) {
                         let _ = file_ops::remove_path(&target);
-                        return Err(format!("复制 {name} 失败: {error}"));
+                        return Err(format!("复制 {source_name} 失败: {error}"));
                     }
                     created_paths.push(target.clone());
+                    duplicate_candidates.push(target.clone());
                     let target = settings::resolve_path(&target)?;
                     if !settings::path_is_within(&target, &resolved_directory) {
                         return Err("暂存目标路径越出暂存文件夹".into());
@@ -271,7 +307,7 @@ pub fn stage_paths(
                             .file_name()
                             .map(|name| name.to_string_lossy().to_string())
                             .unwrap_or_default(),
-                        ext: file_ops::extension(&name),
+                        ext: file_ops::extension(&planned.name),
                         size,
                         created_at: db::now_ms(),
                     });
@@ -373,6 +409,89 @@ pub fn stage_paths(
             }
         }
     }
+    let mut checksum_sidecars = Vec::new();
+    if pod.rules.enabled && pod.rules.checksum_sidecar {
+        for item in &items {
+            let path = PathBuf::from(&item.staging_path);
+            match rules::write_checksum_sidecar(&path) {
+                Ok(Some(sidecar)) => checksum_sidecars.push(sidecar),
+                Ok(None) => {}
+                Err(error) => {
+                    warnings.push(StageWarning {
+                        name: item.name.clone(),
+                        error: format!("文件已暂存，但生成 SHA-256 校验文件失败: {error}"),
+                    });
+                }
+            }
+        }
+        state
+            .watcher_dirty
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    let mut operation_items = items
+        .iter()
+        .map(|item| {
+            let target = PathBuf::from(&item.staging_path);
+            OperationItemDraft {
+                item_id: Some(item.id),
+                name: item.name.clone(),
+                source_path: item.original_path.clone(),
+                target_path: Some(item.staging_path.clone()),
+                action: action.clone(),
+                status: "completed".into(),
+                error: None,
+                snapshot: operations::snapshot(item),
+                compensation: Some(CompensationDraft {
+                    kind: if action == "move" {
+                        "restore_stage_move".into()
+                    } else {
+                        "delete_staged_copy".into()
+                    },
+                    source_path: item.original_path.clone(),
+                    target_path: Some(item.staging_path.clone()),
+                    expected_signature: operations::signature(&target).ok(),
+                }),
+            }
+        })
+        .collect::<Vec<_>>();
+    operation_items.extend(checksum_sidecars.into_iter().map(|sidecar| {
+        OperationItemDraft {
+            item_id: None,
+            name: sidecar
+                .file_name()
+                .map(|value| value.to_string_lossy().to_string())
+                .unwrap_or_else(|| "SHA-256 校验文件".into()),
+            source_path: None,
+            target_path: Some(sidecar.to_string_lossy().to_string()),
+            action: "checksum".into(),
+            status: "completed".into(),
+            error: None,
+            snapshot: None,
+            compensation: Some(CompensationDraft {
+                kind: "delete_staged_copy".into(),
+                source_path: None,
+                target_path: Some(sidecar.to_string_lossy().to_string()),
+                expected_signature: operations::signature(&sidecar).ok(),
+            }),
+        }
+    }));
+    let verb = match action.as_str() {
+        "move" => "移动",
+        "shortcut" => "创建快捷方式",
+        _ => "复制",
+    };
+    if let Err(error) = operations::record(
+        &state.db.lock().unwrap(),
+        OperationDraft::completed(
+            "stage",
+            Some(pod.id as i64),
+            format!("{verb} {} 项到「{}」", items.len(), pod.name),
+            serde_json::json!({}),
+            operation_items,
+        ),
+    ) {
+        crate::logging::write(&format!("[operations] 记录暂存操作失败: {error}"));
+    }
     state.mark_staged();
     events::emit_items_changed(&app, pod.id);
     Ok(StagePathsResult { items, warnings })
@@ -416,6 +535,7 @@ pub fn open_staged_item(app: &AppHandle, item_id: i64) -> Result<(), String> {
             .ok_or_else(|| "条目不存在".to_string())?;
         (load_settings_from(&connection, &state)?, item)
     };
+    security::require_items_unlocked(app, std::slice::from_ref(&item))?;
     settings::validate_pod_for_io(&current, &data_dir(&state), item.pod_id as u64)?;
     let path = item_path(&item, &current)?;
     app.opener()
@@ -427,6 +547,7 @@ pub fn open_staged_item(app: &AppHandle, item_id: i64) -> Result<(), String> {
 pub fn open_pod_folder(app: &AppHandle, pod_id: u64) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
     let state = app.state::<AppState>();
+    security::require_unlocked(app, pod_id)?;
     let current = validated_settings(&state, pod_id)?;
     let pod = current
         .pods
@@ -451,6 +572,7 @@ pub fn reveal_staged_items(app: &AppHandle, item_ids: &[i64]) -> Result<(), Stri
             db::items_by_ids(&connection, item_ids)?,
         )
     };
+    security::require_items_unlocked(app, &items)?;
     let item = items.first().ok_or_else(|| "条目不存在".to_string())?;
     settings::validate_pod_for_io(&current, &data_dir(&state), item.pod_id as u64)?;
     let path = item_path(item, &current)?;
@@ -474,6 +596,7 @@ pub fn copy_staged_to_clipboard(app: &AppHandle, item_ids: &[i64]) -> Result<(),
     if items.is_empty() {
         return Err("条目不存在".to_string());
     }
+    security::require_items_unlocked(app, &items)?;
     let mut paths: Vec<PathBuf> = Vec::new();
     let mut texts: Vec<String> = Vec::new();
     for item in items {
@@ -572,6 +695,7 @@ pub fn stage_text(
         return Err("内容为空".into());
     }
     let state = app.state::<AppState>();
+    security::require_unlocked(&app, pod_id)?;
     let _operation = state.file_ops.lock().unwrap();
     let current = validated_settings(&state, pod_id)?;
     let pod = current
@@ -657,12 +781,41 @@ pub fn stage_text(
             });
         }
     };
+    let operation_item = OperationItemDraft {
+        item_id: Some(item.id),
+        name: item.name.clone(),
+        source_path: None,
+        target_path: Some(item.staging_path.clone()),
+        action: "text".into(),
+        status: "completed".into(),
+        error: None,
+        snapshot: operations::snapshot(&item),
+        compensation: Some(CompensationDraft {
+            kind: "delete_staged_copy".into(),
+            source_path: None,
+            target_path: Some(item.staging_path.clone()),
+            expected_signature: operations::signature(&target).ok(),
+        }),
+    };
+    if let Err(error) = operations::record(
+        &state.db.lock().unwrap(),
+        OperationDraft::completed(
+            "stage_text",
+            Some(pod.id as i64),
+            format!("暂存文字「{}」到「{}」", item.name, pod.name),
+            serde_json::json!({}),
+            vec![operation_item],
+        ),
+    ) {
+        crate::logging::write(&format!("[operations] 记录文字暂存失败: {error}"));
+    }
     state.mark_staged();
     events::emit_items_changed(&app, pod.id);
     Ok(item)
 }
 
 pub fn list_pod_items(app: &AppHandle, pod_id: u64) -> Result<Vec<StagedItem>, String> {
+    security::require_unlocked(app, pod_id)?;
     let state = app.state::<AppState>();
     let connection = state.db.lock().unwrap();
     db::items_of_pod(&connection, pod_id as i64)
@@ -678,6 +831,7 @@ pub fn remove_items(app: AppHandle, ids: Vec<i64>, delete_files: bool) -> Result
             db::items_by_ids(&connection, &ids)?,
         )
     };
+    security::require_items_unlocked(&app, &items)?;
     let validated: Vec<(&StagedItem, PathBuf)> = if delete_files {
         settings::validate(&current, &data_dir(&state))?;
         validate_item_pods(&current, &state, &items)?;
@@ -691,19 +845,97 @@ pub fn remove_items(app: AppHandle, ids: Vec<i64>, delete_files: bool) -> Result
 
     let mut removed_ids = Vec::new();
     let mut failed = Vec::new();
+    let mut operation_items = Vec::new();
     if delete_files {
         for (item, path) in validated {
+            let item_snapshot = operations::snapshot(item);
             match fs::symlink_metadata(&path) {
-                Ok(_) => match trash::delete(&path) {
-                    Ok(()) => removed_ids.push(item.id),
-                    Err(error) => failed.push(format!("{}: {error}", item.name)),
+                Ok(_) => match operations::remove_to_undo_store(&state, item, &path) {
+                    Ok(quarantine) => {
+                        removed_ids.push(item.id);
+                        operation_items.push(OperationItemDraft {
+                            item_id: Some(item.id),
+                            name: item.name.clone(),
+                            source_path: Some(path.to_string_lossy().to_string()),
+                            target_path: Some(quarantine.to_string_lossy().to_string()),
+                            action: "remove".into(),
+                            status: "completed".into(),
+                            error: None,
+                            snapshot: item_snapshot,
+                            compensation: Some(CompensationDraft {
+                                kind: "restore_removed_file".into(),
+                                source_path: Some(quarantine.to_string_lossy().to_string()),
+                                target_path: Some(path.to_string_lossy().to_string()),
+                                expected_signature: operations::signature(&quarantine).ok(),
+                            }),
+                        });
+                    }
+                    Err(error) => {
+                        failed.push(format!("{}: {error}", item.name));
+                        operation_items.push(OperationItemDraft {
+                            item_id: Some(item.id),
+                            name: item.name.clone(),
+                            source_path: Some(path.to_string_lossy().to_string()),
+                            target_path: None,
+                            action: "remove".into(),
+                            status: "failed".into(),
+                            error: Some(error),
+                            snapshot: item_snapshot,
+                            compensation: None,
+                        });
+                    }
                 },
-                Err(error) if error.kind() == io::ErrorKind::NotFound => removed_ids.push(item.id),
-                Err(error) => failed.push(format!("{}: {error}", item.name)),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    removed_ids.push(item.id);
+                    operation_items.push(OperationItemDraft {
+                        item_id: Some(item.id),
+                        name: item.name.clone(),
+                        source_path: Some(path.to_string_lossy().to_string()),
+                        target_path: None,
+                        action: "remove".into(),
+                        status: "stale".into(),
+                        error: Some("文件已不存在，仅清理索引".into()),
+                        snapshot: item_snapshot,
+                        compensation: None,
+                    });
+                }
+                Err(error) => {
+                    let message = error.to_string();
+                    failed.push(format!("{}: {message}", item.name));
+                    operation_items.push(OperationItemDraft {
+                        item_id: Some(item.id),
+                        name: item.name.clone(),
+                        source_path: Some(path.to_string_lossy().to_string()),
+                        target_path: None,
+                        action: "remove".into(),
+                        status: "failed".into(),
+                        error: Some(message),
+                        snapshot: item_snapshot,
+                        compensation: None,
+                    });
+                }
             }
         }
     } else {
-        removed_ids.extend(items.iter().map(|item| item.id));
+        for item in &items {
+            removed_ids.push(item.id);
+            operation_items.push(OperationItemDraft {
+                item_id: Some(item.id),
+                name: item.name.clone(),
+                source_path: Some(item.staging_path.clone()),
+                target_path: None,
+                action: "unlink".into(),
+                status: "completed".into(),
+                error: None,
+                snapshot: operations::snapshot(item),
+                compensation: Some(CompensationDraft {
+                    kind: "restore_record".into(),
+                    source_path: Some(item.staging_path.clone()),
+                    target_path: None,
+                    expected_signature: None,
+                }),
+            });
+        }
     }
 
     let removed: HashSet<_> = removed_ids.iter().copied().collect();
@@ -724,10 +956,40 @@ pub fn remove_items(app: AppHandle, ids: Vec<i64>, delete_files: bool) -> Result
     for pod_id in pod_ids {
         events::emit_items_changed(&app, pod_id as u64);
     }
+    if !operation_items.is_empty() {
+        let has_compensation = operation_items
+            .iter()
+            .any(|item| item.compensation.is_some());
+        let history = OperationDraft {
+            kind: "remove".into(),
+            pod_id: items.first().map(|item| item.pod_id),
+            summary: format!(
+                "从暂存中移出 {} 项{}",
+                removed_ids.len(),
+                if delete_files {
+                    "（可撤销）"
+                } else {
+                    "（保留文件）"
+                }
+            ),
+            status: if failed.is_empty() {
+                "completed".into()
+            } else {
+                "partial".into()
+            },
+            undoable_until: has_compensation
+                .then(|| db::now_ms().saturating_add(operations::BASIC_UNDO_MS)),
+            metadata: serde_json::json!({}),
+            items: operation_items,
+        };
+        if let Err(error) = operations::record(&state.db.lock().unwrap(), history) {
+            crate::logging::write(&format!("[operations] 记录移出操作失败: {error}"));
+        }
+    }
     if failed.is_empty() {
         Ok(())
     } else {
-        Err(format!("部分文件无法移入回收站：{}", failed.join("；")))
+        Err(format!("部分文件无法进入可撤销区：{}", failed.join("；")))
     }
 }
 

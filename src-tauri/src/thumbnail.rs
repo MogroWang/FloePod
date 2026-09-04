@@ -5,6 +5,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::db;
 use crate::file_ops;
+use crate::security;
 use crate::settings;
 use crate::staging;
 use crate::state::AppState;
@@ -36,6 +37,15 @@ pub fn read(app: AppHandle, path: String) -> Result<Option<ThumbnailPayload>, St
         let Some(item) = item else {
             return Ok(None);
         };
+        if current
+            .pods
+            .iter()
+            .find(|pod| pod.id == item.pod_id as u64)
+            .is_some_and(|pod| pod.security.enabled && pod.security.suppress_thumbnails)
+            || security::is_locked(&app, item.pod_id as u64)
+        {
+            return Ok(None);
+        }
         settings::validate(&current, &staging::data_dir(&state))?;
         settings::validate_pod_for_io(&current, &staging::data_dir(&state), item.pod_id as u64)?;
         let target = staging::item_path(&item, &current)?;

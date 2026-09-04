@@ -182,6 +182,73 @@ select:focus-visible {
   outline-offset: 2px;
 }
 
+/* 安心模式：不依赖拖拽的小目标操作也必须达到易点按尺寸，并强化键盘焦点。 */
+html.safety-mode button,
+html.safety-mode input,
+html.safety-mode select {
+  min-height: 44px;
+}
+html.safety-mode button:focus-visible,
+html.safety-mode input:focus-visible,
+html.safety-mode textarea:focus-visible,
+html.safety-mode select:focus-visible,
+html.safety-mode [tabindex="0"]:focus-visible {
+  outline-width: 3px;
+  outline-offset: 2px;
+}
+
+html.high-contrast {
+  --accent: #ffdf00;
+  --accent-hover: #ffe94d;
+  --accent-soft: rgb(255 223 0 / 0.22);
+  --on-accent: #000000;
+  --ink: #ffffff;
+  --ink-2: #f4f4f4;
+  --ink-3: #d0d0d0;
+  --surface: #000000;
+  --surface-2: #161616;
+  --surface-3: #242424;
+  --surface-raised: #0a0a0a;
+  --surface-hover: #202020;
+  --line: #ffffff;
+  --line-strong: #ffffff;
+  --glass: #000000;
+  --glass-strong: #000000;
+  --glass-line: #ffffff;
+  --glass-inner: transparent;
+}
+
+html.reduce-transparency,
+html.reduce-transparency * {
+  backdrop-filter: none !important;
+}
+html.reduce-transparency {
+  --glass: var(--surface);
+  --glass-strong: var(--surface-raised);
+}
+
+html.reduce-motion *,
+html.reduce-motion *::before,
+html.reduce-motion *::after {
+  scroll-behavior: auto !important;
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+
+@media (forced-colors: active) {
+  * {
+    forced-color-adjust: auto;
+  }
+  button:focus-visible,
+  input:focus-visible,
+  textarea:focus-visible,
+  select:focus-visible,
+  [tabindex="0"]:focus-visible {
+    outline: 3px solid Highlight;
+  }
+}
+
 /* 细滚动条 */
 * {
   scrollbar-width: thin;

@@ -116,7 +116,12 @@ function onPointerEnter() {
   if (dragging.value) return;
   hoverTimeout = window.setTimeout(() => {
     hoverTimeout = undefined;
-    if (hovering.value && !accepting.value && pod.value?.enabled) {
+    if (
+      hovering.value &&
+      !accepting.value &&
+      pod.value?.enabled &&
+      pod.value.hoverOpen !== false
+    ) {
       showPanel();
     }
   }, pod.value?.hoverDelayMs ?? 120);
