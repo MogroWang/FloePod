@@ -6,13 +6,12 @@
 //! 自身不直接触碰条目数据。seq 序号消解新旧菜单竞态：旧菜单的 blur / 关闭
 //! 请求不会影响刚打开的新菜单。
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize};
 
-use crate::events;
-use crate::win;
+use crate::{events, manager, win};
 
 pub const LABEL: &str = "context_menu";
 pub const MENU_SHOW: &str = "floepod://context-menu-show";
@@ -30,6 +29,36 @@ static MENU_READY: AtomicBool = AtomicBool::new(false);
 static MENU_POD: AtomicU64 = AtomicU64::new(0);
 /// 是否存在未关闭的菜单（open 置位、hide 复位）。
 static MENU_OPEN: AtomicBool = AtomicBool::new(false);
+/// 当前菜单的原生材质：0=plain、1=acrylic、2=mica。
+/// 与 MENU_POD 同一代 open 写入，保证前端半透明底色和原生窗口材质一致。
+static MENU_MATERIAL: AtomicU8 = AtomicU8::new(0);
+
+fn material_code(material: &str) -> u8 {
+    match material {
+        "acrylic" => 1,
+        "mica" => 2,
+        _ => 0,
+    }
+}
+
+fn material_name(code: u8) -> &'static str {
+    match code {
+        1 => "acrylic",
+        2 => "mica",
+        _ => "plain",
+    }
+}
+
+fn source_material(app: &AppHandle, pod_id: u64) -> &'static str {
+    let settings = manager::current_settings(app);
+    let code = settings
+        .pods
+        .iter()
+        .find(|pod| pod.id == pod_id && pod.enabled)
+        .map(|pod| material_code(&pod.panel_material))
+        .unwrap_or(0);
+    material_name(code)
+}
 
 /// 菜单项描述：面板组装、菜单窗口渲染、选择后原样回传面板执行。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -55,6 +84,7 @@ pub fn mark_ready(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(LABEL) {
         if let Ok(hwnd) = window.hwnd() {
             win::disable_rounding(hwnd.0 as isize);
+            win::prepare_shaped_window(hwnd.0 as isize);
         }
     }
     MENU_READY.store(true, Ordering::Relaxed);
@@ -66,6 +96,15 @@ pub fn open(app: &AppHandle, pod_id: u64, items: &[MenuItemSpec]) -> Result<(), 
     }
     let seq = MENU_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
     let previous_pod = MENU_POD.swap(pod_id, Ordering::Relaxed);
+    let requested_material = source_material(app, pod_id);
+    // 在隐藏状态先尝试应用系统材质，这样可以把 Windows 10 上不支持的 Mica
+    // 明确降级为 plain，并让前端使用近实心底色而不是透明漏出桌面。
+    let material = app
+        .get_webview_window(LABEL)
+        .filter(|window| manager::apply_window_material(window, requested_material))
+        .map(|_| requested_material)
+        .unwrap_or("plain");
+    MENU_MATERIAL.store(material_code(material), Ordering::Relaxed);
     // 旧菜单的 blur 关闭请求会因 seq 校验被忽略（不能误杀新菜单），
     // 这里对被取代的旧归属匣补发 CLOSED，保证其保活状态总能被解除。
     if previous_pod != 0 && previous_pod != pod_id && MENU_OPEN.load(Ordering::Relaxed) {
@@ -79,7 +118,12 @@ pub fn open(app: &AppHandle, pod_id: u64, items: &[MenuItemSpec]) -> Result<(), 
     app.emit_to(
         LABEL,
         MENU_SHOW,
-        serde_json::json!({ "seq": seq, "podId": pod_id, "items": items }),
+        serde_json::json!({
+            "seq": seq,
+            "podId": pod_id,
+            "items": items,
+            "material": material,
+        }),
     )
     .map_err(|error| format!("菜单窗口事件发送失败: {error}"))
 }
@@ -98,6 +142,12 @@ pub fn resize_and_show(app: &AppHandle, seq: u64, width: f64, height: f64) {
     let position = clamp_to_monitor(app, cursor_position(), size);
     let _ = window.set_size(size);
     let _ = window.set_position(position);
+    // 菜单继承来源匣面板的材质。先清理两个原生材质通道再应用目标材质，
+    // 避免复用全局菜单窗口时云母与 ACCENT 亚克力叠加。
+    let _ = manager::apply_window_material(
+        &window,
+        material_name(MENU_MATERIAL.load(Ordering::Relaxed)),
+    );
     // 窗口必须与菜单卡片同形：四周不留阴影余量（阴影已移除），四角按卡片
     // 圆角裁剪。否则透明余量会吞掉落在其上的点击——点击不会让菜单失焦，
     // 也不会作用于下层窗口，表现为「点左键菜单不消失」。
@@ -118,6 +168,13 @@ pub fn resize_and_show(app: &AppHandle, seq: u64, width: f64, height: f64) {
     }
     // 菜单抢焦点后才能用 blur 检测「点击菜单外部」并自动关闭。
     let _ = window.set_focus();
+    if let Ok(hwnd) = window.hwnd() {
+        // 激活本身会触发透明 WebView2 的幽灵标题栏回归；获得焦点后再做一次
+        // 无条件框架重算，不能依赖显示前的 decorations(false)。
+        win::prepare_shaped_window(hwnd.0 as isize);
+    }
+    // 菜单获得焦点也会让来源面板失焦，并间接触发胶囊条的合成残影。
+    manager::refresh_pod_bar_chrome(app, MENU_POD.load(Ordering::Relaxed));
 }
 
 pub fn choose(app: &AppHandle, seq: u64, pod_id: u64, action: &MenuItemSpec) {
@@ -243,5 +300,15 @@ mod tests {
         assert!(spec.separator);
         assert!(spec.item_ids.is_empty());
         assert!(!spec.danger);
+    }
+
+    #[test]
+    fn menu_material_codes_are_stable_and_unknown_values_fall_back_to_plain() {
+        for (material, code) in [("plain", 0), ("acrylic", 1), ("mica", 2)] {
+            assert_eq!(material_code(material), code);
+            assert_eq!(material_name(code), material);
+        }
+        assert_eq!(material_code("legacy-blur"), 0);
+        assert_eq!(material_name(u8::MAX), "plain");
     }
 }
