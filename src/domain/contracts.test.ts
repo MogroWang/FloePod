@@ -159,7 +159,7 @@ test("IPC 命令和事件名保持稳定且不重复", () => {
     "floepod://panel-mode", "floepod://panel-shown", "floepod://panel-pinned",
     "floepod://panel-state", "floepod://panel-hidden", "floepod://collect-clipboard",
     "floepod://request-file-picker",
-    "floepod://pod-lock-changed",
+    "floepod://pod-lock-changed", "floepod://bar-stealth",
     "floepod://context-menu-show", "floepod://context-menu-choice", "floepod://context-menu-closed",
   ]);
 });
