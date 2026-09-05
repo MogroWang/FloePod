@@ -971,7 +971,7 @@ mod tests {
                     "panelMaterial": "acrylic",
                     "panelOpacity": 1.0,
                     "panelColor": "",
-                    "panelWidth": 300,
+                    "panelWidth": 480,
                     "hoverDelayMs": 0,
                     "autoHide": true,
                     "autoHideDelayMs": 320,
@@ -1018,8 +1018,12 @@ mod tests {
         persist(&c, &loaded).unwrap();
         let stored: serde_json::Value =
             serde_json::from_str(&db::kv_get(&c, KEY).unwrap().unwrap()).unwrap();
-        assert_eq!(stored["accessibility"]["enabled"], false);
+        // 1.5.0 起辅助功能不再有总开关：旧 enabled 字段不得被写回存储。
+        assert!(stored["accessibility"].get("enabled").is_none());
+        assert_eq!(stored["accessibility"]["confirmDangerous"], true);
         assert_eq!(stored["pods"][0]["hoverOpen"], true);
+        assert_eq!(stored["pods"][0]["barLength"], 190);
+        assert_eq!(stored["pods"][0]["barColor"], "");
         assert_eq!(stored["pods"][0]["rules"]["enabled"], false);
         let mut legacy_view = stored;
         legacy_view.as_object_mut().unwrap().remove("accessibility");
@@ -1029,6 +1033,8 @@ mod tests {
             .remove("lockSensitive");
         for pod in legacy_view["pods"].as_array_mut().unwrap() {
             pod.as_object_mut().unwrap().remove("hoverOpen");
+            pod.as_object_mut().unwrap().remove("barLength");
+            pod.as_object_mut().unwrap().remove("barColor");
             pod.as_object_mut().unwrap().remove("rules");
             pod.as_object_mut().unwrap().remove("security");
         }
@@ -1068,6 +1074,32 @@ mod tests {
         let reloaded = load(&c, &data_dir, "1.3.0").unwrap();
         assert_eq!(reloaded.pods[0].panel_material, "acrylic");
         assert!((reloaded.pods[0].panel_opacity - 0.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn legacy_panel_width_migrates_into_new_range() {
+        let c = conn();
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path().join("data").to_string_lossy().to_string();
+        let stage = tmp.path().join("stage").to_string_lossy().to_string();
+        // 1.4 及更早允许 300-520：存量下限值 300 在 1.5.0 收紧后必须收敛，
+        // 否则严格校验会让保存路径全部报错。
+        db::kv_set(
+            &c,
+            KEY,
+            &serde_json::json!({
+                "theme": "system",
+                "pods": [{
+                    "id": 1, "name": "匣", "edge": "left", "stagingFolder": stage,
+                    "opacity": 1.0, "material": "plain", "panelWidth": 300
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let s = load(&c, &data_dir, "1.5.0").unwrap();
+        assert_eq!(s.pods[0].panel_width, 410);
+        assert!(validate(&s, &data_dir).is_ok());
     }
 
     #[test]
