@@ -149,7 +149,7 @@ test("IPC 命令和事件名保持稳定且不重复", () => {
     "copy_staged_to_clipboard", "reveal_staged_items", "write_clipboard_text",
     "read_clipboard_files",
     "context_menu_ready", "open_context_menu", "resize_context_menu",
-    "context_menu_choice", "hide_context_menu",
+    "context_menu_choice", "hide_context_menu", "dismiss_context_menu",
     "log_frontend", "app_log", "quit_app",
   ]);
   const events = Object.values(Events);
