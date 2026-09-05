@@ -584,15 +584,13 @@ pub fn refresh_window_material(app: &AppHandle, label: &str) {
             .get(&id)
             .and_then(|runtime| runtime.panel_material.clone())
     };
-    match material.as_deref() {
-        Some("acrylic") => {
-            if let Ok(hwnd) = window.hwnd() {
-                let _ = win::apply_panel_acrylic(hwnd.0 as isize);
-                // 重放同样轻推一次合成，焦点切换后材质立即可见。
-                nudge_recomposite(&window);
-            }
+    // 云母已移除，材质只剩亚克力一种需要重放；普通无原生材质可重放。
+    if let Some("acrylic") = material.as_deref() {
+        if let Ok(hwnd) = window.hwnd() {
+            let _ = win::apply_panel_acrylic(hwnd.0 as isize);
+            // 重放同样轻推一次合成，焦点切换后材质立即可见。
+            nudge_recomposite(&window);
         }
-        _ => {}
     }
 }
 
