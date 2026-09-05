@@ -14,7 +14,7 @@ fn validate(hotkeys: &Hotkeys) -> Result<(), String> {
     let entries = [
         ("显示 / 隐藏浮匣", hotkeys.toggle_bar.as_str()),
         ("收集剪贴板", hotkeys.collect_clipboard.as_str()),
-        ("打开面板", hotkeys.open_panel.as_str()),
+        ("打开浮动面板", hotkeys.open_panel.as_str()),
         ("紧急锁定敏感匣", hotkeys.lock_sensitive.as_str()),
     ];
     let mut seen: HashMap<u32, &str> = HashMap::new();
@@ -67,8 +67,8 @@ pub fn register(app: &AppHandle, s: &Settings) -> Result<(), String> {
         reg(&s.hotkeys.open_panel, on_open_panel)?;
         reg(&s.hotkeys.lock_sensitive, crate::security::lock_all)?;
 
-        // 安心模式提供完全不依赖拖拽的 Alt+数字投递入口：先打开对应匣面板，
-        // 再让该面板弹出原生文件选择器。最多映射前 9 个已启用匣。
+        // 辅助功能提供完全不依赖拖拽的 Alt+数字投递入口：先打开对应匣浮动面板，
+        // 再让该浮动面板弹出原生文件选择器。最多映射前 9 个已启用匣。
         if s.accessibility.enabled {
             for (index, pod) in s.pods.iter().filter(|pod| pod.enabled).take(9).enumerate() {
                 let combo = format!("Alt+{}", index + 1);
@@ -87,7 +87,7 @@ pub fn register(app: &AppHandle, s: &Settings) -> Result<(), String> {
                     // 单个 Alt+数字与其他软件冲突时不能让用户原有的三组快捷键
                     // 一起失效；保留其余映射并在日志中给出明确诊断。
                     crate::logging::write(&format!(
-                        "[hotkeys] 安心模式快捷键「{combo}」注册失败，可能与其他软件冲突（{error}）"
+                        "[hotkeys] 辅助功能快捷键「{combo}」注册失败，可能与其他软件冲突（{error}）"
                     ));
                 }
             }
@@ -112,7 +112,7 @@ fn on_toggle_bars(app: &AppHandle) {
     });
 }
 
-/// 打开第一个可用匣的面板。
+/// 打开第一个可用匣的浮动面板。
 fn on_open_panel(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {

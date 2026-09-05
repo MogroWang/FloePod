@@ -6,7 +6,7 @@ export interface ExportPresentation {
   message: string;
 }
 
-/** 导出动词的唯一来源：面板、冲突对话框与结果文案共用。 */
+/** 导出动词的唯一来源：浮动面板、冲突对话框与结果文案共用。 */
 export function exportVerb(mode: ExportMode): string {
   return mode === "move" ? "移动" : "复制";
 }

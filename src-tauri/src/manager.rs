@@ -1,4 +1,4 @@
-//! 窗口编排：多「匣」窗口的创建与摆放、面板显隐（不抢焦点 + 看门狗动画收起）。
+//! 窗口编排：多「匣」窗口的创建与摆放、浮动面板显隐（不抢焦点 + 看门狗动画收起）。
 
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
@@ -15,7 +15,7 @@ use crate::settings::{Pod, Settings};
 use crate::state::{AppState, PanelMode, PodRuntime};
 use crate::win;
 
-/// 匣（胶囊条）长边；短边（贴屏幕边缘一侧）来自每个匣的 bar_width 设置。
+/// 匣（边缘浮动条）长边；短边（贴屏幕边缘一侧）来自每个匣的 bar_width 设置。
 const POD_BAR_LONG: u32 = 190;
 /// 拖入接纳态：短条在此基础上加宽为圆角矩形
 const POD_BAR_ACCEPT_GROW: u32 = 18;
@@ -57,9 +57,9 @@ pub struct PanelSnapshot {
 enum PanelToggleAction {
     /// 全局暂停时，toggle 的首要含义是恢复 UI；若目标原本未打开则同时打开并固定。
     Resume { show_target: bool },
-    /// 面板未显示：以固定方式弹出，保持到再次点击匣或主动取消固定。
+    /// 浮动面板未显示：以固定方式弹出，保持到再次点击匣或主动取消固定。
     ShowPinned,
-    /// 面板已在显示：点击匣直接收起。
+    /// 浮动面板已在显示：点击匣直接收起。
     Hide,
 }
 
@@ -132,7 +132,7 @@ fn pods_guard<'a>(
 /// 找到匣所在显示器：按名称匹配，空名或未找到回退主显示器。
 ///
 /// Tauri 的显示器位置/尺寸是物理像素；同时返回目标显示器的缩放率，避免
-/// 面板窗口尚在旧显示器时误用 `panel.scale_factor()` 计算新位置和尺寸。
+/// 浮动面板窗口尚在旧显示器时误用 `panel.scale_factor()` 计算新位置和尺寸。
 fn monitor(app: &AppHandle, pod: &Pod) -> Option<MonitorGeometry> {
     let monitors = app.available_monitors().ok()?;
     if !pod.monitor.is_empty() {
@@ -203,7 +203,7 @@ pub fn list_monitors(app: &AppHandle) -> Vec<MonitorInfo> {
     out
 }
 
-/// 胶囊条窗口的几何（长边方向由边缘决定）。短边来自匣的 bar_width 设置。
+/// 边缘浮动条窗口的几何（长边方向由边缘决定）。短边来自匣的 bar_width 设置。
 fn bar_geometry_for_monitor(
     monitor: (i32, i32, i32, i32),
     edge: &str,
@@ -245,7 +245,7 @@ fn bar_geometry_for_monitor(
     (x, y, w, h)
 }
 
-/// 胶囊条窗口的几何与所在显示器缩放率（物理像素）。
+/// 边缘浮动条窗口的几何与所在显示器缩放率（物理像素）。
 fn bar_geometry(
     app: &AppHandle,
     pod: &Pod,
@@ -283,14 +283,14 @@ pub fn place_pod_bar(app: &AppHandle, pod: &Pod, accepting: bool) {
         runtime.bar_rect = Some((x, y, w, h));
         runtime.bar_scale = scale;
     }
-    // 胶囊条材质已废弃（固定普通半透明），无需按材质裁剪区域；
+    // 边缘浮动条材质已废弃（固定普通半透明），无需按材质裁剪区域；
     // 以 radius=0 清除历史残留的区域，并顺带幂等清理非客户区样式。
     if let Ok(hwnd) = bar.hwnd() {
         win::set_bar_region(hwnd.0 as isize, w, h, 0, &pod.edge);
     }
 }
 
-/// 把请求的面板矩形限制在显示器工作矩形内。
+/// 把请求的浮动面板矩形限制在显示器工作矩形内。
 ///
 /// 先限制宽高再 clamp 坐标，保证在高 DPI、窄屏或异常尺寸下也不会出现
 /// `min > max` 导致 Rust `clamp` panic。
@@ -347,7 +347,7 @@ fn panel_geometry(
     )
 }
 
-/// 面板：贴着匣弹出，长边方向垂直/水平时对齐到匣中心。
+/// 浮动面板：贴着匣弹出，长边方向垂直/水平时对齐到匣中心。
 fn place_panel(app: &AppHandle, pod: &Pod) {
     let Some(panel) = pod_panel(app, pod.id) else {
         return;
@@ -404,7 +404,7 @@ fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
     let bar_label = events::pod_bar_label(pod.id);
     let panel_label = events::pod_panel_label(pod.id);
     if app.get_webview_window(&bar_label).is_none() {
-        // 胶囊条不设置标题文字：即使非客户区渲染被系统事件短暂恢复，
+        // 边缘浮动条不设置标题文字：即使非客户区渲染被系统事件短暂恢复，
         // 也不会显示出「匣名称」标题栏。
         if let Err(err) =
             WebviewWindowBuilder::new(app, &bar_label, tauri::WebviewUrl::App("index.html".into()))
@@ -428,7 +428,7 @@ fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
             &panel_label,
             tauri::WebviewUrl::App("index.html".into()),
         )
-        .title(format!("{} 面板", pod.name))
+        .title(format!("{} 浮动面板", pod.name))
         .decorations(false)
         .transparent(true)
         .always_on_top(true)
@@ -442,7 +442,7 @@ fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
             crate::logging::write(&format!("[window] 创建 {panel_label} 失败: {err}"));
         }
     }
-    // 胶囊条形状由前端自绘：禁用 Windows 11 系统窗口圆角，
+    // 边缘浮动条形状由前端自绘：禁用 Windows 11 系统窗口圆角，
     // 否则 DWM 圆角会把贴边的圆角矩形裁掉，看起来「显示不全」。
     if let Some(bar) = pod_bar(app, pod.id) {
         if let Ok(hwnd) = bar.hwnd() {
@@ -452,7 +452,7 @@ fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
             win::prepare_shaped_window(hwnd.0 as isize);
         }
     }
-    // 面板：请求系统圆角，与 CSS 的 clip-path 圆角轮廓对齐
+    // 浮动面板：请求系统圆角，与 CSS 的 clip-path 圆角轮廓对齐
     if let Some(panel) = pod_panel(app, pod.id) {
         if let Ok(hwnd) = panel.hwnd() {
             win::prefer_rounded_corners(hwnd.0 as isize);
@@ -500,20 +500,36 @@ fn sync_pods_with_settings(app: &AppHandle, s: &Settings) {
     }
 }
 
-/// 清除 DWM systembackdrop（tauri set_effects）。亚克力与云母统一改走
-/// 随窗口常驻的 ACCENT 通道，这里只负责切换材质前清掉旧 systembackdrop，
-/// 避免两套机制叠加（云母纹理盖在 ACCENT 模糊之上）。
+/// 清除 DWM systembackdrop（tauri set_effects）。亚克力改走随窗口常驻的
+/// ACCENT 通道，这里只负责切换材质前清掉旧 systembackdrop，避免旧版
+/// 升级残留的 backdrop 与 ACCENT 模糊叠加。
 fn clear_system_backdrop(window: &WebviewWindow) -> bool {
     window.set_effects(None).is_ok()
 }
 
-/// 透明浮层材质落地：供匣面板与右键菜单共用，按材质分流到不同系统机制。
+/// 轻推窗口尺寸（±1 物理像素后还原）强制 DWM / WebView2 重新合成。
 ///
-/// 亚克力与云母统一走 SWCA ACCENT（见 win::apply_panel_acrylic /
-/// win::apply_panel_mica）：DWM 系统背景（tauri set_effects 的
-/// systembackdrop）在窗口失焦后移除整个 backdrop 且重放无效，而面板免
-/// 激活显示、绝大多数时间不持有焦点，是「不聚焦就看不到材质」的根源；
-/// ACCENT 策略随窗口常驻，聚焦与失焦表现一致。普通即无系统材质。
+/// ACCENT 材质写入与 RedrawWindow 只作用于 GDI 表面；WebView2 的
+/// DirectComposition 表面在窗口几何变化时才重新呈现，否则应用材质后
+/// 画面停留在旧合成结果（表现为「材质应用了但没刷新出来」）。
+/// 抖动等价于用户手动 resize 触发的重合成，同帧还原，视觉不可感知。
+fn nudge_recomposite(window: &WebviewWindow) {
+    let Ok(size) = window.inner_size() else {
+        return;
+    };
+    let width = size.width.max(2);
+    let height = size.height.max(2);
+    let _ = window.set_size(PhysicalSize::new(width - 1, height));
+    let _ = window.set_size(PhysicalSize::new(width, height));
+}
+
+/// 透明浮层材质落地：供匣浮动面板与右键菜单共用，按材质分流到不同系统机制。
+///
+/// 亚克力走 SWCA ACCENT（见 win::apply_panel_acrylic）：DWM 系统背景
+/// （tauri set_effects 的 systembackdrop）在窗口失焦后移除整个 backdrop
+/// 且重放无效，而浮动面板免激活显示、绝大多数时间不持有焦点，是
+/// 「不聚焦就看不到材质」的根源；ACCENT 策略随窗口常驻，聚焦与失焦
+/// 表现一致。普通即无系统材质（云母已于 1.4.0 移除）。
 /// 任何分支都先清掉 ACCENT 与 DWM effect 两个通道，避免材质切换时叠加。
 pub(crate) fn apply_window_material(window: &WebviewWindow, material: &str) -> bool {
     let Ok(hwnd) = window.hwnd() else {
@@ -523,19 +539,17 @@ pub(crate) fn apply_window_material(window: &WebviewWindow, material: &str) -> b
     let _ = clear_system_backdrop(window);
     let applied = match material {
         "acrylic" => win::apply_panel_acrylic(hwnd.0 as isize),
-        // 云母只在 Win11 有视觉效果；旧系统返回 false，依赖返回值做
-        // 降级（右键菜单近实心底色）的调用方会回落到普通。
-        "mica" => win::host_backdrop_available() && win::apply_panel_mica(hwnd.0 as isize),
         _ => true,
     };
-    // 切换材质后 WebView2 不一定立即重新合成；主动重绘一次，旧材质不再
-    // 残留到下一次自然重绘。
+    // 材质写入后主动重绘 GDI 表面并轻推一次合成，旧画面不再停留到
+    // 下一次自然重绘。
     win::redraw_window(hwnd.0 as isize);
+    nudge_recomposite(window);
     applied
 }
 
-/// 强制刷新指定匣胶囊条的无边框状态。透明 WebView2 的幽灵标题栏可能由
-/// 兄弟面板或右键菜单获得焦点触发，因此不能只在胶囊条自身收到焦点事件时修复。
+/// 强制刷新指定匣边缘浮动条的无边框状态。透明 WebView2 的幽灵标题栏可能由
+/// 兄弟浮动面板或右键菜单获得焦点触发，因此不能只在边缘浮动条自身收到焦点事件时修复。
 pub(crate) fn refresh_pod_bar_chrome(app: &AppHandle, id: u64) {
     if let Some(bar) = pod_bar(app, id) {
         if let Ok(hwnd) = bar.hwnd() {
@@ -544,9 +558,9 @@ pub(crate) fn refresh_pod_bar_chrome(app: &AppHandle, id: u64) {
     }
 }
 
-/// 焦点变化时幂等重放面板材质：亚克力与云母各自重发一次全量材质，
-/// 保证无论面板是否持有焦点，材质属性始终处于已下发状态。
-/// 胶囊条材质已废弃（固定普通），仅顺带幂等清理非客户区样式，
+/// 焦点变化时幂等重放浮动面板材质：重发一次全量材质，
+/// 保证无论浮动面板是否持有焦点，材质属性始终处于已下发状态。
+/// 边缘浮动条材质已废弃（固定普通），仅顺带幂等清理非客户区样式，
 /// 杜绝任何来源恢复的标题栏样式位驻留。
 pub fn refresh_window_material(app: &AppHandle, label: &str) {
     let target = match events::pod_window(label) {
@@ -557,7 +571,7 @@ pub fn refresh_window_material(app: &AppHandle, label: &str) {
     let Some((id, window, is_bar)) = target else {
         return;
     };
-    // 任一匣窗口的焦点变化都同步刷新其胶囊条。用户点击面板时胶囊条通常
+    // 任一匣窗口的焦点变化都同步刷新其边缘浮动条。用户点击浮动面板时边缘浮动条通常
     // 不会收到新的 Focused 事件，但 WebView2 仍可能重绘它的幽灵标题栏。
     refresh_pod_bar_chrome(app, id);
     if is_bar {
@@ -574,11 +588,8 @@ pub fn refresh_window_material(app: &AppHandle, label: &str) {
         Some("acrylic") => {
             if let Ok(hwnd) = window.hwnd() {
                 let _ = win::apply_panel_acrylic(hwnd.0 as isize);
-            }
-        }
-        Some("mica") => {
-            if let Ok(hwnd) = window.hwnd() {
-                let _ = win::apply_panel_mica(hwnd.0 as isize);
+                // 重放同样轻推一次合成，焦点切换后材质立即可见。
+                nudge_recomposite(&window);
             }
         }
         _ => {}
@@ -586,7 +597,7 @@ pub fn refresh_window_material(app: &AppHandle, label: &str) {
 }
 
 /// 把与运行态相关的配置同步进 PodRuntime（自动隐藏 / 隐匿模式设置）。
-/// 面板材质不在这里处理：必须对隐藏的面板也落地，见 apply_panel_material_if_changed。
+/// 浮动面板材质不在这里处理：必须对隐藏的浮动面板也落地，见 apply_panel_material_if_changed。
 fn sync_runtime_config(app: &AppHandle, pod: &Pod) {
     let state = app.state::<AppState>();
     let mut guard = state.pods.lock().unwrap();
@@ -597,11 +608,11 @@ fn sync_runtime_config(app: &AppHandle, pod: &Pod) {
     runtime.stealth_delay_ms = pod.stealth_delay_ms;
 }
 
-/// 面板材质只在变化时重设（每次显示都重设亚克力会引起重绘闪烁）。
+/// 浮动面板材质只在变化时重设（每次显示都重设亚克力会引起重绘闪烁）。
 ///
-/// 必须对隐藏 / 未固定的面板同样生效：此前只在面板可见时应用，而运行态
+/// 必须对隐藏 / 未固定的浮动面板同样生效：此前只在浮动面板可见时应用，而运行态
 /// 已经记录了新材质，显示路径的变化检测就再也不触发，导致「改材质时
-/// 面板没固定」永远不生效。
+/// 浮动面板没固定」永远不生效。
 fn apply_panel_material_if_changed(app: &AppHandle, pod: &Pod) {
     let material = if app
         .state::<AppState>()
@@ -628,7 +639,7 @@ fn apply_panel_material_if_changed(app: &AppHandle, pod: &Pod) {
             let _ = apply_window_material(&panel, material);
         }
         // 材质策略变化会触发 DWM 重新合成同一显示器上的兄弟窗口；
-        // 顺带刷新胶囊条渲染，保证所有匣窗口与新材料状态一致。
+        // 顺带刷新边缘浮动条渲染，保证所有匣窗口与新材料状态一致。
         refresh_pod_bar_chrome(app, pod.id);
     }
 }
@@ -652,7 +663,7 @@ fn panel_snapshot(app: &AppHandle, id: u64) -> PanelSnapshot {
     }
 }
 
-/// 面板 WebView 挂载后主动拉取一次，弥补窗口首次加载前发送的事件不会排队的问题。
+/// 浮动面板 WebView 挂载后主动拉取一次，弥补窗口首次加载前发送的事件不会排队的问题。
 #[tauri::command]
 pub async fn get_panel_state(app: AppHandle, pod_id: u64) -> PanelSnapshot {
     panel_snapshot(&app, pod_id)
@@ -684,7 +695,7 @@ pub fn set_panel_mode(app: &AppHandle, id: u64, mode: &str) -> Result<(), String
         "list" => PanelMode::List,
         "ask" => PanelMode::Ask,
         "conflict" => PanelMode::Conflict,
-        other => return Err(format!("未知面板模式: {other}")),
+        other => return Err(format!("未知浮动面板模式: {other}")),
     };
     let state = app.state::<AppState>();
     let _operation = state.panel_ops.lock().unwrap();
@@ -703,14 +714,14 @@ pub fn set_panel_mode(app: &AppHandle, id: u64, mode: &str) -> Result<(), String
     Ok(())
 }
 
-/// 保存一批待询问路径并在同一个窗口操作临界区内显示面板。
+/// 保存一批待询问路径并在同一个窗口操作临界区内显示浮动面板。
 ///
 /// 已有 Ask 时合并而不是覆盖；Conflict 必须先完成，避免丢失任一交互上下文。
 pub fn hold_pending_drop(app: &AppHandle, id: u64, paths: Vec<String>) -> Result<(), String> {
     if paths.is_empty() {
         return Ok(());
     }
-    // 面板会把这些路径原样展示；提前挡掉相对路径等畸形输入，
+    // 浮动面板会把这些路径原样展示；提前挡掉相对路径等畸形输入，
     // 真正的文件校验仍由 stage_paths 完成。
     for path in &paths {
         if !std::path::Path::new(path).is_absolute() {
@@ -737,7 +748,7 @@ pub fn hold_pending_drop(app: &AppHandle, id: u64, paths: Vec<String>) -> Result
         runtime.mode = PanelMode::Ask;
     }
     if !show_panel_locked(app, id, &pod, false) {
-        return Err(format!("无法显示匣 {id} 的面板"));
+        return Err(format!("无法显示匣 {id} 的浮动面板"));
     }
     Ok(())
 }
@@ -764,15 +775,15 @@ pub fn set_panel_size(app: &AppHandle, id: u64, height: u32) {
     }
 }
 
-/// 面板淡出动画的时长；后端在此之后才真正隐藏原生窗口。
+/// 浮动面板淡出动画的时长；后端在此之后才真正隐藏原生窗口。
 /// 必须与 PodPanel.vue 的 .panel-fade-out 动画时长保持一致。
 const PANEL_FADE_OUT_MS: u64 = 220;
 
-/// 延迟隐藏面板窗口，给前端留出淡出动画的时间窗。
+/// 延迟隐藏浮动面板窗口，给前端留出淡出动画的时间窗。
 /// 调用前提：transition_to_hidden_locked 已把运行态置为隐藏。
-/// 延迟期间面板可能被重新显示（指针重新悬停 / 主动弹出），
+/// 延迟期间浮动面板可能被重新显示（指针重新悬停 / 主动弹出），
 /// 任务执行时按运行态自检，一旦 panel_visible 回到 true 就放弃隐藏，
-/// 避免「面板刚淡入又被藏掉」。
+/// 避免「浮动面板刚淡入又被藏掉」。
 fn schedule_delayed_panel_hide(app: &AppHandle, id: u64) {
     let handle = app.clone();
     std::thread::spawn(move || {
@@ -815,7 +826,7 @@ where
     // 运行态转换与原生副作用由 panel_ops 串行化；不会再出现旧 show 在新 hide 后补显。
     // 原生窗口不立即隐藏：先让前端播放淡出动画，延迟任务自检后再 SW_HIDE。
     schedule_delayed_panel_hide(app, id);
-    // 必须用 emit_to 定向发送：`emit` 是全局广播，会让其他仍可见的面板
+    // 必须用 emit_to 定向发送：`emit` 是全局广播，会让其他仍可见的浮动面板
     // 也收到 PANEL_HIDDEN 并把 DOM 置为透明（pre-show）。
     if pod_panel(app, id).is_some() {
         let _ = app.emit_to(events::pod_panel_label(id), events::PANEL_HIDDEN, ());
@@ -826,7 +837,7 @@ where
 
 /// 仅暂停原生窗口，不改变运行态、也不发送 `PANEL_HIDDEN`。
 ///
-/// `PANEL_HIDDEN` 表示真正的面板状态转换，前端收到后会清空 Ask/Conflict
+/// `PANEL_HIDDEN` 表示真正的浮动面板状态转换，前端收到后会清空 Ask/Conflict
 /// 上下文。“隐藏全部匣”只是全局暂停，必须无损保留这些上下文。
 /// 调用方必须持有 `AppState::panel_ops`。
 fn hide_panel_window(app: &AppHandle, id: u64) {
@@ -837,10 +848,10 @@ fn hide_panel_window(app: &AppHandle, id: u64) {
     }
 }
 
-/// 单一活动面板：收起除 id 外所有「可见、未固定、列表模式」的面板。
-/// 固定（panel_pinned）以及正在拖入询问/冲突解决（mode != List）的面板不受影响。
-/// 关闭了自动隐藏的面板等价于固定，同样不被隐藏；OLE 拖出中的面板也不受影响。
-/// 走 transition_to_hidden_locked 的淡出路径，新面板弹出与旧面板淡出重叠不闪烁。
+/// 单一活动浮动面板：收起除 id 外所有「可见、未固定、列表模式」的浮动面板。
+/// 固定（panel_pinned）以及正在拖入询问/冲突解决（mode != List）的浮动面板不受影响。
+/// 关闭了自动隐藏的浮动面板等价于固定，同样不被隐藏；OLE 拖出中的浮动面板也不受影响。
+/// 走 transition_to_hidden_locked 的淡出路径，新浮动面板弹出与旧浮动面板淡出重叠不闪烁。
 /// 调用方必须持有 `AppState::panel_ops`。
 fn dismiss_other_panels_locked(app: &AppHandle, id: u64) {
     let state = app.state::<AppState>();
@@ -875,7 +886,7 @@ fn show_panel_locked(app: &AppHandle, id: u64, pod: &Pod, pin_on_show: bool) -> 
         runtime.panel_visible
     };
 
-    // 已可见时只校正原生窗口并重发快照，不再次收起其他面板。
+    // 已可见时只校正原生窗口并重发快照，不再次收起其他浮动面板。
     // 这也避免 hold_pending_drop 后的重复 show 干扰刚刚打开的另一个匣。
     if !was_visible {
         dismiss_other_panels_locked(app, id);
@@ -883,10 +894,10 @@ fn show_panel_locked(app: &AppHandle, id: u64, pod: &Pod, pin_on_show: bool) -> 
     place_panel(app, pod);
     // 材质只在变化时重设；正常由 apply_settings 落地，这里兜底检测一次。
     apply_panel_material_if_changed(app, pod);
-    let _ = panel.set_title(&format!("{} 面板", pod.name));
+    let _ = panel.set_title(&format!("{} 浮动面板", pod.name));
     win::prefer_rounded_corners(hwnd.0 as isize);
     win::show_no_activate(hwnd.0 as isize);
-    // 显示兄弟面板本身也可能触发透明 WebView 的非客户区合成回归。
+    // 显示兄弟浮动面板本身也可能触发透明 WebView 的非客户区合成回归。
     refresh_pod_bar_chrome(app, id);
 
     {
@@ -911,7 +922,7 @@ fn show_panel_locked(app: &AppHandle, id: u64, pod: &Pod, pin_on_show: bool) -> 
 pub fn show_panel(app: &AppHandle, id: u64) {
     let state = app.state::<AppState>();
     // 全局隐藏期间忽略来自旧 hover timer / 拖放事件的普通 show；托盘/快捷键
-    // 走 toggle_panel，仍可显式打开一个固定面板。
+    // 走 toggle_panel，仍可显式打开一个固定浮动面板。
     if !state.bars_visible.load(Ordering::Relaxed) {
         return;
     }
@@ -972,7 +983,7 @@ pub fn set_panel_pinned(app: &AppHandle, id: u64, pinned: bool) {
     let state = app.state::<AppState>();
     let _operation = state.panel_ops.lock().unwrap();
     if !state.bars_visible.load(Ordering::Relaxed) {
-        // 暂停后才到达的 pin 请求不得把原生面板重新显示。
+        // 暂停后才到达的 pin 请求不得把原生浮动面板重新显示。
         emit_panel_snapshot(app, id);
         return;
     }
@@ -1023,7 +1034,7 @@ pub fn report_presence(app: &AppHandle, id: u64, window: &str, inside: bool) {
         r.last_change = Some(Instant::now());
         r.panel_visible
     };
-    // 指针进入本匣：若本匣面板可见，收起其他未固定面板，维持单一活动面板
+    // 指针进入本匣：若本匣浮动面板可见，收起其他未固定浮动面板，维持单一活动浮动面板
     // （否则「B 收起中、指针回到 A」的路径会让 A、B 同时显示）。
     if inside && visible {
         dismiss_other_panels_locked(app, id);
@@ -1041,7 +1052,7 @@ pub fn set_pod_accept(app: &AppHandle, id: u64, accepting: bool) {
     place_pod_bar(app, &pod, accepting);
 }
 
-/// 拖动胶囊条过程中实时重定位（不写库）；松手后由 update_pod 持久化 offset。
+/// 拖动边缘浮动条过程中实时重定位（不写库）；松手后由 update_pod 持久化 offset。
 pub fn move_pod_bar(app: &AppHandle, id: u64, offset: f64) {
     let Some(mut pod) = pod_of(app, id) else {
         return;
@@ -1050,7 +1061,7 @@ pub fn move_pod_bar(app: &AppHandle, id: u64, offset: f64) {
     place_pod_bar(app, &pod, false);
 }
 
-/// 指针距胶囊条多近视为「靠近」（逻辑像素）：隐匿中的胶囊条在该范围内淡入。
+/// 指针距边缘浮动条多近视为「靠近」（逻辑像素）：隐匿中的边缘浮动条在该范围内淡入。
 const STEALTH_PROXIMITY: f64 = 48.0;
 
 /// 光标是否落在矩形外扩 proximity（按缩放率换算为物理像素）的范围内。
@@ -1068,7 +1079,7 @@ fn cursor_near(rect: (i32, i32, i32, i32), scale: f64) -> bool {
     cx >= x - pad && cx <= x + w + pad && cy >= y - pad && cy <= y + h + pad
 }
 
-/// 更新胶囊条的隐匿状态并按需通知前端。
+/// 更新边缘浮动条的隐匿状态并按需通知前端。
 fn set_bar_stealth(app: &AppHandle, id: u64, hidden: bool) {
     {
         let state = app.state::<AppState>();
@@ -1090,9 +1101,9 @@ fn set_bar_stealth(app: &AppHandle, id: u64, hidden: bool) {
     }
 }
 
-/// 隐匿模式判定：胶囊条仅在「开启隐匿、面板未打开、无交互超过延迟、且
+/// 隐匿模式判定：边缘浮动条仅在「开启隐匿、浮动面板未打开、无交互超过延迟、且
 /// 指针不在附近」时淡化隐去；任一条件不满足则恢复显示。状态变化时向
-/// 胶囊条窗口发事件，由前端做透明度过渡，窗口本身保持可交互（拖文件到
+/// 边缘浮动条窗口发事件，由前端做透明度过渡，窗口本身保持可交互（拖文件到
 /// 原位置仍能暂存）。由看门狗每个 tick 调用，全部读取内存运行态。
 fn update_bar_stealth(app: &AppHandle, id: u64, now: Instant) {
     let state = app.state::<AppState>();
@@ -1124,10 +1135,10 @@ fn update_bar_stealth(app: &AppHandle, id: u64, now: Instant) {
     }
 }
 
-/// 看门狗：逐个匣检查--面板未固定、未在拖出、列表模式且指针离开超过宽限期 -> 淡出隐藏。
-/// 单一活动面板由 show_panel / report_presence 主动维持；这里只负责指针离开后的兜底隐藏。
-/// 关闭了「匣面板自动收起」的匣不参与自动隐藏，面板保持到用户手动关闭。
-/// 隐匿模式（胶囊条淡出 / 淡入）也在同一循环里判定。
+/// 看门狗：逐个匣检查--浮动面板未固定、未在拖出、列表模式且指针离开超过宽限期 -> 淡出隐藏。
+/// 单一活动浮动面板由 show_panel / report_presence 主动维持；这里只负责指针离开后的兜底隐藏。
+/// 关闭了「匣浮动面板自动收起」的匣不参与自动隐藏，浮动面板保持到用户手动关闭。
+/// 隐匿模式（边缘浮动条淡出 / 淡入）也在同一循环里判定。
 pub fn spawn_watchdog(app: AppHandle) {
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_millis(100));
@@ -1177,7 +1188,7 @@ fn set_all_bars_locked(app: &AppHandle, settings: &Settings, visible: bool) {
                 let mut guard = state.pods.lock().unwrap();
                 let runtime = guard.entry(pod.id).or_default();
                 // 暂停时已清掉 presence；恢复时重启离开宽限，避免未固定
-                // 列表面板因旧时间戳在第一个 watchdog tick 立刻消失。
+                // 列表浮动面板因旧时间戳在第一个 watchdog tick 立刻消失。
                 if runtime.panel_visible {
                     runtime.last_change = Some(Instant::now());
                 }
@@ -1202,7 +1213,7 @@ fn set_all_bars_locked(app: &AppHandle, settings: &Settings, visible: bool) {
     }
 }
 
-/// 显示 / 隐藏全部匣。“隐藏”是可逆的全局暂停，不销毁面板状态。
+/// 显示 / 隐藏全部匣。“隐藏”是可逆的全局暂停，不销毁浮动面板状态。
 pub fn set_all_bars(app: &AppHandle, visible: bool) {
     // 始终先取 DB 快照再取 panel_ops，与 toggle/size/pin 保持一致锁顺序。
     let settings = current_settings(app);
@@ -1240,7 +1251,7 @@ pub fn apply_settings(app: &AppHandle, s: &Settings) {
         );
     }
 
-    // 窗口创建/销毁与所有面板显隐串行。对已固定、可见的面板立即应用新的
+    // 窗口创建/销毁与所有浮动面板显隐串行。对已固定、可见的浮动面板立即应用新的
     // monitor/edge/offset/panelWidth/material，而不是等到关闭重开。
     {
         let state = app.state::<AppState>();
@@ -1249,11 +1260,11 @@ pub fn apply_settings(app: &AppHandle, s: &Settings) {
 
         for pod in s.pods.iter().filter(|p| p.enabled) {
             sync_runtime_config(app, pod);
-            // 面板材质无论可见与否都要落地，否则未固定的面板改材质永远不生效。
+            // 浮动面板材质无论可见与否都要落地，否则未固定的浮动面板改材质永远不生效。
             apply_panel_material_if_changed(app, pod);
             place_pod_bar(app, pod, false);
             if let Some(panel) = pod_panel(app, pod.id) {
-                let _ = panel.set_title(&format!("{} 面板", pod.name));
+                let _ = panel.set_title(&format!("{} 浮动面板", pod.name));
             }
             let panel_visible = state
                 .pods
@@ -1314,7 +1325,7 @@ fn exe_matches(candidate: &str, foreground: &str) -> bool {
 
 /// 自动屏蔽轮询：配置的应用位于前台时暂时隐藏全部匣，切回其他应用后自动恢复。
 ///
-/// 屏蔽走 set_all_bars 的全局暂停语义：面板的固定 / 询问 / 冲突上下文得以保留，
+/// 屏蔽走 set_all_bars 的全局暂停语义：浮动面板的固定 / 询问 / 冲突上下文得以保留，
 /// 恢复时原样回归。进入屏蔽前记录可见性，解除时只恢复屏蔽前可见的状态，
 /// 不会覆盖用户在屏蔽期间手动执行的「隐藏全部匣」。
 pub fn spawn_auto_block_watcher(app: AppHandle) {

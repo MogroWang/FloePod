@@ -207,7 +207,7 @@ export const ipc = {
       options: { mode },
       onEvent: channel,
     });
-    // 插件若始终不发终止事件，等待必须超时返回，否则面板会永久停留在拖拽占用态。
+    // 插件若始终不发终止事件，等待必须超时返回，否则浮动面板会永久停留在拖拽占用态。
     // 时长与后端剪切令牌 TTL（5 分钟）对齐并留余量。
     const timeout = setTimeout(() => resolveResult(false), 6 * 60_000);
     void result.finally(() => clearTimeout(timeout));

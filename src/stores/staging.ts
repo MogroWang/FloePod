@@ -57,7 +57,7 @@ export const useStagingStore = defineStore("staging", {
       this.selectedIds.clear();
     },
 
-    /** 文字暂存的公共序列（拖入文本 / 剪贴板收集 / 面板收藏共用）。 */
+    /** 文字暂存的公共序列（拖入文本 / 剪贴板收集 / 浮动面板收藏共用）。 */
     async stageTextAndRefresh(podId: number, content: string, title?: string) {
       await ipc.stageText(podId, content, title);
       await this.refresh(podId).catch((err) => {

@@ -122,8 +122,8 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // 焦点变化时幂等重放面板材质（亚克力/云母均恒定全量下发，不随
-            // 焦点降级）；胶囊条无材质，仅顺带清理非客户区样式。非匣窗口的
+            // 焦点变化时幂等重放浮动面板材质（亚克力恒定全量下发，不随焦点
+            // 降级）；边缘浮动条无材质，仅顺带清理非客户区样式。非匣窗口的
             // 材质为空，refresh_window_material 内部会直接返回。
             if let tauri::WindowEvent::Focused(_) = event {
                 let label = window.label();
@@ -139,7 +139,7 @@ pub fn run() {
                     }
                     label if events::pod_window(label).is_some() => {
                         api.prevent_close();
-                        // 面板被请求关闭（如 Alt+F4）-> 收起该匣面板
+                        // 浮动面板被请求关闭（如 Alt+F4）-> 收起该匣浮动面板
                         if let Some(events::PodWindow::Panel(id)) = events::pod_window(label) {
                             let app = window.app_handle().clone();
                             tauri::async_runtime::spawn(async move {

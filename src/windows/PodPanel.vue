@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
- * 单个「匣」的弹出面板：列表 / 拖入询问 / 冲突解决 三种模式。
- * 不抢焦点显示（Rust 侧 SW_SHOWNOACTIVATE），面板材质恒定全量下发、
+ * 单个「匣」的弹出浮动面板：列表 / 拖入询问 / 冲突解决 三种模式。
+ * 不抢焦点显示（Rust 侧 SW_SHOWNOACTIVATE），浮动面板材质恒定全量下发、
  * 不随焦点降级；指针离开超时后淡出隐藏（Rust 看门狗），
  * 重新悬停或主动弹出时淡入。
  */
@@ -46,7 +46,7 @@ const staging = useStagingStore();
 
 const pod = computed(() => settingsStore.pod(props.podId));
 const panelStyle = computed<Record<string, string>>(() => {
-  // 面板填充色与不透明度独立于胶囊条；旧配置缺失时回退匣的不透明度。
+  // 浮动面板填充色与不透明度独立于边缘浮动条；旧配置缺失时回退匣的不透明度。
   const opacity = clampOpacity(pod.value?.panelOpacity ?? pod.value?.opacity);
   const fill = pod.value?.panelColor?.trim() || "var(--surface)";
   return { "--pod-opacity": `${opacity * 100}%`, "--pod-fill": fill };
@@ -346,7 +346,7 @@ async function removeItem(item: StagedItem) {
     if (!(await confirmPreview(preview))) return;
     await staging.removeItems([item.id], true);
     if (anchorId === item.id) anchorId = null;
-    showToast("已移出暂存，24 小时内可在安心中心恢复");
+    showToast("已移出暂存，24 小时内可在辅助功能恢复");
   } catch (err) {
     console.error("remove item failed", err);
     showToast("移出失败，请重试");
@@ -525,7 +525,7 @@ async function exportSelected(exportMode: ExportMode) {
   if (!ids.length || anyBusy.value) return;
   exportBusy.value = true;
   try {
-    // 原生目录选择器会让指针离开 WebView；操作期间保持面板可见。
+    // 原生目录选择器会让指针离开 WebView；操作期间保持浮动面板可见。
     await ipc.setDraggingOut(props.podId, true);
     const dest = await pickDest();
     if (!dest) return;
@@ -574,7 +574,7 @@ async function resolveConflict(strategy: Exclude<ConflictStrategy, "ask">) {
       },
     );
     await applyExportResult(result, ctx.mode);
-    if (!modeSynced) showToast("导出已处理，但面板状态同步失败");
+    if (!modeSynced) showToast("导出已处理，但浮动面板状态同步失败");
   } catch (err) {
     console.error("resolve conflict failed", err);
     showToast("导出失败，请重试");
@@ -610,7 +610,7 @@ async function chooseAction(action: DropAction, remember: boolean) {
       },
     );
     const refreshed = await refreshAfterMutation("暂存");
-    if (!modeSynced) showToast("文件已暂存，但面板状态同步失败");
+    if (!modeSynced) showToast("文件已暂存，但浮动面板状态同步失败");
     else if (result.warnings.length) {
       const warning = result.warnings[0];
       showToast(`已暂存，但 ${warning.name} 的源清理需检查：${warning.error}`);
@@ -743,7 +743,7 @@ function cssPixels(value: string): number {
 }
 
 function scheduleResize() {
-  // 文字暂存视图不参与调高：面板保持打开文字编辑前的尺寸，内容超高时滚动。
+  // 文字暂存视图不参与调高：浮动面板保持打开文字编辑前的尺寸，内容超高时滚动。
   if (textOpen.value) return;
   window.clearTimeout(sizeTimer);
   const sequence = ++resizeSequence;
@@ -799,7 +799,7 @@ onMounted(async () => {
       pinRevision += 1;
       applyPanelState(state);
     }),
-    /* 面板每次出现都重播淡入动画 */
+    /* 浮动面板每次出现都重播淡入动画 */
     listenCurrent<never>(Events.PanelShown, () => playFadeIn()),
     /* 固定状态同步 */
     listenCurrent<{ pinned: boolean }>(Events.PanelPinned, (p) => {
@@ -819,7 +819,7 @@ onMounted(async () => {
         .setDraggingOut(props.podId, false)
         .catch((err) => console.error("menu presence restore failed", err));
     }),
-    /* 安心模式 Alt+数字：打开对应面板后直接提供非拖拽文件选择器。 */
+    /* 辅助功能 Alt+数字：打开对应浮动面板后直接提供非拖拽文件选择器。 */
     listenCurrent<{ podId: number }>(Events.RequestFilePicker, (p) => {
       if (p.podId !== props.podId) return;
       void pickPaths(false);
@@ -828,7 +828,7 @@ onMounted(async () => {
       if (p.podId !== props.podId) return;
       if (securityStatus.value) securityStatus.value = { ...securityStatus.value, locked: p.locked };
     }),
-    /* 面板开始隐藏：先播放淡出，后端延迟 220ms 再隐藏原生窗口。
+    /* 浮动面板开始隐藏：先播放淡出，后端延迟 220ms 再隐藏原生窗口。
        全局临时隐藏也会触发该事件；运行态由其他定向事件同步，不能在此清空询问或冲突。 */
     listenCurrent<never>(Events.PanelHidden, () => {
       const el = rootEl.value;
@@ -853,7 +853,7 @@ onMounted(async () => {
     if (!sensitiveLocked.value) await staging.refresh(props.podId);
   } catch (err) {
     console.error("pod panel initialization failed", err);
-    showToast("面板内容加载失败，请重新打开");
+    showToast("浮动面板内容加载失败，请重新打开");
   }
   if (!isMounted()) return;
 
@@ -911,14 +911,14 @@ function onItemContextMenu(item: StagedItem, at: { x: number; y: number }) {
   const specs = buildItemMenu(staging.selectedItems);
   if (!specs.length) return;
   menuOpen.value = true;
-  // 菜单窗口会抢走指针：复用拖出保活语义避免面板被看门狗收起，
+  // 菜单窗口会抢走指针：复用拖出保活语义避免浮动面板被看门狗收起，
   // 菜单关闭后由 CONTEXT_MENU_CLOSED 事件恢复。
   void ipc
     .setDraggingOut(props.podId, true)
     .catch((err) => console.error("menu keep-alive failed", err));
   if (ipc.inTauri) {
     ipc.openContextMenu(props.podId, specs).catch((err) => {
-      // 菜单窗口未就绪等异常：降级为面板内渲染，保证右键永远有反馈。
+      // 菜单窗口未就绪等异常：降级为浮动面板内渲染，保证右键永远有反馈。
       console.error("menu window unavailable, using inline fallback", err);
       inlineMenu.value = { items: specs, x: at.x, y: at.y };
     });
@@ -1056,7 +1056,7 @@ function executeInlineMenu(spec: MenuItemSpec) {
           :class="{ on: pinned }"
           :disabled="pinBusy"
           :aria-pressed="pinned"
-          :title="pinned ? '已固定，移开鼠标面板保持展开' : '固定面板（移开鼠标后保持展开）'"
+          :title="pinned ? '已固定，移开鼠标浮动面板保持展开' : '固定浮动面板（移开鼠标后保持展开）'"
           @click="onTogglePinned"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
@@ -1292,7 +1292,7 @@ function executeInlineMenu(spec: MenuItemSpec) {
   justify-content: space-between;
   padding: 10px 12px 6px;
   flex-shrink: 0;
-  /* 背景与面板主体共用一整块半透明表面，不再单独分割出标题栏底色 */
+  /* 背景与浮动面板主体共用一整块半透明表面，不再单独分割出标题栏底色 */
 }
 .pod-title {
   display: flex;
@@ -1653,7 +1653,7 @@ function executeInlineMenu(spec: MenuItemSpec) {
   transform: translateX(-50%) translateY(6px);
 }
 
-/* 内嵌降级菜单：覆盖面板窗口的可视区域，位置由 inlineMenuStyle 收敛 */
+/* 内嵌降级菜单：覆盖浮动面板窗口的可视区域，位置由 inlineMenuStyle 收敛 */
 .inline-menu-layer {
   position: fixed;
   inset: 0;

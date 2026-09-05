@@ -40,7 +40,7 @@ const settingsStore = useSettingsStore();
 const s = computed(() => settingsStore.settings);
 const monitors = computed(() => settingsStore.monitors);
 
-const page = ref<"general" | "safety" | "block" | "pods" | "hotkeys" | "about">("general");
+const page = ref<"general" | "safety" | "advanced" | "pods" | "hotkeys" | "about">("general");
 const { toast, showToast, disposeToast } = useToast(2400);
 const hotkeyError = ref("");
 const loading = ref(true);
@@ -103,7 +103,6 @@ const DROP_ACTIONS: { value: DropAction; label: string }[] = [
 
 const MATERIALS: { value: Material; label: string }[] = [
   { value: "acrylic", label: "亚克力" },
-  { value: "mica", label: "云母" },
   { value: "plain", label: "普通" },
 ];
 
@@ -120,9 +119,9 @@ const NAV_ICONS: Record<string, string> = {
   general:
     '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M2 14h4M10 8h4M18 16h4"/>',
   safety:
-    '<path d="M12 3l7 3v5c0 4.6-2.9 8.5-7 10-4.1-1.5-7-5.4-7-10V6l7-3z"/><path d="M8.5 12h7M12 8.5v7"/>',
-  block:
-    '<path d="M12 3l7 2.8v5.1c0 4.4-2.9 8.4-7 10.1-4.1-1.7-7-5.7-7-10.1V5.8L12 3z"/><path d="m9 12 2 2 4-4.5"/>',
+    '<circle cx="12" cy="4.5" r="2"/><path d="M4.5 9c2.5.9 5 1.3 7.5 1.3S17 9.9 19.5 9M12 10.3V15m0 0-3 6m3-6 3 6"/>',
+  advanced:
+    '<path d="M5 8h8M17 8h2M5 16h2M11 16h8"/><circle cx="15" cy="8" r="2"/><circle cx="9" cy="16" r="2"/>',
   pods: '<rect x="3.5" y="3.5" width="17" height="17" rx="3"/><path d="M12 8v8M8 12h8"/>',
   hotkeys:
     '<rect x="3" y="6.5" width="18" height="11" rx="2"/><path d="M7.5 12h.01M12 12h.01M16.5 12h.01M10 15h4"/>',
@@ -868,8 +867,8 @@ onBeforeUnmount(() => disposeToast());
 const PAGES = [
   { id: "general", label: "常规" },
   { id: "pods", label: "匣" },
-  { id: "block", label: "自动屏蔽" },
-  { id: "safety", label: "安心中心" },
+  { id: "safety", label: "辅助功能" },
+  { id: "advanced", label: "高级设置" },
   { id: "hotkeys", label: "快捷键" },
   { id: "about", label: "关于" },
 ] as const;
@@ -971,7 +970,7 @@ const PAGES = [
               </div>
             </label>
             <label class="field">
-              <span>面板材质</span>
+              <span>浮动面板材质</span>
               <SegmentedControl :options="MATERIALS" v-model="oobe.material" />
             </label>
           </div>
@@ -1055,12 +1054,12 @@ const PAGES = [
               </template>
 
               <template v-else-if="page === 'safety'">
-                <h2 class="page-title">安心中心</h2>
+                <h2 class="page-title">辅助功能</h2>
                 <p class="page-desc">放大界面、减少干扰，并查看或恢复每一步文件操作。</p>
                 <div class="settings-card safety-settings">
-                  <SettingsRow label="启用安心模式" hint="集中启用更易读、更易点按的交互方式">
+                  <SettingsRow label="启用辅助功能" hint="集中启用更易读、更易点按的交互方式">
                     <ToggleSwitch
-                      label="启用安心模式"
+                      label="启用辅助功能"
                       :model-value="s.accessibility.enabled"
                       @update:model-value="(value) => saveAccessibility({ enabled: value })"
                     />
@@ -1071,7 +1070,7 @@ const PAGES = [
                       class="input compact-select"
                       :value="s.accessibility.scale"
                       :disabled="!s.accessibility.enabled"
-                      aria-label="安心模式界面大小"
+                      aria-label="辅助功能界面大小"
                       @change="saveAccessibility({ scale: Number(($event.target as HTMLSelectElement).value) })"
                     >
                       <option :value="1">100%</option>
@@ -1142,9 +1141,11 @@ const PAGES = [
                 <OrganizationCenter />
               </template>
 
-              <template v-else-if="page === 'block'">
-                <h2 class="page-title">自动屏蔽</h2>
-                <p class="page-desc">列表内的应用位于前台时自动隐藏全部浮匣，切走后自动恢复。</p>
+              <template v-else-if="page === 'advanced'">
+                <h2 class="page-title">高级设置</h2>
+                <p class="page-desc">自动屏蔽，以及每个匣的规则匣、敏感匣等进阶能力。</p>
+
+                <h3 class="section-title">自动屏蔽</h3>
                 <div class="settings-card">
                   <SettingsRow label="启用自动屏蔽" hint="按下方列表匹配前台应用">
                     <ToggleSwitch
@@ -1195,6 +1196,50 @@ const PAGES = [
                       >
                         添加
                       </button>
+                    </div>
+                  </div>
+                </div>
+
+                <h3 class="section-title adv-pod-section">规则匣与敏感匣</h3>
+                <p class="page-desc">按匣生效；在「匣」页可以新建、重命名或删除匣。</p>
+                <div v-if="s.pods.length > 1" class="pod-picker" role="tablist" aria-label="选择要设置的匣">
+                  <button
+                    v-for="pod in s.pods"
+                    :key="pod.id"
+                    type="button"
+                    role="tab"
+                    class="pod-chip"
+                    :class="{ active: selectedPod?.id === pod.id, off: !pod.enabled }"
+                    :aria-selected="selectedPod?.id === pod.id"
+                    @click="selectPod(pod.id)"
+                  >
+                    {{ pod.name }}
+                    <span v-if="!pod.enabled" class="chip-badge">已停用</span>
+                  </button>
+                </div>
+                <div v-for="pod in selectedPodList" :key="pod.id" class="pod-card" :class="{ off: !pod.enabled }">
+                  <div class="adv-pod-head">
+                    <span class="pod-name-text" :title="pod.name">{{ pod.name }}</span>
+                    <span v-if="!pod.enabled" class="adv-pod-off">已停用，启用后以下设置才会生效</span>
+                  </div>
+                  <div class="pod-groups">
+                    <div class="pod-group rules-group">
+                      <div class="group-title">规则匣</div>
+                      <p class="group-hint">按文件类型、名称、来源和大小过滤，并自动命名、归档或生成校验值。</p>
+                      <PodRulesEditor
+                        :rules="pod.rules"
+                        @update="(rules) => savePod(pod.id, { rules })"
+                      />
+                    </div>
+                    <div class="pod-group rules-group">
+                      <div class="group-title">敏感匣、自动锁定与保留期限</div>
+                      <p class="group-hint">使用 Windows EFS 与 Windows Hello；不上传内容，也不保存自制密码。</p>
+                      <PodSecurityEditor
+                        :pod-id="pod.id"
+                        :folder="pod.stagingFolder"
+                        :security="pod.security"
+                        @update="(security) => savePod(pod.id, { security })"
+                      />
                     </div>
                   </div>
                 </div>
@@ -1326,7 +1371,7 @@ const PAGES = [
                     </div>
 
                     <div class="pod-group">
-                      <div class="group-title">胶囊条</div>
+                      <div class="group-title">边缘浮动条</div>
                       <div class="frow">
                         <span class="flabel">匣宽度</span>
                         <div class="fctrl">
@@ -1418,19 +1463,44 @@ const PAGES = [
                           <span class="fval">{{ Math.round(podNumberValue(pod, "borderOpacity") * 100) }}%</span>
                         </div>
                       </div>
+                      <div class="frow">
+                        <span class="flabel">隐匿模式</span>
+                        <div class="fctrl">
+                          <ToggleSwitch
+                            label="隐匿模式"
+                            :model-value="pod.stealth"
+                            @update:model-value="(v) => savePod(pod.id, { stealth: v })"
+                          />
+                        </div>
+                      </div>
+                      <div v-if="pod.stealth" class="frow">
+                        <span class="flabel">隐匿延迟</span>
+                        <div class="fctrl">
+                          <RangeSlider
+                            :value="podNumberValue(pod, 'stealthDelayMs')"
+                            :min="500"
+                            :max="20000"
+                            :step="250"
+                            aria-label="隐匿延迟"
+                            @update:value="(v) => previewPodNumber(pod.id, 'stealthDelayMs', v)"
+                            @commit="(v) => commitPodNumber(pod, 'stealthDelayMs', v)"
+                          />
+                          <span class="fval">{{ (podNumberValue(pod, "stealthDelayMs") / 1000).toFixed(2).replace(/\.?0+$/, "") }}s</span>
+                        </div>
+                      </div>
                     </div>
 
                     <div class="pod-group">
-                      <div class="group-title">面板</div>
+                      <div class="group-title">浮动面板</div>
                       <div class="frow">
-                        <span class="flabel">面板宽度</span>
+                        <span class="flabel">浮动面板宽度</span>
                         <div class="fctrl">
                           <RangeSlider
                             :value="podNumberValue(pod, 'panelWidth')"
                             :min="300"
                             :max="520"
                             :step="10"
-                            aria-label="面板宽度"
+                            aria-label="浮动面板宽度"
                             @update:value="(v) => previewPodNumber(pod.id, 'panelWidth', v)"
                             @commit="(v) => commitPodNumber(pod, 'panelWidth', v)"
                           />
@@ -1438,20 +1508,20 @@ const PAGES = [
                         </div>
                       </div>
                       <div class="frow">
-                        <span class="flabel">面板材质</span>
+                        <span class="flabel">浮动面板材质</span>
                         <div class="fctrl">
                           <SegmentedControl :options="MATERIALS" :model-value="pod.panelMaterial" @update:model-value="(v) => savePod(pod.id, { panelMaterial: v as Material })" />
                         </div>
                       </div>
                       <div class="frow">
-                        <span class="flabel">面板填充色</span>
+                        <span class="flabel">浮动面板填充色</span>
                         <div class="fctrl">
                           <label class="color-field">
                             <input
                               type="color"
                               class="color-input"
                               :value="podHexColorValue(colorDraftValue(pod, 'panelColor'))"
-                              aria-label="面板填充色"
+                              aria-label="浮动面板填充色"
                               @input="(e) => previewPodColor(pod, 'panelColor', (e.target as HTMLInputElement).value)"
                             />
                             <span class="color-text">{{ colorDraftValue(pod, 'panelColor') || "跟随主题" }}</span>
@@ -1475,14 +1545,14 @@ const PAGES = [
                         </div>
                       </div>
                       <div class="frow">
-                        <span class="flabel">面板填充色不透明度</span>
+                        <span class="flabel">浮动面板填充色不透明度</span>
                         <div class="fctrl">
                           <RangeSlider
                             :value="podNumberValue(pod, 'panelOpacity')"
                             :min="0.1"
                             :max="1"
                             :step="0.01"
-                            aria-label="面板填充色不透明度"
+                            aria-label="浮动面板填充色不透明度"
                             @update:value="(v) => previewPodNumber(pod.id, 'panelOpacity', v)"
                             @commit="(v) => commitPodNumber(pod, 'panelOpacity', v)"
                           />
@@ -1515,10 +1585,10 @@ const PAGES = [
                         </div>
                       </div>
                       <div class="frow">
-                        <span class="flabel">匣面板自动收起</span>
+                        <span class="flabel">浮动面板自动收起</span>
                         <div class="fctrl">
                           <ToggleSwitch
-                            label="匣面板自动收起"
+                            label="浮动面板自动收起"
                             :model-value="pod.autoHide"
                             @update:model-value="(v) => savePod(pod.id, { autoHide: v })"
                           />
@@ -1537,31 +1607,6 @@ const PAGES = [
                             @commit="(v) => commitPodNumber(pod, 'autoHideDelayMs', v)"
                           />
                           <span class="fval">{{ podNumberValue(pod, "autoHideDelayMs") }}ms</span>
-                        </div>
-                      </div>
-                      <div class="frow">
-                        <span class="flabel">隐匿模式</span>
-                        <div class="fctrl">
-                          <ToggleSwitch
-                            label="隐匿模式"
-                            :model-value="pod.stealth"
-                            @update:model-value="(v) => savePod(pod.id, { stealth: v })"
-                          />
-                        </div>
-                      </div>
-                      <div v-if="pod.stealth" class="frow">
-                        <span class="flabel">隐匿延迟</span>
-                        <div class="fctrl">
-                          <RangeSlider
-                            :value="podNumberValue(pod, 'stealthDelayMs')"
-                            :min="500"
-                            :max="20000"
-                            :step="250"
-                            aria-label="隐匿延迟"
-                            @update:value="(v) => previewPodNumber(pod.id, 'stealthDelayMs', v)"
-                            @commit="(v) => commitPodNumber(pod, 'stealthDelayMs', v)"
-                          />
-                          <span class="fval">{{ (podNumberValue(pod, "stealthDelayMs") / 1000).toFixed(2).replace(/\.?0+$/, "") }}s</span>
                         </div>
                       </div>
                     </div>
@@ -1583,24 +1628,6 @@ const PAGES = [
                         </div>
                       </div>
                     </div>
-                    <div class="pod-group rules-group">
-                      <div class="group-title">规则匣</div>
-                      <p class="group-hint">按文件类型、名称、来源和大小过滤，并自动命名、归档或生成校验值。</p>
-                      <PodRulesEditor
-                        :rules="pod.rules"
-                        @update="(rules) => savePod(pod.id, { rules })"
-                      />
-                    </div>
-                    <div class="pod-group rules-group">
-                      <div class="group-title">敏感匣、自动锁定与保留期限</div>
-                      <p class="group-hint">使用 Windows EFS 与 Windows Hello；不上传内容，也不保存自制密码。</p>
-                      <PodSecurityEditor
-                        :pod-id="pod.id"
-                        :folder="pod.stagingFolder"
-                        :security="pod.security"
-                        @update="(security) => savePod(pod.id, { security })"
-                      />
-                    </div>
                   </div>
                 </div>
               </template>
@@ -1617,7 +1644,7 @@ const PAGES = [
                     <HotkeyRecorder :model-value="s.hotkeys.collectClipboard" @update:model-value="(v) => saveHotkey('collectClipboard', v)" />
                   </SettingsRow>
                   <div class="sep" />
-                  <SettingsRow label="打开第一匣面板">
+                  <SettingsRow label="打开第一匣浮动面板">
                     <HotkeyRecorder :model-value="s.hotkeys.openPanel" @update:model-value="(v) => saveHotkey('openPanel', v)" />
                   </SettingsRow>
                   <div class="sep" />
@@ -2255,6 +2282,22 @@ select.input {
 }
 .rules-group {
   margin-top: 6px;
+}
+/* 高级设置页:按匣展示规则匣与敏感匣 */
+.adv-pod-section {
+  margin-top: 26px;
+}
+.adv-pod-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 12px;
+}
+.adv-pod-off {
+  font-size: 11.5px;
+  color: var(--ink-3);
 }
 .frow {
   display: flex;

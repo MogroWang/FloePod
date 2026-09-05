@@ -1,7 +1,7 @@
 import type { StagedItem } from "@/domain/types";
 
 /**
- * 右键菜单项描述：面板组装 → 菜单窗口渲染 → 选择后原样回传面板执行。
+ * 右键菜单项描述：浮动面板组装 → 菜单窗口渲染 → 选择后原样回传浮动面板执行。
  * 与 Rust `menu::MenuItemSpec` 保持同构（serde camelCase 往返）。
  */
 export interface MenuItemSpec {

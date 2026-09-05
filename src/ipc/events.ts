@@ -11,7 +11,7 @@ export async function listen<T>(event: string, handler: (payload: T) => void): P
   return listenGlobal<T>(event, ({ payload }) => handler(payload));
 }
 
-/** 匣条目和面板事件只在当前 WebView 订阅，不走全局事件总线。 */
+/** 匣条目和浮动面板事件只在当前 WebView 订阅，不走全局事件总线。 */
 export async function listenCurrent<T>(
   event: string,
   handler: (payload: T) => void,

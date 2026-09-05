@@ -561,7 +561,7 @@ export async function mockInvoke<T>(command: CommandName, args?: Record<string, 
       cuts.delete(String(args?.token ?? "") as DragCutToken);
       return result(undefined);
     case Commands.OpenContextMenu:
-      // 浏览器预览没有菜单窗口：让面板走内嵌降级菜单。
+      // 浏览器预览没有菜单窗口：让浮动面板走内嵌降级菜单。
       throw new Error("浏览器预览使用内嵌右键菜单");
     case Commands.WriteClipboardText: {
       const text = String(args?.text ?? "");

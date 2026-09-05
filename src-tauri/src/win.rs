@@ -46,7 +46,7 @@ pub fn modifier_state() -> ModifierState {
 }
 
 /// 当前光标的物理屏幕坐标；失败（权限不足等）返回 None。
-/// 隐匿模式用它判断指针是否靠近胶囊条。
+/// 隐匿模式用它判断指针是否靠近边缘浮动条。
 pub fn cursor_pos() -> Option<(i32, i32)> {
     use windows_sys::Win32::Foundation::POINT;
     use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
@@ -55,7 +55,7 @@ pub fn cursor_pos() -> Option<(i32, i32)> {
 }
 
 /// SW_SHOWNOACTIVATE 显示 + 无激活置顶：
-/// 面板出现时不从用户当前应用抢走键盘焦点。
+/// 浮动面板出现时不从用户当前应用抢走键盘焦点。
 pub fn show_no_activate(hwnd: isize) {
     let hwnd = hwnd as *mut c_void;
     unsafe {
@@ -91,7 +91,7 @@ pub fn show_window(hwnd: isize) {
 
 /// 直接隐藏窗口。
 /// 不能走 Tauri 的 `hide()`：它对 WebView2 调用 `SetIsVisible(false)`，
-/// 会让顶层窗口重新显示（窗口可见但内容区占位），导致面板"收起后仍在屏幕上"。
+/// 会让顶层窗口重新显示（窗口可见但内容区占位），导致浮动面板"收起后仍在屏幕上"。
 pub fn hide_window(hwnd: isize) {
     let hwnd = hwnd as *mut c_void;
     unsafe {
@@ -141,7 +141,7 @@ pub fn foreground_exe() -> Option<String> {
 }
 
 /// 禁用 Windows 11 的系统窗口圆角（DWMWCP_DONOTROUND）。
-/// 胶囊条等自绘形状的窗口需要：系统圆角会把贴边的圆角矩形裁掉。
+/// 边缘浮动条等自绘形状的窗口需要：系统圆角会把贴边的圆角矩形裁掉。
 pub fn disable_rounding(hwnd: isize) {
     use windows_sys::Win32::Graphics::Dwm::{
         DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
@@ -159,7 +159,7 @@ pub fn disable_rounding(hwnd: isize) {
 
 /// 设置 / 清除窗口的胶囊形区域（贴屏侧直角、外侧两角按 radius 物理像素圆角）。
 ///
-/// 胶囊条材质已废弃（固定普通半透明），当前仅在 place_pod_bar 时以 radius=0
+/// 边缘浮动条材质已废弃（固定普通半透明），当前仅在 place_pod_bar 时以 radius=0
 /// 调用清除区域：既覆盖旧版本升级后残留的裁剪，也让窗口矩形与 WebView 胶囊
 /// 保持同形的历史行为。radius <= 0 时清除区域恢复矩形。
 /// 贴屏侧通过把圆角矩形延伸出窗口外再由窗口自身裁掉的方式保持直角。
@@ -212,11 +212,11 @@ pub fn set_rounded_region(hwnd: isize, width: i32, height: i32, radius: i32) {
     prepare_shaped_window(hwnd);
 }
 
-/// 准备透明、无边框且按区域成形的窗口（胶囊条 / 右键菜单）。
+/// 准备透明、无边框且按区域成形的窗口（边缘浮动条 / 右键菜单）。
 ///
 /// 设置窗口区域（SetWindowRgn）会触发系统重算非客户区：窗口样式里残留的
 /// WS_CAPTION / WS_THICKFRAME 位、以及 DWM 的非客户区渲染，都会在小小的
-/// 胶囊条上画出旧式标题栏 / 边框（表现为诡异的「窗口标题」）。这里在应用
+/// 边缘浮动条上画出旧式标题栏 / 边框（表现为诡异的「窗口标题」）。这里在应用
 /// 区域之前把这些来源全部去掉：清除普通与扩展样式位、请求 DWM 停止绘制
 /// 非客户区并禁用焦点过渡，最后无条件刷新窗口框架和 WebView 子窗口。
 ///
@@ -299,7 +299,7 @@ pub fn prepare_shaped_window(hwnd: isize) {
 }
 
 /// 请求 Windows 11 使用系统圆角（DWMWCP_ROUND）。
-/// 面板窗口：CSS 负责裁切 WebView 内容，这里让原生窗口的
+/// 浮动面板窗口：CSS 负责裁切 WebView 内容，这里让原生窗口的
 /// 阴影/亚克力背景与同一圆角轮廓对齐；旧版 Windows 会忽略不支持的属性。
 pub fn prefer_rounded_corners(hwnd: isize) {
     use windows_sys::Win32::Graphics::Dwm::{
@@ -318,7 +318,7 @@ pub fn prefer_rounded_corners(hwnd: isize) {
 
 /// SWCA（SetWindowCompositionAttribute，未公开 API）写入 ACCENT 策略。
 /// 与 DWM systembackdrop 不同，ACCENT 材质随窗口 region 与焦点即时可控，
-/// 是面板亚克力「失焦不消失」的关键。
+/// 是浮动面板亚克力「失焦不消失」的关键。
 fn set_accent(hwnd: isize, accent_state: u32) -> bool {
     #[repr(C)]
     struct AccentPolicy {
@@ -370,81 +370,27 @@ fn set_accent(hwnd: isize, accent_state: u32) -> bool {
 }
 
 /// 清除窗口上的 ACCENT 材质策略（ACCENT_DISABLED）。
-/// 从亚克力切回普通/云母时必须显式调用，否则 SWCA 效果残留。
+/// 从亚克力切回普通时必须显式调用，否则 SWCA 效果残留。
 pub fn disable_accent(hwnd: isize) {
     let _ = set_accent(hwnd, 0);
 }
 
-/// 面板亚克力材质：恒定下发全量亚克力（ACCENT_ENABLE_ACRYLICBLURBEHIND）。
+/// 浮动面板亚克力材质：恒定下发全量亚克力（ACCENT_ENABLE_ACRYLICBLURBEHIND）。
 /// 聚焦与失焦使用同一份策略，不做任何降级替换。
 ///
 /// 走 SWCA 而不是 tauri set_effects 的 DWM systembackdrop：后者在窗口
 /// 失焦后直接移除整个 backdrop（此前「不聚焦就看不到材质」的根源），
 /// 且重放属性无效；SWCA 亚克力随 ACCENT 策略常驻窗口，配合焦点变化时
-/// 的幂等重放，面板无论是否持有焦点材质都保持已下发状态。
+/// 的幂等重放，浮动面板无论是否持有焦点材质都保持已下发状态。
 pub fn apply_panel_acrylic(hwnd: isize) -> bool {
     // ACCENT_ENABLE_ACRYLICBLURBEHIND = 4
     set_accent(hwnd, 4)
 }
 
-/// 面板云母材质：ACCENT_ENABLE_HOSTBACKDROP（Win11 的 HostBackdrop / 云母）。
-/// 与亚克力同理，云母必须走 ACCENT 通道而不是 DWM systembackdrop：
-/// systembackdrop 在窗口失焦后被 DWM 移除且重放无效，面板免激活显示、
-/// 几乎不持有焦点；ACCENT 策略随窗口常驻，聚焦与失焦表现一致。
-/// 不支持的旧系统上调用无效果，表现为普通半透明（与旧版降级一致）。
-pub fn apply_panel_mica(hwnd: isize) -> bool {
-    // ACCENT_ENABLE_HOSTBACKDROP = 5
-    set_accent(hwnd, 5)
-}
-
-/// 云母（HOSTBACKDROP）是否可能有效：仅 Windows 11（build 22000+）。
-/// 旧系统上 SetWindowCompositionAttribute 调用成功但画不出任何材质，
-/// 依赖返回值做降级的调用方（右键菜单近实心底色）需要显式检测。
-/// 通过 ntdll!RtlGetVersion 读取真实版本号，不受应用清单兼容性段影响。
-pub fn host_backdrop_available() -> bool {
-    #[repr(C)]
-    struct OsVersionInfoW {
-        size: u32,
-        major: u32,
-        minor: u32,
-        build: u32,
-        platform_id: u32,
-        service_pack: [u16; 128],
-    }
-    type RtlGetVersionFn = unsafe extern "system" fn(*mut OsVersionInfoW) -> i32;
-    unsafe {
-        let module = windows_sys::Win32::System::LibraryLoader::GetModuleHandleA(
-            c"ntdll.dll".as_ptr().cast(),
-        );
-        if module.is_null() {
-            return false;
-        }
-        let function = windows_sys::Win32::System::LibraryLoader::GetProcAddress(
-            module,
-            c"RtlGetVersion".as_ptr().cast(),
-        );
-        let Some(function) = function else {
-            return false;
-        };
-        let rtl_get_version: RtlGetVersionFn = std::mem::transmute(function);
-        let mut info = OsVersionInfoW {
-            size: std::mem::size_of::<OsVersionInfoW>() as u32,
-            major: 0,
-            minor: 0,
-            build: 0,
-            platform_id: 0,
-            service_pack: [0; 128],
-        };
-        if rtl_get_version(&mut info) != 0 {
-            return false;
-        }
-        info.major > 10 || (info.major == 10 && info.build >= 22000)
-    }
-}
-
-/// 强制重绘窗口及其全部子窗口（WebView2 内容）。
-/// 切换 ACCENT / 材质策略后 WebView2 不一定立即重新合成，主动重绘一次，
-/// 避免旧材质残留在窗口上直到下一次自然重绘。
+/// 重绘窗口及其全部子窗口（WebView2 内容）的 GDI 表面。
+/// ACCENT 材质策略写入后 WebView2 的 DirectComposition 表面不一定立即
+/// 重新呈现；这里先做 GDI 层重绘，配合调用方的尺寸轻推共同保证材质
+/// 应用后立刻可见。
 pub fn redraw_window(hwnd: isize) {
     use windows_sys::Win32::Graphics::Gdi::{
         RedrawWindow, RDW_ALLCHILDREN, RDW_INVALIDATE, RDW_UPDATENOW,

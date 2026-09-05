@@ -75,7 +75,7 @@ NSIS 通常支持 `/S`，MSIX 可由管理员使用 `Add-AppxPackage`、Intune �
 
 ## 审计、诊断和设置迁移
 
-“安心中心”可以：
+“辅助功能”可以：
 
 - 导出 JSON/CSV 操作审计；
 - 生成脱敏诊断 ZIP；

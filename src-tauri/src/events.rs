@@ -7,13 +7,13 @@ pub const PODS_CHANGED: &str = "floepod://pods-changed";
 pub const PANEL_MODE: &str = "floepod://panel-mode";
 pub const PANEL_SHOWN: &str = "floepod://panel-shown";
 pub const PANEL_PINNED: &str = "floepod://panel-pinned";
-/// 完整面板运行态快照；用于 WebView 首次挂载后的主动同步与事件丢失恢复。
+/// 完整浮动面板运行态快照；用于 WebView 首次挂载后的主动同步与事件丢失恢复。
 pub const PANEL_STATE: &str = "floepod://panel-state";
 pub const PANEL_HIDDEN: &str = "floepod://panel-hidden";
 pub const COLLECT_CLIPBOARD: &str = "floepod://collect-clipboard";
 pub const REQUEST_FILE_PICKER: &str = "floepod://request-file-picker";
 pub const POD_LOCK_CHANGED: &str = "floepod://pod-lock-changed";
-/// 隐匿模式状态变化：胶囊条应淡化隐去（true）或淡入显示（false）。
+/// 隐匿模式状态变化：边缘浮动条应淡化隐去（true）或淡入显示（false）。
 pub const BAR_STEALTH: &str = "floepod://bar-stealth";
 
 pub fn pod_bar_label(pod_id: u64) -> String {

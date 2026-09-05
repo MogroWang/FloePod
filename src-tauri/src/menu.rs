@@ -1,8 +1,8 @@
-//! 应用级右键菜单窗口：全局唯一的透明置顶窗口，由所有匣面板复用。
+//! 应用级右键菜单窗口：全局唯一的透明置顶窗口，由所有匣浮动面板复用。
 //!
-//! 流程：面板 invoke `open_context_menu`（携带菜单项）→ 本模块发出定向事件
+//! 流程：浮动面板 invoke `open_context_menu`（携带菜单项）→ 本模块发出定向事件
 //! → 菜单窗口渲染并回传内容尺寸 → `resize_and_show` 把窗口定位到光标旁并
-//! 显示。动作选择通过 `context_menu_choice` 回传给来源面板执行，菜单窗口
+//! 显示。动作选择通过 `context_menu_choice` 回传给来源浮动面板执行，菜单窗口
 //! 自身不直接触碰条目数据。seq 序号消解新旧菜单竞态：旧菜单的 blur / 关闭
 //! 请求不会影响刚打开的新菜单。
 
@@ -23,20 +23,19 @@ pub const MENU_CLOSED: &str = "floepod://context-menu-closed";
 pub const CARD_RADIUS: f64 = 12.0;
 
 static MENU_SEQ: AtomicU64 = AtomicU64::new(0);
-/// 菜单窗口 WebView 已挂载并上报就绪；未就绪时 open 直接报错，面板走内嵌降级。
+/// 菜单窗口 WebView 已挂载并上报就绪；未就绪时 open 直接报错，浮动面板走内嵌降级。
 static MENU_READY: AtomicBool = AtomicBool::new(false);
 /// 当前菜单归属的匣 id；0 表示从未打开。
 static MENU_POD: AtomicU64 = AtomicU64::new(0);
 /// 是否存在未关闭的菜单（open 置位、hide 复位）。
 static MENU_OPEN: AtomicBool = AtomicBool::new(false);
-/// 当前菜单的原生材质：0=plain、1=acrylic、2=mica。
+/// 当前菜单的原生材质：0=plain、1=acrylic。
 /// 与 MENU_POD 同一代 open 写入，保证前端半透明底色和原生窗口材质一致。
 static MENU_MATERIAL: AtomicU8 = AtomicU8::new(0);
 
 fn material_code(material: &str) -> u8 {
     match material {
         "acrylic" => 1,
-        "mica" => 2,
         _ => 0,
     }
 }
@@ -44,7 +43,6 @@ fn material_code(material: &str) -> u8 {
 fn material_name(code: u8) -> &'static str {
     match code {
         1 => "acrylic",
-        2 => "mica",
         _ => "plain",
     }
 }
@@ -60,7 +58,7 @@ fn source_material(app: &AppHandle, pod_id: u64) -> &'static str {
     material_name(code)
 }
 
-/// 菜单项描述：面板组装、菜单窗口渲染、选择后原样回传面板执行。
+/// 菜单项描述：浮动面板组装、菜单窗口渲染、选择后原样回传浮动面板执行。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MenuItemSpec {
@@ -97,8 +95,8 @@ pub fn open(app: &AppHandle, pod_id: u64, items: &[MenuItemSpec]) -> Result<(), 
     let seq = MENU_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
     let previous_pod = MENU_POD.swap(pod_id, Ordering::Relaxed);
     let requested_material = source_material(app, pod_id);
-    // 在隐藏状态先尝试应用系统材质，这样可以把 Windows 10 上不支持的 Mica
-    // 明确降级为 plain，并让前端使用近实心底色而不是透明漏出桌面。
+    // 在隐藏状态先尝试应用系统材质；失败（如 WebView 未就绪）时降级为
+    // plain，让前端使用近实心底色而不是透明漏出桌面。
     let material = app
         .get_webview_window(LABEL)
         .filter(|window| manager::apply_window_material(window, requested_material))
@@ -142,8 +140,8 @@ pub fn resize_and_show(app: &AppHandle, seq: u64, width: f64, height: f64) {
     let position = clamp_to_monitor(app, cursor_position(), size);
     let _ = window.set_size(size);
     let _ = window.set_position(position);
-    // 菜单继承来源匣面板的材质。先清理两个原生材质通道再应用目标材质，
-    // 避免复用全局菜单窗口时云母与 ACCENT 亚克力叠加。
+    // 菜单继承来源匣浮动面板的材质。先清理两个原生材质通道再应用目标材质，
+    // 避免复用全局菜单窗口时旧材质与 ACCENT 亚克力叠加。
     let _ = manager::apply_window_material(
         &window,
         material_name(MENU_MATERIAL.load(Ordering::Relaxed)),
@@ -173,7 +171,7 @@ pub fn resize_and_show(app: &AppHandle, seq: u64, width: f64, height: f64) {
         // 无条件框架重算，不能依赖显示前的 decorations(false)。
         win::prepare_shaped_window(hwnd.0 as isize);
     }
-    // 菜单获得焦点也会让来源面板失焦，并间接触发胶囊条的合成残影。
+    // 菜单获得焦点也会让来源浮动面板失焦，并间接触发边缘浮动条的合成残影。
     manager::refresh_pod_bar_chrome(app, MENU_POD.load(Ordering::Relaxed));
 }
 
@@ -191,7 +189,7 @@ pub fn choose(app: &AppHandle, seq: u64, pod_id: u64, action: &MenuItemSpec) {
 pub fn hide(app: &AppHandle, seq: u64, pod_id: u64) {
     if seq != MENU_SEQ.load(Ordering::Relaxed) {
         // 旧菜单的失焦关闭请求到达时新菜单已打开，不能误杀；
-        // 其归属面板由 open() 的补发 CLOSED 恢复。
+        // 其归属浮动面板由 open() 的补发 CLOSED 恢复。
         return;
     }
     MENU_OPEN.store(false, Ordering::Relaxed);
@@ -200,7 +198,7 @@ pub fn hide(app: &AppHandle, seq: u64, pod_id: u64) {
     };
     if let Ok(hwnd) = window.hwnd() {
         // 必须走 ShowWindow 隐藏：Tauri 的 hide() 对 WebView2 的处理
-        // 会让透明窗口残留（与面板隐藏同一条约束）。
+        // 会让透明窗口残留（与浮动面板隐藏同一条约束）。
         win::hide_window(hwnd.0 as isize);
     }
     let _ = app.emit_to(
@@ -304,10 +302,12 @@ mod tests {
 
     #[test]
     fn menu_material_codes_are_stable_and_unknown_values_fall_back_to_plain() {
-        for (material, code) in [("plain", 0), ("acrylic", 1), ("mica", 2)] {
+        for (material, code) in [("plain", 0), ("acrylic", 1)] {
             assert_eq!(material_code(material), code);
             assert_eq!(material_name(code), material);
         }
+        // 云母已移除，存量值回落为普通。
+        assert_eq!(material_code("mica"), 0);
         assert_eq!(material_code("legacy-blur"), 0);
         assert_eq!(material_name(u8::MAX), "plain");
     }

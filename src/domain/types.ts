@@ -1,7 +1,8 @@
 export type ItemKind = "file" | "folder" | "text" | "shortcut";
 export type DropAction = "ask" | "copy" | "move" | "shortcut";
 export type Edge = "top" | "right" | "bottom" | "left";
-export type Material = "acrylic" | "mica" | "plain";
+/** 窗口材质:亚克力 / 普通。云母已移除,存量配置迁移为亚克力。 */
+export type Material = "acrylic" | "plain";
 export type ThemeMode = "system" | "light" | "dark";
 export type ExportMode = "copy" | "move";
 export type ConflictStrategy = "ask" | "overwrite" | "skip" | "rename";
@@ -212,31 +213,31 @@ export interface Pod {
   offset: number;
   stagingFolder: string;
   opacity: number;
-  /** 面板材质；与胶囊条独立，胶囊条固定普通半透明、不提供材质设置。 */
+  /** 浮动面板材质；与边缘浮动条独立，边缘浮动条固定普通半透明、不提供材质设置。 */
   panelMaterial: Material;
-  /** 面板填充色不透明度 0.1-1；作用于面板背景填充色。 */
+  /** 浮动面板填充色不透明度 0.1-1；作用于浮动面板背景填充色。 */
   panelOpacity: number;
-  /** 面板填充色（#RGB/#RRGGBB/#RRGGBBAA）；空字符串表示跟随主题表面色。 */
+  /** 浮动面板填充色（#RGB/#RRGGBB/#RRGGBBAA）；空字符串表示跟随主题表面色。 */
   panelColor: string;
   panelWidth: number;
   hoverDelayMs: number;
   /** 是否允许悬停自动打开；关闭后仍可单击或用键盘打开。 */
   hoverOpen: boolean;
-  /** 鼠标离开后是否自动收起面板。 */
+  /** 鼠标离开后是否自动收起浮动面板。 */
   autoHide: boolean;
   /** 鼠标离开后到自动收起的延迟（毫秒）。 */
   autoHideDelayMs: number;
-  /** 隐匿模式：无交互超过延迟后胶囊条淡化隐去，鼠标靠近时再淡入。 */
+  /** 隐匿模式：无交互超过延迟后边缘浮动条淡化隐去，鼠标靠近时再淡入。 */
   stealth: boolean;
   /** 隐匿模式下无交互到淡化隐去的延迟（毫秒）。 */
   stealthDelayMs: number;
   dropAction: DropAction;
   enabled: boolean;
-  /** 胶囊条短边宽度（逻辑像素）。 */
+  /** 边缘浮动条短边宽度（逻辑像素）。 */
   barWidth: number;
-  /** 胶囊条外角圆角半径；CSS 会自动收敛超过半宽的值。 */
+  /** 边缘浮动条外角圆角半径；CSS 会自动收敛超过半宽的值。 */
   cornerRadius: number;
-  /** 胶囊条边框颜色（#RGB/#RRGGBB/#RRGGBBAA）；空字符串表示跟随主题。 */
+  /** 边缘浮动条边框颜色（#RGB/#RRGGBB/#RRGGBBAA）；空字符串表示跟随主题。 */
   borderColor: string;
   /** 边框不透明度 0-1，作用于 borderColor 或主题默认边框色。 */
   borderOpacity: number;

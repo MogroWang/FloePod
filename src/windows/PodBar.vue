@@ -1,9 +1,9 @@
 <script setup lang="ts">
 /**
- * 单个「匣」的胶囊条：贴在屏幕边缘的圆形短条。
+ * 单个「匣」的边缘浮动条：贴在屏幕边缘的圆形短条。
  * - 背景全透明，短条半透明填充（固定普通半透明，无系统材质）
- * - 悬停 -> 弹出该匣面板；移出 -> 面板淡出隐藏（看门狗）
- * - 拖入文件时短条变为圆角矩形主动接纳，松手后弹出面板
+ * - 悬停 -> 弹出该匣浮动面板；移出 -> 浮动面板淡出隐藏（看门狗）
+ * - 拖入文件时短条变为圆角矩形主动接纳，松手后弹出浮动面板
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -49,12 +49,12 @@ let dragStartScreenLength = 1080; // 拖动开始时的屏幕尺寸
 
 const count = computed(() => staging.activeItems.length);
 
-/* 隐匿模式：Rust 看门狗综合「无交互超时、指针是否靠近、面板是否打开」
-   后下发 BarStealth；胶囊条只负责用透明度淡入淡出，窗口保持可交互，
+/* 隐匿模式：Rust 看门狗综合「无交互超时、指针是否靠近、浮动面板是否打开」
+   后下发 BarStealth；边缘浮动条只负责用透明度淡入淡出，窗口保持可交互，
    拖文件到原位置仍可暂存。 */
 const stealthHidden = ref(false);
 
-/** 胶囊条短边；后端校验范围 28-96，加载前回退默认 44。 */
+/** 边缘浮动条短边；后端校验范围 28-96，加载前回退默认 44。 */
 const barWidth = computed(() => Math.min(96, Math.max(28, pod.value?.barWidth ?? 44)));
 /** 拖入接纳态在匣宽度基础上加宽，与 Rust 侧 POD_BAR_ACCEPT_GROW 一致。 */
 const acceptWidth = computed(() => barWidth.value + 18);
@@ -72,7 +72,7 @@ const capsuleStyle = computed<Record<string, string>>(() => {
     : { ...appearance, height: short.value + "px", width: "100%", minHeight: barWidth.value + "px" };
 });
 
-/* 仅在拖入接纳时短条变宽（圆角矩形）；悬停弹出面板不改变形状。
+/* 仅在拖入接纳时短条变宽（圆角矩形）；悬停弹出浮动面板不改变形状。
    目标宽度 = 匣宽度 + 18，与 Rust 侧 POD_BAR_ACCEPT_GROW 一致：胶囊填满窗口，
    圆角矩形完整显示。 */
 watch(
@@ -117,7 +117,7 @@ function onPointerEnter() {
   hovering.value = true;
   clearHoverTimer();
   reportPresence(true);
-  // 拖动中不弹出面板
+  // 拖动中不弹出浮动面板
   if (dragging.value) return;
   hoverTimeout = window.setTimeout(() => {
     hoverTimeout = undefined;
@@ -141,7 +141,7 @@ function onPointerLeave() {
 function onClick() {
   // 如果刚完成拖动，不触发点击
   if (performance.now() - justDraggedAt < 300) return;
-  // 点击关闭面板后，尚未执行的悬停回调不能把它重新打开。
+  // 点击关闭浮动面板后，尚未执行的悬停回调不能把它重新打开。
   clearHoverTimer();
   void ipc.togglePanel(props.podId).catch((err) => console.error("toggle panel failed", err));
 }
@@ -211,9 +211,9 @@ function onPointerMove(e: PointerEvent) {
   // 标记为拖动中
   if (!dragging.value) {
     dragging.value = true;
-    // 拖动时取消 hover 定时器，避免弹出面板
+    // 拖动时取消 hover 定时器，避免弹出浮动面板
     window.clearTimeout(hoverTimeout);
-    // 隐藏面板（如果已显示）
+    // 隐藏浮动面板（如果已显示）
     void ipc.hidePanel(props.podId);
   }
 
@@ -276,7 +276,7 @@ async function handleDrop(paths: string[], sampled: Promise<ModifierState> | nul
     } else {
       await ipc.holdPendingDrop(props.podId, paths);
     }
-    // 拖入完成后弹出面板
+    // 拖入完成后弹出浮动面板
     showPanel();
   } catch (err) {
     console.error("stage failed", err);
@@ -400,7 +400,7 @@ onBeforeUnmount(() => {
     :class="`edge-${pod?.edge ?? 'left'}`"
     role="button"
     tabindex="0"
-    :aria-label="`打开${pod?.name ?? '匣'}面板`"
+    :aria-label="`打开${pod?.name ?? '匣'}浮动面板`"
     @pointerenter="onPointerEnter"
     @pointerleave="onPointerLeave"
     @pointerdown="onPointerDown"

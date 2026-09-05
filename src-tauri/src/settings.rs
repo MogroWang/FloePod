@@ -56,7 +56,7 @@ pub struct AutoBlock {
     pub apps: Vec<String>,
 }
 
-/// 免费的「安心模式」设置：提高可读性、提供非拖拽替代并减少认知负担。
+/// 免费的「辅助功能」设置：提高可读性、提供非拖拽替代并减少认知负担。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Accessibility {
@@ -154,9 +154,10 @@ impl Default for Accessibility {
     }
 }
 
-/// 窗口材质取值：亚克力 / 云母（Win11）/ 普通无材质。
-/// 早期版本的「模糊」与亚克力观感一致，已合并（见 normalize_materials）。
-pub const MATERIALS: [&str; 3] = ["acrylic", "mica", "plain"];
+/// 窗口材质取值:亚克力 / 普通无材质。
+/// 早期版本的「模糊」与亚克力观感一致、云母因系统材质失焦不可靠已移除,
+/// 存量配置统一迁移(见 normalize_materials)。
+pub const MATERIALS: [&str; 2] = ["acrylic", "plain"];
 
 fn valid_material(material: &str) -> bool {
     MATERIALS.contains(&material)
@@ -176,36 +177,36 @@ pub struct Pod {
     pub offset: f64,
     pub staging_folder: String,
     pub opacity: f64,
-    /// 胶囊条材质；1.3.0 起废弃，normalize 时固定为 "plain"（普通半透明）。
+    /// 边缘浮动条材质；1.3.0 起废弃，normalize 时固定为 "plain"（普通半透明）。
     /// 保留字段仅为兼容旧存储与 IPC 结构，应用层不再读取。
     pub material: String,
-    /// 面板材质；与胶囊条材质独立设置。
+    /// 浮动面板材质；与边缘浮动条材质独立设置。
     pub panel_material: String,
-    /// 面板不透明度 0.1 - 1.0；与胶囊条不透明度独立设置。
+    /// 浮动面板不透明度 0.1 - 1.0；与边缘浮动条不透明度独立设置。
     pub panel_opacity: f64,
-    /// 面板填充色（#RGB/#RRGGBB/#RRGGBBAA）；空串 = 跟随主题表面色。
+    /// 浮动面板填充色（#RGB/#RRGGBB/#RRGGBBAA）；空串 = 跟随主题表面色。
     pub panel_color: String,
     pub panel_width: u32,
     pub hover_delay_ms: u64,
-    /// 是否允许悬停自动弹出；关闭后仍可单击或用键盘打开面板。
+    /// 是否允许悬停自动弹出；关闭后仍可单击或用键盘打开浮动面板。
     pub hover_open: bool,
-    /// 鼠标离开后自动隐藏面板（淡出；重新悬停时淡入）。
+    /// 鼠标离开后自动隐藏浮动面板（淡出；重新悬停时淡入）。
     pub auto_hide: bool,
     /// 鼠标离开后到自动隐藏的延迟（毫秒）。
     pub auto_hide_delay_ms: u64,
-    /// 隐匿模式：无交互超过延迟后胶囊条淡化隐去，指针靠近时再淡入。
+    /// 隐匿模式：无交互超过延迟后边缘浮动条淡化隐去，指针靠近时再淡入。
     pub stealth: bool,
     /// 隐匿模式下无交互到淡化隐去的延迟（毫秒）。
     pub stealth_delay_ms: u64,
     pub drop_action: String,
     pub enabled: bool,
-    /// 胶囊条短边宽度（CSS 逻辑像素）；面板宽度由 panel_width 控制。
+    /// 边缘浮动条短边宽度（CSS 逻辑像素）；浮动面板宽度由 panel_width 控制。
     pub bar_width: u32,
-    /// 胶囊条外角圆角半径；0 为直角，CSS 会自动把超过半宽的值收敛。
+    /// 边缘浮动条外角圆角半径；0 为直角，CSS 会自动把超过半宽的值收敛。
     pub corner_radius: u32,
-    /// 胶囊条边框颜色（#RGB/#RRGGBB/#RRGGBBAA）；空串 = 跟随主题。
+    /// 边缘浮动条边框颜色（#RGB/#RRGGBB/#RRGGBBAA）；空串 = 跟随主题。
     pub border_color: String,
-    /// 胶囊条边框不透明度 0.0 - 1.0，作用于 border_color 或主题默认边框色。
+    /// 边缘浮动条边框不透明度 0.0 - 1.0，作用于 border_color 或主题默认边框色。
     pub border_opacity: f64,
     #[serde(default)]
     pub rules: PodRules,
@@ -465,7 +466,7 @@ fn validate_impl(s: &Settings, data_dir: &str, allow_missing_roots: bool) -> Res
         return Err("自动屏蔽应用列表过长".into());
     }
     if !s.accessibility.scale.is_finite() || !(1.0..=2.0).contains(&s.accessibility.scale) {
-        return Err("安心模式缩放比例必须在 100% 到 200% 之间".into());
+        return Err("辅助功能缩放比例必须在 100% 到 200% 之间".into());
     }
     for app in &s.auto_block.apps {
         if app.trim().trim_matches('"').is_empty() {
@@ -500,7 +501,7 @@ fn validate_impl(s: &Settings, data_dir: &str, allow_missing_roots: bool) -> Res
             return Err(format!("匣「{}」的材质无效", pod.name));
         }
         if !valid_material(&pod.panel_material) {
-            return Err(format!("匣「{}」的面板材质无效", pod.name));
+            return Err(format!("匣「{}」的浮动面板材质无效", pod.name));
         }
         if pod.rules.allowed_extensions.len() > 64
             || pod
@@ -535,7 +536,7 @@ fn validate_impl(s: &Settings, data_dir: &str, allow_missing_roots: bool) -> Res
             }
         }
         if !pod.panel_opacity.is_finite() || !(0.1..=1.0).contains(&pod.panel_opacity) {
-            return Err(format!("匣「{}」的面板不透明度无效", pod.name));
+            return Err(format!("匣「{}」的浮动面板不透明度无效", pod.name));
         }
         if pod.auto_hide_delay_ms > 5000 {
             return Err(format!("匣「{}」的自动隐藏延迟无效", pod.name));
@@ -544,7 +545,7 @@ fn validate_impl(s: &Settings, data_dir: &str, allow_missing_roots: bool) -> Res
             return Err(format!("匣「{}」的隐匿延迟无效", pod.name));
         }
         if !(300..=520).contains(&pod.panel_width) {
-            return Err(format!("匣「{}」的面板宽度无效", pod.name));
+            return Err(format!("匣「{}」的浮动面板宽度无效", pod.name));
         }
         if pod.hover_delay_ms > 600 {
             return Err(format!("匣「{}」的悬停延迟无效", pod.name));
@@ -562,7 +563,7 @@ fn validate_impl(s: &Settings, data_dir: &str, allow_missing_roots: bool) -> Res
             return Err(format!("匣「{}」的圆角无效", pod.name));
         }
         if !pod.panel_color.is_empty() && !valid_hex_color(&pod.panel_color) {
-            return Err(format!("匣「{}」的面板填充色无效", pod.name));
+            return Err(format!("匣「{}」的浮动面板填充色无效", pod.name));
         }
         if !pod.border_color.is_empty() && !valid_hex_color(&pod.border_color) {
             return Err(format!("匣「{}」的边框颜色无效", pod.name));
@@ -677,18 +678,19 @@ fn migrate_legacy(s: &mut Settings, v: &serde_json::Value) {
 
 /// 「模糊」（Win10 BlurBehind）与亚克力观感一致且在 Win11 上渲染异常，
 /// 已从材质列表移除：存量配置里的 blur 统一迁移为 acrylic。
-/// 胶囊条自 1.3.0 起不再提供材质设置（固定为普通半透明，见 Pod::material），
-/// 存量配置里的胶囊条材质在此一并废弃；面板材质仍可三选。
+/// 边缘浮动条自 1.3.0 起不再提供材质设置（固定为普通半透明，见 Pod::material），
+/// 存量配置里的边缘浮动条材质在此一并废弃。
+/// 浮动面板的「模糊」与亚克力观感一致、云母随 1.4.0 移除：两者统一迁移为亚克力。
 fn normalize_materials(s: &mut Settings) {
     for pod in &mut s.pods {
         pod.material = "plain".into();
-        if pod.panel_material == "blur" {
+        if pod.panel_material == "blur" || pod.panel_material == "mica" {
             pod.panel_material = "acrylic".into();
         }
     }
 }
 
-/// 1.2 及更早的存储没有面板独立外观字段：面板沿用该匣的材质与不透明度。
+/// 1.2 及更早的存储没有浮动面板独立外观字段：浮动面板沿用该匣的材质与不透明度。
 /// 只回填存储中确实缺失的字段，避免每次加载覆盖用户已保存的值。
 fn migrate_panel_appearance(s: &mut Settings, v: &serde_json::Value) {
     let Some(raw_pods) = v.get("pods").and_then(|p| p.as_array()) else {
@@ -920,7 +922,7 @@ mod tests {
                     "stagingFolder": stage_one,
                     "opacity": 0.72,
                     "material": "plain",
-                    "panelMaterial": "mica",
+                    "panelMaterial": "acrylic",
                     "panelOpacity": 0.9,
                     "panelColor": "#aabbcc",
                     "panelWidth": 512,
@@ -974,7 +976,7 @@ mod tests {
         assert_eq!(loaded.pods[0].corner_radius, 12);
         assert_eq!(loaded.pods[0].border_color, "#80ffaa");
         assert_eq!(loaded.pods[0].border_opacity, 0.4);
-        assert_eq!(loaded.pods[0].panel_material, "mica");
+        assert_eq!(loaded.pods[0].panel_material, "acrylic");
         assert_eq!(loaded.pods[0].panel_opacity, 0.9);
         assert_eq!(loaded.pods[0].panel_color, "#aabbcc");
         assert!(!loaded.pods[0].auto_hide);
@@ -1026,14 +1028,14 @@ mod tests {
                 "theme": "system",
                 "pods": [{
                     "id": 1, "name": "匣", "edge": "left",
-                    "stagingFolder": stage, "opacity": 0.8, "material": "mica"
+                    "stagingFolder": stage, "opacity": 0.8, "material": "acrylic"
                 }]
             })
             .to_string(),
         )
         .unwrap();
         let s = load(&c, &data_dir, "1.3.0").unwrap();
-        assert_eq!(s.pods[0].panel_material, "mica");
+        assert_eq!(s.pods[0].panel_material, "acrylic");
         assert!((s.pods[0].panel_opacity - 0.8).abs() < 1e-9);
         assert!(s.pods[0].auto_hide);
         assert_eq!(s.pods[0].auto_hide_delay_ms, 320);
@@ -1043,7 +1045,7 @@ mod tests {
         // 重新持久化后字段已补齐，再次加载不再触发回填。
         persist(&c, &s).unwrap();
         let reloaded = load(&c, &data_dir, "1.3.0").unwrap();
-        assert_eq!(reloaded.pods[0].panel_material, "mica");
+        assert_eq!(reloaded.pods[0].panel_material, "acrylic");
         assert!((reloaded.pods[0].panel_opacity - 0.8).abs() < 1e-9);
     }
 
@@ -1052,7 +1054,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let data_dir = tmp.path().join("data").to_string_lossy().to_string();
 
-        for good in ["acrylic", "mica", "plain"] {
+        for good in ["acrylic", "plain"] {
             let mut candidate = pod(1, &tmp.path().join("stage"));
             candidate.material = good.into();
             candidate.panel_material = good.into();
@@ -1062,7 +1064,7 @@ mod tests {
             };
             assert!(validate(&settings, &data_dir).is_ok(), "材质 {good} 应有效");
         }
-        for bad in ["blur", "glass", "frosted", "MICA", ""] {
+        for bad in ["blur", "mica", "glass", "frosted", "MICA", ""] {
             let mut candidate = pod(1, &tmp.path().join("stage"));
             candidate.material = bad.into();
             let settings = Settings {
@@ -1125,7 +1127,7 @@ mod tests {
     }
 
     #[test]
-    fn blur_material_migrates_to_acrylic() {
+    fn legacy_materials_migrate_to_acrylic() {
         let c = conn();
         let tmp = tempfile::tempdir().unwrap();
         let data_dir = tmp.path().join("data").to_string_lossy().to_string();
@@ -1135,18 +1137,25 @@ mod tests {
             KEY,
             &serde_json::json!({
                 "theme": "system",
-                "pods": [{
-                    "id": 1, "name": "匣", "edge": "left", "stagingFolder": stage,
-                    "material": "blur", "panelMaterial": "blur"
-                }]
+                "pods": [
+                    {
+                        "id": 1, "name": "匣", "edge": "left", "stagingFolder": stage,
+                        "material": "blur", "panelMaterial": "blur"
+                    },
+                    {
+                        "id": 2, "name": "匣二", "edge": "right", "stagingFolder": stage,
+                        "material": "mica", "panelMaterial": "mica"
+                    }
+                ]
             })
             .to_string(),
         )
         .unwrap();
         let s = load(&c, &data_dir, "1.3.0").unwrap();
-        // 胶囊条材质已废弃（固定普通）；面板的 blur 仍迁移为亚克力。
+        // 边缘浮动条材质已废弃（固定普通）；浮动面板的 blur 与 mica 都迁移为亚克力。
         assert_eq!(s.pods[0].material, "plain");
         assert_eq!(s.pods[0].panel_material, "acrylic");
+        assert_eq!(s.pods[1].panel_material, "acrylic");
         // 迁移结果合法，可直接通过校验。
         assert!(validate(&s, &data_dir).is_ok());
     }

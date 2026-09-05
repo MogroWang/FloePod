@@ -2,7 +2,7 @@
 /**
  * 右键菜单窗口视图（全局唯一 context_menu 窗口）。
  * 收到 SHOW 事件后渲染菜单、测量内容尺寸交由后端定位显示；
- * 用户选择 → 回传来源面板执行；失焦 / Escape → 关闭。
+ * 用户选择 → 回传来源浮动面板执行；失焦 / Escape → 关闭。
  * 窗口与菜单卡片同形（不留阴影余量，四角由后端按卡片圆角裁剪），
  * 点击卡片外任意位置都会让菜单失焦而关闭。
  */
@@ -73,7 +73,7 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 onMounted(async () => {
-  // 菜单窗口跟随应用主题（深浅色与面板一致）。
+  // 菜单窗口跟随应用主题（深浅色与浮动面板一致）。
   await settingsStore.load().catch((err) => console.error("menu theme load failed", err));
   await ipc.contextMenuReady().catch((err) => console.error("menu ready failed", err));
   disposeShow = await listenCurrent<{
@@ -116,10 +116,9 @@ onBeforeUnmount(() => {
   height: 100vh;
   overflow: hidden;
 }
-.menu-window[data-material="acrylic"],
-.menu-window[data-material="mica"] {
-  /* 原生系统材质已经负责模糊 / 云母纹理；WebView 只叠加适度主题着色。
-     旧版 96% 近实心底色会把云母完全遮住，看起来像材质失效。 */
+.menu-window[data-material="acrylic"] {
+  /* 原生亚克力材质已经负责模糊；WebView 只叠加适度主题着色。
+     旧版 96% 近实心底色会把亚克力完全遮住，看起来像材质失效。 */
   --context-menu-surface: color-mix(in srgb, var(--surface) 76%, transparent);
 }
 .menu-window[data-material="plain"] {

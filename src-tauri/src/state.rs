@@ -25,24 +25,24 @@ impl PanelMode {
     }
 }
 
-/// 单个「匣」的运行时状态（看门狗 / 面板显隐）。
+/// 单个「匣」的运行时状态（看门狗 / 浮动面板显隐）。
 #[derive(Debug)]
 pub struct PodRuntime {
     pub bar_inside: bool,
     pub panel_inside: bool,
     pub panel_visible: bool,
     pub panel_pinned: bool,
-    /// 面板正在向外拖出文件（OLE 拖拽进行中）
+    /// 浮动面板正在向外拖出文件（OLE 拖拽进行中）
     pub dragging_out: bool,
     pub mode: PanelMode,
     pub pending_drop: Vec<String>,
-    /// 面板的 CSS 逻辑像素高度；设置原生窗口尺寸时再且只再乘一次 scale factor。
+    /// 浮动面板的 CSS 逻辑像素高度；设置原生窗口尺寸时再且只再乘一次 scale factor。
     pub panel_height: u32,
     pub last_change: Option<Instant>,
-    /// 已应用的面板材质。None 表示尚未应用过，下一次 apply / show 时必然落地。
-    /// 胶囊条材质已废弃（固定普通），不再跟踪。
+    /// 已应用的浮动面板材质。None 表示尚未应用过，下一次 apply / show 时必然落地。
+    /// 边缘浮动条材质已废弃（固定普通），不再跟踪。
     pub panel_material: Option<String>,
-    /// 面板自动隐藏设置；apply_settings 时随配置刷新。
+    /// 浮动面板自动隐藏设置；apply_settings 时随配置刷新。
     pub auto_hide_enabled: bool,
     /// 鼠标离开后到自动隐藏的延迟（毫秒）。
     pub auto_hide_delay_ms: u64,
@@ -50,12 +50,12 @@ pub struct PodRuntime {
     pub stealth_enabled: bool,
     /// 隐匿模式下无交互到淡化隐去的延迟（毫秒）。
     pub stealth_delay_ms: u64,
-    /// 胶囊条当前是否处于隐匿（透明度淡出）状态；变化时向胶囊条发事件。
+    /// 边缘浮动条当前是否处于隐匿（透明度淡出）状态；变化时向边缘浮动条发事件。
     pub bar_stealth_hidden: bool,
-    /// 最近一次摆放的胶囊条矩形（物理像素），供看门狗计算指针接近距离，
+    /// 最近一次摆放的边缘浮动条矩形（物理像素），供看门狗计算指针接近距离，
     /// 避免每次 tick 都读库取配置。
     pub bar_rect: Option<(i32, i32, i32, i32)>,
-    /// 胶囊条所在显示器的缩放率，与 bar_rect 配套。
+    /// 边缘浮动条所在显示器的缩放率，与 bar_rect 配套。
     pub bar_scale: f64,
 }
 
@@ -134,7 +134,7 @@ impl Default for PodRuntime {
 }
 
 impl PodRuntime {
-    /// 「单一活动面板」可以收起的普通面板。拖出与交互模式都必须受到保护。
+    /// 「单一活动浮动面板」可以收起的普通浮动面板。拖出与交互模式都必须受到保护。
     pub fn can_dismiss(&self) -> bool {
         self.panel_visible
             && !self.panel_pinned
@@ -173,7 +173,7 @@ pub struct AppState {
     /// 串行化「运行态变更 + 原生窗口副作用」。
     ///
     /// 只锁 `pods` 无法阻止 show/hide 在释放状态锁后交叉执行，最终造成
-    /// Win32 实际可见性与 `panel_visible` 分裂。所有 manager 面板转换都先持有此锁。
+    /// Win32 实际可见性与 `panel_visible` 分裂。所有 manager 浮动面板转换都先持有此锁。
     pub panel_ops: Mutex<()>,
     /// 串行化“设置提交 -> 原生窗口 / watcher 落地”。只串行 DB 写入仍不够：
     /// 较旧命令可能在较新命令之后调用 apply_settings，把运行态回放成旧快照。
@@ -196,7 +196,7 @@ pub struct AppState {
     pub auto_block_apps: Mutex<Vec<String>>,
     /// 进入屏蔽前匣的可见性；解除屏蔽后据此恢复，不覆盖用户的手动隐藏。
     pub auto_block_restore: AtomicBool,
-    /// 安心模式要求关闭透明效果时，所有面板按 plain 材质落地。
+    /// 辅助功能要求关闭透明效果时，所有浮动面板按 plain 材质落地。
     pub accessibility_reduce_transparency: AtomicBool,
     /// 最近一次应用自身文件写入。必须使用单调时钟；系统墙钟回拨不能让 watcher
     /// 永久停留在“刚写入”的抑制窗口。

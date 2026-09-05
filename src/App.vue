@@ -2,8 +2,8 @@
 /**
  * 多窗口共享一个 Vue 入口：按 Tauri 窗口 label 选择视图。
  * - settings          -> 设置 / OOBE
- * - pod_{id}          -> 匣的胶囊条（贴在屏幕边缘）
- * - pod_{id}_panel    -> 匣的弹出面板
+ * - pod_{id}          -> 匣的边缘浮动条（贴在屏幕边缘）
+ * - pod_{id}_panel    -> 匣的弹出浮动面板
  * - context_menu      -> 全局右键菜单
  * 浏览器开发时用 location.hash（#/settings /#/pod_1 /#/pod_1_panel）。
  */
