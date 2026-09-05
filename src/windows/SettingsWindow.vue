@@ -556,6 +556,8 @@ function oobePodConfig(): Omit<Pod, "id"> {
     dropAction: "ask",
     enabled: true,
     barWidth: 44,
+    barLength: 190,
+    barColor: "",
     cornerRadius: 22,
     borderColor: "",
     borderOpacity: 1,
