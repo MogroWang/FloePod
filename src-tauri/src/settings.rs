@@ -1131,7 +1131,9 @@ mod tests {
         let c = conn();
         let tmp = tempfile::tempdir().unwrap();
         let data_dir = tmp.path().join("data").to_string_lossy().to_string();
+        // 两个匣必须使用不同的暂存文件夹，否则 validate 会因文件夹重复而失败。
         let stage = tmp.path().join("stage").to_string_lossy().to_string();
+        let stage_two = tmp.path().join("stage-two").to_string_lossy().to_string();
         db::kv_set(
             &c,
             KEY,
@@ -1143,7 +1145,7 @@ mod tests {
                         "material": "blur", "panelMaterial": "blur"
                     },
                     {
-                        "id": 2, "name": "匣二", "edge": "right", "stagingFolder": stage,
+                        "id": 2, "name": "匣二", "edge": "right", "stagingFolder": stage_two,
                         "material": "mica", "panelMaterial": "mica"
                     }
                 ]
