@@ -182,21 +182,6 @@ select:focus-visible {
   outline-offset: 2px;
 }
 
-/* 安心模式：不依赖拖拽的小目标操作也必须达到易点按尺寸，并强化键盘焦点。 */
-html.safety-mode button,
-html.safety-mode input,
-html.safety-mode select {
-  min-height: 44px;
-}
-html.safety-mode button:focus-visible,
-html.safety-mode input:focus-visible,
-html.safety-mode textarea:focus-visible,
-html.safety-mode select:focus-visible,
-html.safety-mode [tabindex="0"]:focus-visible {
-  outline-width: 3px;
-  outline-offset: 2px;
-}
-
 html.high-contrast {
   --accent: #ffdf00;
   --accent-hover: #ffe94d;

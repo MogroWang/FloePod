@@ -192,6 +192,20 @@ pub fn hide(app: &AppHandle, seq: u64, pod_id: u64) {
         // 其归属浮动面板由 open() 的补发 CLOSED 恢复。
         return;
     }
+    hide_current(app, pod_id);
+}
+
+/// 收起当前打开的菜单（不校验 seq）。供浮动面板在指针按下时主动收起：
+/// 菜单窗口抢焦点后依赖 blur 的「点击外部关闭」在个别场景（点击不会
+/// 激活的表面）不可靠，面板显式收起兜底。未打开时是空操作，重复调用无害。
+pub fn dismiss(app: &AppHandle) {
+    if !MENU_OPEN.load(Ordering::Relaxed) {
+        return;
+    }
+    hide_current(app, MENU_POD.load(Ordering::Relaxed));
+}
+
+fn hide_current(app: &AppHandle, pod_id: u64) {
     MENU_OPEN.store(false, Ordering::Relaxed);
     let Some(window) = app.get_webview_window(LABEL) else {
         return;

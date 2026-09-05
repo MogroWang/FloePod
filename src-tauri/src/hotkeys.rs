@@ -69,27 +69,26 @@ pub fn register(app: &AppHandle, s: &Settings) -> Result<(), String> {
 
         // 辅助功能提供完全不依赖拖拽的 Alt+数字投递入口：先打开对应匣浮动面板，
         // 再让该浮动面板弹出原生文件选择器。最多映射前 9 个已启用匣。
-        if s.accessibility.enabled {
-            for (index, pod) in s.pods.iter().filter(|pod| pod.enabled).take(9).enumerate() {
-                let combo = format!("Alt+{}", index + 1);
-                let pod_id = pod.id;
-                if let Err(error) = gs.on_shortcut(combo.as_str(), move |app, _shortcut, event| {
-                    if event.state() != ShortcutState::Pressed {
-                        return;
-                    }
-                    manager::show_panel(app, pod_id);
-                    let _ = app.emit_to(
-                        events::pod_panel_label(pod_id),
-                        events::REQUEST_FILE_PICKER,
-                        serde_json::json!({ "podId": pod_id }),
-                    );
-                }) {
-                    // 单个 Alt+数字与其他软件冲突时不能让用户原有的三组快捷键
-                    // 一起失效；保留其余映射并在日志中给出明确诊断。
-                    crate::logging::write(&format!(
-                        "[hotkeys] 辅助功能快捷键「{combo}」注册失败，可能与其他软件冲突（{error}）"
-                    ));
+        // 1.5.0 起不再有「启用辅助功能」总开关，入口始终注册。
+        for (index, pod) in s.pods.iter().filter(|pod| pod.enabled).take(9).enumerate() {
+            let combo = format!("Alt+{}", index + 1);
+            let pod_id = pod.id;
+            if let Err(error) = gs.on_shortcut(combo.as_str(), move |app, _shortcut, event| {
+                if event.state() != ShortcutState::Pressed {
+                    return;
                 }
+                manager::show_panel(app, pod_id);
+                let _ = app.emit_to(
+                    events::pod_panel_label(pod_id),
+                    events::REQUEST_FILE_PICKER,
+                    serde_json::json!({ "podId": pod_id }),
+                );
+            }) {
+                // 单个 Alt+数字与其他软件冲突时不能让用户原有的三组快捷键
+                // 一起失效；保留其余映射并在日志中给出明确诊断。
+                crate::logging::write(&format!(
+                    "[hotkeys] 辅助功能快捷键「{combo}」注册失败，可能与其他软件冲突（{error}）"
+                ));
             }
         }
         Ok(())

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 /**
  * 条目行：缩略图 + 名称 + 元信息；悬停显示操作；
- * 拖拽（移动超过阈值）发起 OS 拖出；点选 / Ctrl 点选 / Shift 范围选；双击打开。
+ * 拖拽（移动超过阈值）发起 OS 拖出；点选 / Ctrl 点选 / Shift 范围选；
+ * 勾选小按钮独立切换选中；双击打开。
  */
 import { computed, onBeforeUnmount, ref } from "vue";
 import type { StagedItem } from "@/domain/types";
@@ -114,11 +115,22 @@ onBeforeUnmount(() => stopPointerTracking?.());
     @contextmenu.prevent.stop="emit('contextMenu', item, { x: $event.clientX, y: $event.clientY })"
     @keydown="onKeydown"
   >
-    <div class="check" :class="{ on: selected }">
-      <svg v-if="selected" width="9" height="9" viewBox="0 0 10 10" fill="none">
+    <button
+      type="button"
+      class="check"
+      :class="{ on: selected }"
+      role="checkbox"
+      :aria-checked="selected"
+      :aria-label="selected ? '取消选择' : '选择'"
+      title="选择 / 取消选择"
+      @pointerdown.stop
+      @click.stop="emit('select', item.id, 'toggle')"
+      @dblclick.stop
+    >
+      <svg v-if="selected" width="9" height="9" viewBox="0 0 10 10" fill="none" aria-hidden="true">
         <path d="M8 2.5 4.2 7.5 2 5.3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
       </svg>
-    </div>
+    </button>
     <ThumbImg :kind="item.kind" :path="item.stagingPath" :ext="item.ext" :name="item.name" />
     <div class="item-body">
       <div class="item-name" :title="item.name">{{ item.name }}</div>
@@ -163,12 +175,16 @@ onBeforeUnmount(() => stopPointerTracking?.());
 .check {
   width: 16px;
   height: 16px;
+  padding: 0;
   border-radius: 5px;
   border: 1.5px solid var(--line-strong);
+  background: transparent;
+  color: var(--on-accent);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  cursor: pointer;
   transition: all 140ms ease;
   opacity: 0;
 }
@@ -180,7 +196,15 @@ onBeforeUnmount(() => stopPointerTracking?.());
 .check.on {
   background: var(--accent);
   border-color: var(--accent);
-  color: var(--on-accent);
+}
+/* 勾选小按钮的悬停反馈：未选中时提前着色示意可选中，选中时提亮示意可取消。 */
+.check:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.check.on:hover {
+  background: var(--accent);
+  filter: brightness(1.15);
 }
 .item-body {
   flex: 1;

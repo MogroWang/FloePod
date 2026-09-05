@@ -61,6 +61,7 @@ export const Commands = {
   ResizeContextMenu: "resize_context_menu",
   ContextMenuChoice: "context_menu_choice",
   HideContextMenu: "hide_context_menu",
+  DismissContextMenu: "dismiss_context_menu",
   LogFrontend: "log_frontend",
   AppLog: "app_log",
   QuitApp: "quit_app",

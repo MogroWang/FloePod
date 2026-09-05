@@ -214,6 +214,7 @@ pub fn run() {
             commands::resize_context_menu,
             commands::context_menu_choice,
             commands::hide_context_menu,
+            commands::dismiss_context_menu,
             commands::log_frontend,
             commands::app_log,
             commands::quit_app,

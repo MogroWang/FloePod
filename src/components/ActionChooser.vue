@@ -19,7 +19,7 @@ const settingsStore = useSettingsStore();
 const names = computed(() => props.paths.map((p) => p.split(/[\\/]/).pop() ?? p));
 const preview = computed(() => previewSlice(names.value));
 const simpleLanguage = computed(() =>
-  Boolean(settingsStore.settings?.accessibility.enabled && settingsStore.settings.accessibility.simpleLanguage),
+  Boolean(settingsStore.settings?.accessibility.simpleLanguage),
 );
 const chooserTitle = computed(() => simpleLanguage.value
   ? `你想把这 ${props.paths.length} 项怎样放进匣？`

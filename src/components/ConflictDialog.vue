@@ -19,7 +19,7 @@ const preview = computed(() => previewSlice(props.names));
 const verb = computed(() => exportVerb(props.mode));
 const settingsStore = useSettingsStore();
 const simpleLanguage = computed(() =>
-  Boolean(settingsStore.settings?.accessibility.enabled && settingsStore.settings.accessibility.simpleLanguage),
+  Boolean(settingsStore.settings?.accessibility.simpleLanguage),
 );
 </script>
 

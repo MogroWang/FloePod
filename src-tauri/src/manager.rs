@@ -15,8 +15,9 @@ use crate::settings::{Pod, Settings};
 use crate::state::{AppState, PanelMode, PodRuntime};
 use crate::win;
 
-/// 匣（边缘浮动条）长边；短边（贴屏幕边缘一侧）来自每个匣的 bar_width 设置。
-const POD_BAR_LONG: u32 = 190;
+/// 匣（边缘浮动条）长边默认值；短边（贴屏幕边缘一侧）来自每个匣的 bar_width 设置。
+/// 1.5.0 起长边由每个匣的 bar_length 设置控制，此常量仅作字段默认值的参照。
+pub const POD_BAR_LONG: u32 = 190;
 /// 拖入接纳态：短条在此基础上加宽为圆角矩形
 const POD_BAR_ACCEPT_GROW: u32 = 18;
 const PANEL_GAP: u32 = 10;
@@ -203,7 +204,8 @@ pub fn list_monitors(app: &AppHandle) -> Vec<MonitorInfo> {
     out
 }
 
-/// 边缘浮动条窗口的几何（长边方向由边缘决定）。短边来自匣的 bar_width 设置。
+/// 边缘浮动条窗口的几何（长边方向由边缘决定）。
+/// 短边来自匣的 bar_width 设置，长边来自 bar_length 设置。
 fn bar_geometry_for_monitor(
     monitor: (i32, i32, i32, i32),
     edge: &str,
@@ -211,6 +213,7 @@ fn bar_geometry_for_monitor(
     accepting: bool,
     scale: f64,
     bar_width: u32,
+    bar_length: u32,
 ) -> (i32, i32, i32, i32) {
     let (mx, my, mw, mh) = monitor;
     let short_value = if accepting {
@@ -219,7 +222,7 @@ fn bar_geometry_for_monitor(
         bar_width
     };
     let short = scale_logical_px(short_value, scale);
-    let long = scale_logical_px(POD_BAR_LONG, scale);
+    let long = scale_logical_px(bar_length, scale);
     let vertical = matches!(edge, "left" | "right");
     let (w, h) = if vertical {
         (short, long)
@@ -260,6 +263,7 @@ fn bar_geometry(
             accepting,
             target.scale_factor,
             pod.bar_width,
+            pod.bar_length,
         ),
         target.scale_factor,
     ))
@@ -378,6 +382,7 @@ fn place_panel(app: &AppHandle, pod: &Pod) {
         false,
         target.scale_factor,
         pod.bar_width,
+        pod.bar_length,
     );
     let (x, y, width, height) = panel_geometry(
         monitor_rect,
@@ -452,10 +457,12 @@ fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
             win::prepare_shaped_window(hwnd.0 as isize);
         }
     }
-    // 浮动面板：请求系统圆角，与 CSS 的 clip-path 圆角轮廓对齐
+    // 浮动面板：请求系统圆角，与 CSS 的 clip-path 圆角轮廓对齐；
+    // 顺带幂等清理可能残留的标题栏样式位，杜绝偶发的矩形标题栏。
     if let Some(panel) = pod_panel(app, pod.id) {
         if let Ok(hwnd) = panel.hwnd() {
             win::prefer_rounded_corners(hwnd.0 as isize);
+            win::prepare_panel_window(hwnd.0 as isize);
         }
     }
     place_pod_bar(app, pod, false);
@@ -507,12 +514,13 @@ fn clear_system_backdrop(window: &WebviewWindow) -> bool {
     window.set_effects(None).is_ok()
 }
 
-/// 轻推窗口尺寸（±1 物理像素后还原）强制 DWM / WebView2 重新合成。
+/// 轻推窗口尺寸（-1 物理像素、跨一帧后还原）强制 DWM / WebView2 重新合成。
 ///
 /// ACCENT 材质写入与 RedrawWindow 只作用于 GDI 表面；WebView2 的
 /// DirectComposition 表面在窗口几何变化时才重新呈现，否则应用材质后
 /// 画面停留在旧合成结果（表现为「材质应用了但没刷新出来」）。
-/// 抖动等价于用户手动 resize 触发的重合成，同帧还原，视觉不可感知。
+/// 抖动等价于用户手动 resize 触发的重合成，中间态只存在约一帧，
+/// 视觉上不可感知。
 fn nudge_recomposite(window: &WebviewWindow) {
     let Ok(size) = window.inner_size() else {
         return;
@@ -520,6 +528,11 @@ fn nudge_recomposite(window: &WebviewWindow) {
     let width = size.width.max(2);
     let height = size.height.max(2);
     let _ = window.set_size(PhysicalSize::new(width - 1, height));
+    // 两次 set_size 必须跨合成帧：DWM 每帧只采样一次窗口几何，同帧内连续
+    // 两次变化会被合并成「净变化为零」，WebView2 的 DirectComposition 表面
+    // 不会重新呈现，材质写入后画面仍停留在旧合成结果。等待约一帧让中间
+    // 尺寸先被合成，还原尺寸时才有真实的几何变化触发重合成。
+    std::thread::sleep(Duration::from_millis(16));
     let _ = window.set_size(PhysicalSize::new(width, height));
 }
 
@@ -894,6 +907,9 @@ fn show_panel_locked(app: &AppHandle, id: u64, pod: &Pod, pin_on_show: bool) -> 
     apply_panel_material_if_changed(app, pod);
     let _ = panel.set_title(&format!("{} 浮动面板", pod.name));
     win::prefer_rounded_corners(hwnd.0 as isize);
+    // 显示前幂等清理残留的标题栏样式位：面板带标题文字，样式位被合成
+    // 就会显示成矩形标题栏。
+    win::prepare_panel_window(hwnd.0 as isize);
     win::show_no_activate(hwnd.0 as isize);
     // 显示兄弟浮动面板本身也可能触发透明 WebView 的非客户区合成回归。
     refresh_pod_bar_chrome(app, id);
@@ -1175,7 +1191,9 @@ fn set_all_bars_locked(app: &AppHandle, settings: &Settings, visible: bool) {
         if let Some(bar) = pod_bar(app, pod.id) {
             if let Ok(hwnd) = bar.hwnd() {
                 if visible {
-                    win::show_no_activate(hwnd.0 as isize);
+                    // 显示路径自带非客户区刷新：WebView2 在透明无边框窗口
+                    // 显示时可能重新显露幽灵标题栏，不能依赖后续焦点事件。
+                    win::show_bar_no_activate(hwnd.0 as isize);
                 } else {
                     win::hide_window(hwnd.0 as isize);
                 }
@@ -1243,10 +1261,9 @@ pub fn apply_settings(app: &AppHandle, s: &Settings) {
             .auto_block_enabled
             .store(s.auto_block.enabled, Ordering::Relaxed);
         *state.auto_block_apps.lock().unwrap() = s.auto_block.apps.clone();
-        state.accessibility_reduce_transparency.store(
-            s.accessibility.enabled && s.accessibility.reduce_transparency,
-            Ordering::Relaxed,
-        );
+        state
+            .accessibility_reduce_transparency
+            .store(s.accessibility.reduce_transparency, Ordering::Relaxed);
     }
 
     // 窗口创建/销毁与所有浮动面板显隐串行。对已固定、可见的浮动面板立即应用新的
@@ -1289,7 +1306,7 @@ pub fn apply_settings(app: &AppHandle, s: &Settings) {
         for pod in s.pods.iter().filter(|p| p.enabled) {
             if let Some(bar) = pod_bar(app, pod.id) {
                 if let Ok(hwnd) = bar.hwnd() {
-                    win::show_no_activate(hwnd.0 as isize);
+                    win::show_bar_no_activate(hwnd.0 as isize);
                 }
             }
         }
@@ -1407,19 +1424,19 @@ mod tests {
     #[test]
     fn bar_geometry_scales_all_logical_dimensions_for_target_monitor() {
         let monitor = (1920, 0, 3840, 2160);
-        let normal = bar_geometry_for_monitor(monitor, "right", 0.5, false, 2.0, 44);
-        let accepting = bar_geometry_for_monitor(monitor, "right", 0.5, true, 2.0, 44);
+        let normal = bar_geometry_for_monitor(monitor, "right", 0.5, false, 2.0, 44, 190);
+        let accepting = bar_geometry_for_monitor(monitor, "right", 0.5, true, 2.0, 44, 190);
 
         assert_eq!(normal, (5672, 890, 88, 380));
         assert_eq!(accepting, (5636, 890, 124, 380));
         assert_inside_monitor(normal, monitor);
         assert_inside_monitor(accepting, monitor);
 
-        // 自定义匣宽度同样只缩放一次，接纳态在此基础上加宽固定值。
-        let wide = bar_geometry_for_monitor(monitor, "left", 0.5, false, 2.0, 60);
-        assert_eq!(wide, (1920, 890, 120, 380));
-        let wide_accepting = bar_geometry_for_monitor(monitor, "left", 0.5, true, 2.0, 60);
-        assert_eq!(wide_accepting, (1920, 890, 156, 380));
+        // 自定义匣宽度与长度同样只缩放一次，接纳态只在短边基础上加宽固定值。
+        let wide = bar_geometry_for_monitor(monitor, "left", 0.5, false, 2.0, 60, 240);
+        assert_eq!(wide, (1920, 840, 120, 480));
+        let wide_accepting = bar_geometry_for_monitor(monitor, "left", 0.5, true, 2.0, 60, 240);
+        assert_eq!(wide_accepting, (1920, 840, 156, 480));
     }
 
     #[test]

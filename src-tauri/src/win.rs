@@ -72,6 +72,57 @@ pub fn show_no_activate(hwnd: isize) {
     }
 }
 
+/// 边缘浮动条专用的不抢焦点显示：显示后再做一次无条件非客户区刷新。
+///
+/// WebView2 在透明无边框窗口显示 / 激活时可能重新显露幽灵标题栏（见
+/// show_window 的同款处理）；浮动条的隐藏 / 恢复走本函数，显示瞬间
+/// 即压掉残影，不再依赖后续的焦点事件兜底。
+pub fn show_bar_no_activate(hwnd: isize) {
+    show_no_activate(hwnd);
+    prepare_shaped_window(hwnd);
+}
+
+/// 浮动面板窗口的幂等非客户区清理：只清除可能被系统事件恢复的
+/// WS_CAPTION / WS_THICKFRAME 等样式位并刷新框架，不动 DWM 非客户区
+/// 渲染策略与边框颜色——面板依赖系统阴影与圆角，禁用它们会让阴影消失。
+/// 面板窗口带有标题文字（「匣名 浮动面板」），样式位一旦残留并被合成，
+/// 就会显示成矩形标题栏。
+pub fn prepare_panel_window(hwnd: isize) {
+    use windows_sys::Win32::Graphics::Gdi::{
+        RedrawWindow, RDW_ALLCHILDREN, RDW_FRAME, RDW_INVALIDATE, RDW_UPDATENOW,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    };
+    unsafe {
+        let hwnd = hwnd as *mut c_void;
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+        let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+        let (cleaned_style, cleaned_ex_style) = strip_non_client_styles(style, ex_style);
+        if cleaned_style != style {
+            SetWindowLongPtrW(hwnd, GWL_STYLE, cleaned_style as isize);
+        }
+        if cleaned_ex_style != ex_style {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, cleaned_ex_style as isize);
+        }
+        SetWindowPos(
+            hwnd,
+            std::ptr::null_mut(),
+            0,
+            0,
+            0,
+            0,
+            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+        );
+        RedrawWindow(
+            hwnd,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW,
+        );
+    }
+}
+
 /// SW_SHOW 显示并激活窗口 + 恢复置顶（右键菜单需要前台焦点才能用 blur 检测外部点击）。
 /// 必须与 hide_window 一样直接走 ShowWindow：Tauri 的 show() 会同步 WebView2
 /// 的可见性状态，与原生 SW_HIDE 路径混用时透明窗口内容停留在未恢复的合成状态，

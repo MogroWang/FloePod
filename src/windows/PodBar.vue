@@ -62,11 +62,14 @@ const acceptWidth = computed(() => barWidth.value + 18);
 const capsuleStyle = computed<Record<string, string>>(() => {
   const borderColor = pod.value?.borderColor || "var(--glass-line)";
   const borderOpacity = Math.min(1, Math.max(0, pod.value?.borderOpacity ?? 1));
-  const appearance = {
+  const appearance: Record<string, string> = {
     "--pod-opacity": `${clampOpacity(pod.value?.opacity) * 100}%`,
     "--bar-radius": `${pod.value?.cornerRadius ?? 22}px`,
     "--pod-border": `color-mix(in srgb, ${borderColor} ${borderOpacity * 100}%, transparent)`,
   };
+  // 填充色只在用户确认设置后才存在；未设置时 CSS 回退到主题表面色。
+  const fill = pod.value?.barColor?.trim();
+  if (fill) appearance["--pod-fill"] = fill;
   return vertical.value
     ? { ...appearance, width: short.value + "px", height: "100%", minWidth: barWidth.value + "px" }
     : { ...appearance, height: short.value + "px", width: "100%", minHeight: barWidth.value + "px" };
@@ -447,7 +450,7 @@ onBeforeUnmount(() => {
   will-change: width, height;
   background: color-mix(
     in srgb,
-    var(--surface) var(--pod-opacity, 100%),
+    var(--pod-fill, var(--surface)) var(--pod-opacity, 100%),
     transparent
   );
   box-shadow: inset 0 0 0 1px var(--pod-border, var(--glass-line));
@@ -487,9 +490,10 @@ onBeforeUnmount(() => {
 }
 
 .capsule.hovering {
+  /* 自定义填充色时保持填充色不变（raised 提亮只作用于跟随主题的默认外观）。 */
   background: color-mix(
     in srgb,
-    var(--surface-raised) var(--pod-opacity, 100%),
+    var(--pod-fill, var(--surface-raised)) var(--pod-opacity, 100%),
     transparent
   );
 }

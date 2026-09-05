@@ -57,10 +57,11 @@ pub struct AutoBlock {
 }
 
 /// 免费的「辅助功能」设置：提高可读性、提供非拖拽替代并减少认知负担。
+/// 各选项相互独立、直接生效；1.5.0 起不再有「启用辅助功能」总开关
+/// （旧配置中的 enabled 字段被 serde 忽略）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Accessibility {
-    pub enabled: bool,
     /// WebView 内容缩放，范围 1.0 - 2.0。
     pub scale: f64,
     pub high_contrast: bool,
@@ -142,7 +143,6 @@ impl Default for PodSecurity {
 impl Default for Accessibility {
     fn default() -> Self {
         Self {
-            enabled: false,
             scale: 1.0,
             high_contrast: false,
             reduce_transparency: false,
@@ -202,6 +202,10 @@ pub struct Pod {
     pub enabled: bool,
     /// 边缘浮动条短边宽度（CSS 逻辑像素）；浮动面板宽度由 panel_width 控制。
     pub bar_width: u32,
+    /// 边缘浮动条长度，即沿屏幕边缘方向的长边（CSS 逻辑像素）。
+    pub bar_length: u32,
+    /// 边缘浮动条填充色（#RGB/#RRGGBB/#RRGGBBAA）；空串 = 跟随主题表面色。
+    pub bar_color: String,
     /// 边缘浮动条外角圆角半径；0 为直角，CSS 会自动把超过半宽的值收敛。
     pub corner_radius: u32,
     /// 边缘浮动条边框颜色（#RGB/#RRGGBB/#RRGGBBAA）；空串 = 跟随主题。
@@ -228,7 +232,7 @@ impl Default for Pod {
             panel_material: "acrylic".into(),
             panel_opacity: 1.0,
             panel_color: String::new(),
-            panel_width: 380,
+            panel_width: 440,
             hover_delay_ms: 120,
             hover_open: true,
             auto_hide: true,
@@ -238,6 +242,8 @@ impl Default for Pod {
             drop_action: "ask".into(),
             enabled: true,
             bar_width: 44,
+            bar_length: 190,
+            bar_color: String::new(),
             corner_radius: 22,
             border_color: String::new(),
             border_opacity: 1.0,
@@ -300,6 +306,7 @@ pub fn load(conn: &Connection, data_dir: &str, version: &str) -> Result<Settings
             migrate_legacy(&mut s, &v);
             migrate_panel_appearance(&mut s, &v);
             normalize_materials(&mut s);
+            normalize_panel_width(&mut s);
             s
         }
         None => Settings::default(),
@@ -544,7 +551,7 @@ fn validate_impl(s: &Settings, data_dir: &str, allow_missing_roots: bool) -> Res
         if pod.stealth_delay_ms > 60_000 {
             return Err(format!("匣「{}」的隐匿延迟无效", pod.name));
         }
-        if !(300..=520).contains(&pod.panel_width) {
+        if !(410..=600).contains(&pod.panel_width) {
             return Err(format!("匣「{}」的浮动面板宽度无效", pod.name));
         }
         if pod.hover_delay_ms > 600 {
@@ -557,7 +564,13 @@ fn validate_impl(s: &Settings, data_dir: &str, allow_missing_roots: bool) -> Res
             return Err(format!("匣「{}」的拖入动作无效", pod.name));
         }
         if !(28..=96).contains(&pod.bar_width) {
-            return Err(format!("匣「{}」的匣宽度无效", pod.name));
+            return Err(format!("匣「{}」的浮动条宽度无效", pod.name));
+        }
+        if !(100..=500).contains(&pod.bar_length) {
+            return Err(format!("匣「{}」的浮动条长度无效", pod.name));
+        }
+        if !pod.bar_color.is_empty() && !valid_hex_color(&pod.bar_color) {
+            return Err(format!("匣「{}」的浮动条填充色无效", pod.name));
         }
         if pod.corner_radius > 64 {
             return Err(format!("匣「{}」的圆角无效", pod.name));
@@ -660,7 +673,7 @@ fn migrate_legacy(s: &mut Settings, v: &serde_json::Value) {
         panel_opacity: opacity,
         material: material.clone(),
         panel_material: material,
-        panel_width: v.get("panelWidth").and_then(|x| x.as_u64()).unwrap_or(380) as u32,
+        panel_width: v.get("panelWidth").and_then(|x| x.as_u64()).unwrap_or(440) as u32,
         opacity,
         hover_delay_ms: v
             .get("hoverDelayMs")
@@ -687,6 +700,14 @@ fn normalize_materials(s: &mut Settings) {
         if pod.panel_material == "blur" || pod.panel_material == "mica" {
             pod.panel_material = "acrylic".into();
         }
+    }
+}
+
+/// 1.5.0 起浮动面板宽度收紧为 410-600：旧配置的存量值收敛到新范围，
+/// 否则严格校验会让 watcher 与保存路径全部报错。
+fn normalize_panel_width(s: &mut Settings) {
+    for pod in &mut s.pods {
+        pod.panel_width = pod.panel_width.clamp(410, 600);
     }
 }
 
@@ -829,7 +850,7 @@ mod tests {
             staging_folder: folder.to_string_lossy().to_string(),
             opacity: 1.0,
             material: "acrylic".into(),
-            panel_width: 380,
+            panel_width: 440,
             hover_delay_ms: 120,
             drop_action: "ask".into(),
             enabled: true,
@@ -1258,6 +1279,10 @@ mod tests {
         for (field, value) in [
             ("bar_width", serde_json::json!(27u64)),
             ("bar_width", serde_json::json!(97u64)),
+            ("bar_length", serde_json::json!(99u64)),
+            ("bar_length", serde_json::json!(501u64)),
+            ("panel_width", serde_json::json!(409u64)),
+            ("panel_width", serde_json::json!(601u64)),
             ("corner_radius", serde_json::json!(65u64)),
             ("border_opacity", serde_json::json!(1.5)),
             ("border_opacity", serde_json::json!(-0.1)),
@@ -1265,6 +1290,8 @@ mod tests {
             let mut broken = pod.clone();
             match field {
                 "bar_width" => broken.bar_width = value.as_u64().unwrap() as u32,
+                "bar_length" => broken.bar_length = value.as_u64().unwrap() as u32,
+                "panel_width" => broken.panel_width = value.as_u64().unwrap() as u32,
                 "corner_radius" => broken.corner_radius = value.as_u64().unwrap() as u32,
                 "border_opacity" => broken.border_opacity = value.as_f64().unwrap(),
                 _ => unreachable!(),
@@ -1303,5 +1330,26 @@ mod tests {
                 "边框色 {bad} 应无效"
             );
         }
+
+        // 浮动条填充色：合法 hex 与空串（跟随主题）均可，非法值被拒绝。
+        for good in ["#fff", "#80FFaa", "#11223344", ""] {
+            let mut candidate = pod.clone();
+            candidate.bar_color = good.into();
+            let settings = Settings {
+                pods: vec![candidate],
+                ..Settings::default()
+            };
+            assert!(
+                validate(&settings, &data_dir).is_ok(),
+                "浮动条填充色 {good} 应有效"
+            );
+        }
+        let mut candidate = pod.clone();
+        candidate.bar_color = "red".into();
+        let settings = Settings {
+            pods: vec![candidate],
+            ..Settings::default()
+        };
+        assert!(validate(&settings, &data_dir).is_err(), "非法填充色应无效");
     }
 }

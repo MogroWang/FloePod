@@ -20,17 +20,11 @@ function applyDocumentTheme(theme: "light" | "dark") {
 function applyAccessibility(settings: Settings) {
   const root = document.documentElement;
   const accessibility = settings.accessibility;
-  root.classList.toggle("safety-mode", accessibility.enabled);
-  root.classList.toggle("high-contrast", accessibility.enabled && accessibility.highContrast);
-  root.classList.toggle(
-    "reduce-transparency",
-    accessibility.enabled && accessibility.reduceTransparency,
-  );
-  root.classList.toggle("reduce-motion", accessibility.enabled && accessibility.reduceMotion);
-  root.classList.toggle("simple-language", accessibility.enabled && accessibility.simpleLanguage);
-  const scale = accessibility.enabled
-    ? Math.min(2, Math.max(1, accessibility.scale || 1))
-    : 1;
+  root.classList.toggle("high-contrast", accessibility.highContrast);
+  root.classList.toggle("reduce-transparency", accessibility.reduceTransparency);
+  root.classList.toggle("reduce-motion", accessibility.reduceMotion);
+  root.classList.toggle("simple-language", accessibility.simpleLanguage);
+  const scale = Math.min(2, Math.max(1, accessibility.scale || 1));
   // WebView2 支持 CSS zoom；缩放整个交互表面，固定 px 的旧组件也能同步放大。
   document.body.style.setProperty("zoom", String(scale));
   document.body.style.setProperty("width", `${100 / scale}%`);

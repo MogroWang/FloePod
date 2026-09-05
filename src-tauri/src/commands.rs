@@ -561,6 +561,12 @@ pub async fn hide_context_menu(app: AppHandle, seq: u64, pod_id: u64) {
     crate::menu::hide(&app, seq, pod_id);
 }
 
+/// 浮动面板在指针按下时主动收起当前菜单（不校验 seq，未打开时空操作）。
+#[tauri::command]
+pub fn dismiss_context_menu(app: AppHandle) {
+    crate::menu::dismiss(&app);
+}
+
 #[tauri::command]
 pub fn log_frontend(msg: String) {
     logging::write(&format!("[frontend] {msg}"));

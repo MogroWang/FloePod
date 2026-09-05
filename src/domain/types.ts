@@ -235,6 +235,10 @@ export interface Pod {
   enabled: boolean;
   /** 边缘浮动条短边宽度（逻辑像素）。 */
   barWidth: number;
+  /** 边缘浮动条长度，即沿屏幕边缘方向的长边（逻辑像素）。 */
+  barLength: number;
+  /** 边缘浮动条填充色（#RGB/#RRGGBB/#RRGGBBAA）；空字符串表示跟随主题表面色。 */
+  barColor: string;
   /** 边缘浮动条外角圆角半径；CSS 会自动收敛超过半宽的值。 */
   cornerRadius: number;
   /** 边缘浮动条边框颜色（#RGB/#RRGGBB/#RRGGBBAA）；空字符串表示跟随主题。 */
@@ -283,8 +287,8 @@ export interface AutoBlock {
   apps: string[];
 }
 
+/** 辅助功能设置：各选项相互独立、直接生效（1.5.0 起无总开关）。 */
 export interface AccessibilitySettings {
-  enabled: boolean;
   /** WebView 内容缩放，1 = 100%，2 = 200%。 */
   scale: number;
   highContrast: boolean;

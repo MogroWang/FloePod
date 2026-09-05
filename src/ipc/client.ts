@@ -181,6 +181,8 @@ export const ipc = {
     invoke(Commands.ContextMenuChoice, { seq, podId, action }),
   hideContextMenu: (seq: number, podId: number): Promise<void> =>
     invoke(Commands.HideContextMenu, { seq, podId }),
+  /** 浮动面板在指针按下时主动收起当前菜单（后端不校验 seq，未打开时空操作）。 */
+  dismissContextMenu: (): Promise<void> => invoke(Commands.DismissContextMenu),
   logFrontend: (msg: string): Promise<void> => invoke(Commands.LogFrontend, { msg }),
   appLog: (msg: string): Promise<void> => invoke(Commands.AppLog, { msg }),
   quitApp: (): Promise<void> => invoke(Commands.QuitApp),
