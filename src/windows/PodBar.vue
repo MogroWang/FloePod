@@ -49,6 +49,11 @@ let dragStartScreenLength = 1080; // 拖动开始时的屏幕尺寸
 
 const count = computed(() => staging.activeItems.length);
 
+/* 隐匿模式：Rust 看门狗综合「无交互超时、指针是否靠近、面板是否打开」
+   后下发 BarStealth；胶囊条只负责用透明度淡入淡出，窗口保持可交互，
+   拖文件到原位置仍可暂存。 */
+const stealthHidden = ref(false);
+
 /** 胶囊条短边；后端校验范围 28-96，加载前回退默认 44。 */
 const barWidth = computed(() => Math.min(96, Math.max(28, pod.value?.barWidth ?? 44)));
 /** 拖入接纳态在匣宽度基础上加宽，与 Rust 侧 POD_BAR_ACCEPT_GROW 一致。 */
@@ -363,6 +368,15 @@ onMounted(async () => {
         console.error("collect clipboard failed", err);
       }
     }));
+
+    /* 隐匿模式状态：显示 / 隐藏由后端判定，这里只做透明度过渡。 */
+    retainUnlistener(await listenCurrent<{ hidden?: boolean }>(Events.BarStealth, (p) => {
+      stealthHidden.value = Boolean(p?.hidden);
+    }));
+
+    // 挂载即上报一次离开：把隐匿计时锚定到前端就绪时刻，同时让后端重估
+    // 隐匿状态——启动早期下发的 hidden 事件可能早于本次监听注册。
+    reportPresence(false);
   } catch (err) {
     console.error("pod bar event initialization failed", err);
   }
@@ -396,7 +410,11 @@ onBeforeUnmount(() => {
     @dragover.prevent
     @drop="onHtmlDrop"
   >
-    <div class="capsule" :class="{ accepting, hovering, dragging }" :style="capsuleStyle">
+    <div
+      class="capsule"
+      :class="{ accepting, hovering, dragging, 'stealth-hidden': stealthHidden && !accepting && !dragging }"
+      :style="capsuleStyle"
+    >
       <div class="capsule-inner">
         <Transition name="fade">
           <div v-if="accepting" class="drop-hint" :class="{ 'drop-hint-horizontal': horizontal }">松手暂存</div>
@@ -436,7 +454,12 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: box-shadow 200ms var(--ease-out), background 200ms var(--ease-out);
+  transition: box-shadow 200ms var(--ease-out), background 200ms var(--ease-out),
+    opacity 420ms ease;
+}
+/* 隐匿模式：整体淡化隐去；指针靠近（后端判定）或重新交互时淡入 */
+.capsule.stealth-hidden {
+  opacity: 0;
 }
 .edge-left .capsule {
   left: 0;

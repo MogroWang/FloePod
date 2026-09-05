@@ -193,6 +193,10 @@ pub struct Pod {
     pub auto_hide: bool,
     /// 鼠标离开后到自动隐藏的延迟（毫秒）。
     pub auto_hide_delay_ms: u64,
+    /// 隐匿模式：无交互超过延迟后胶囊条淡化隐去，指针靠近时再淡入。
+    pub stealth: bool,
+    /// 隐匿模式下无交互到淡化隐去的延迟（毫秒）。
+    pub stealth_delay_ms: u64,
     pub drop_action: String,
     pub enabled: bool,
     /// 胶囊条短边宽度（CSS 逻辑像素）；面板宽度由 panel_width 控制。
@@ -228,6 +232,8 @@ impl Default for Pod {
             hover_open: true,
             auto_hide: true,
             auto_hide_delay_ms: 320,
+            stealth: false,
+            stealth_delay_ms: 3000,
             drop_action: "ask".into(),
             enabled: true,
             bar_width: 44,
@@ -533,6 +539,9 @@ fn validate_impl(s: &Settings, data_dir: &str, allow_missing_roots: bool) -> Res
         }
         if pod.auto_hide_delay_ms > 5000 {
             return Err(format!("匣「{}」的自动隐藏延迟无效", pod.name));
+        }
+        if pod.stealth_delay_ms > 60_000 {
+            return Err(format!("匣「{}」的隐匿延迟无效", pod.name));
         }
         if !(300..=520).contains(&pod.panel_width) {
             return Err(format!("匣「{}」的面板宽度无效", pod.name));
@@ -918,6 +927,8 @@ mod tests {
                     "hoverDelayMs": 600,
                     "autoHide": false,
                     "autoHideDelayMs": 480,
+                    "stealth": true,
+                    "stealthDelayMs": 5000,
                     "dropAction": "move",
                     "enabled": true,
                     "barWidth": 56,
@@ -941,6 +952,8 @@ mod tests {
                     "hoverDelayMs": 0,
                     "autoHide": true,
                     "autoHideDelayMs": 320,
+                    "stealth": false,
+                    "stealthDelayMs": 3000,
                     "dropAction": "shortcut",
                     "enabled": false,
                     "barWidth": 36,
@@ -966,6 +979,8 @@ mod tests {
         assert_eq!(loaded.pods[0].panel_color, "#aabbcc");
         assert!(!loaded.pods[0].auto_hide);
         assert_eq!(loaded.pods[0].auto_hide_delay_ms, 480);
+        assert!(loaded.pods[0].stealth);
+        assert_eq!(loaded.pods[0].stealth_delay_ms, 5000);
         assert_eq!(loaded.pods[1].drop_action, "shortcut");
         assert_eq!(loaded.pods[1].panel_material, "acrylic");
         assert!(loaded.pods[1].auto_hide);

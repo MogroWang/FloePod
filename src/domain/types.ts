@@ -212,8 +212,7 @@ export interface Pod {
   offset: number;
   stagingFolder: string;
   opacity: number;
-  material: Material;
-  /** 面板材质；与胶囊条材质独立设置。 */
+  /** 面板材质；与胶囊条独立，胶囊条固定普通半透明、不提供材质设置。 */
   panelMaterial: Material;
   /** 面板填充色不透明度 0.1-1；作用于面板背景填充色。 */
   panelOpacity: number;
@@ -227,6 +226,10 @@ export interface Pod {
   autoHide: boolean;
   /** 鼠标离开后到自动收起的延迟（毫秒）。 */
   autoHideDelayMs: number;
+  /** 隐匿模式：无交互超过延迟后胶囊条淡化隐去，鼠标靠近时再淡入。 */
+  stealth: boolean;
+  /** 隐匿模式下无交互到淡化隐去的延迟（毫秒）。 */
+  stealthDelayMs: number;
   dropAction: DropAction;
   enabled: boolean;
   /** 胶囊条短边宽度（逻辑像素）。 */

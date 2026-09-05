@@ -35,7 +35,7 @@ Release 工作流支持以下 GitHub Actions secrets：
 ```powershell
 $env:FLOEPOD_SIGN_CERT_PATH = "D:\secure\floepod.pfx"
 $env:FLOEPOD_SIGN_CERT_PASSWORD = "由安全输入提供"
-pwsh -File scripts/sign-windows-artifacts.ps1 -Path .\dist\FloePod-1.3.0-win-x64.msix
+pwsh -File scripts/sign-windows-artifacts.ps1 -Path .\dist\FloePod-1.4.0-win-x64.msix
 ```
 
 不要把证书或密码提交到仓库。
@@ -43,7 +43,7 @@ pwsh -File scripts/sign-windows-artifacts.ps1 -Path .\dist\FloePod-1.3.0-win-x64
 ## 静默安装
 
 ```powershell
-msiexec.exe /i FloePod_1.3.0_x64_en-US.msi /qn /norestart
+msiexec.exe /i FloePod_1.4.0_x64_en-US.msi /qn /norestart
 ```
 
 NSIS 通常支持 `/S`，MSIX 可由管理员使用 `Add-AppxPackage`、Intune 或受信任的软件分发系统部署。MSIX 的 `Publisher` 必须与签名证书主题完全一致；可通过 `FLOEPOD_MSIX_PUBLISHER` 或 `package-msix.ps1 -Publisher` 指定。

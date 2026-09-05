@@ -208,44 +208,59 @@ onMounted(refresh);
 </template>
 
 <style scoped>
+/* 卡片规格与设置窗口 .settings-card 保持一致：同圆角、同内边距、同控件规格 */
 .safety-center {
   display: grid;
-  gap: 16px;
+  gap: 14px;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-raised);
 }
 .regret-card {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 18px;
-  padding: 16px;
+  padding: 14px;
   border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
-  border-radius: 14px;
+  border-radius: 10px;
   background: var(--accent-soft);
 }
 .regret-card h3 {
   margin: 0 0 4px;
-  font-size: 16px;
+  font-size: 15px;
 }
 .regret-card p {
   margin: 0;
   color: var(--ink-2);
+  font-size: 12.5px;
 }
 .regret-button,
 .secondary-button {
-  min-height: 36px;
-  padding: 0 14px;
+  min-height: 32px;
+  padding: 6px 13px;
   border: 1px solid var(--line-strong);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--surface-raised);
   color: var(--ink);
-  font-weight: 650;
+  font-size: 12.5px;
+  font-weight: 550;
+  font-family: inherit;
   cursor: pointer;
+  transition: background 150ms var(--ease-out), border-color 150ms var(--ease-out);
+}
+.secondary-button:hover {
+  background: var(--surface-hover);
 }
 .regret-button {
   min-width: 110px;
   border-color: var(--accent);
   background: var(--accent);
   color: var(--on-accent);
+}
+.regret-button:hover {
+  background: var(--accent-hover);
 }
 button:disabled {
   opacity: 0.55;
@@ -264,23 +279,27 @@ button:disabled {
   font-size: 12px;
 }
 .history-toolbar select {
-  min-height: 36px;
+  min-height: 32px;
   padding: 0 34px 0 10px;
   border: 1px solid var(--line-strong);
-  border-radius: 9px;
+  border-radius: 8px;
   background: var(--surface-raised);
   color: var(--ink);
+  font-size: 12.5px;
+  font-family: inherit;
 }
 .sr-status {
   min-height: 20px;
   margin: 0;
   color: var(--ink-2);
+  font-size: 12px;
 }
 .empty-history {
   padding: 26px;
   border: 1px dashed var(--line-strong);
-  border-radius: 12px;
+  border-radius: 10px;
   color: var(--ink-2);
+  font-size: 12.5px;
   text-align: center;
 }
 .timeline {

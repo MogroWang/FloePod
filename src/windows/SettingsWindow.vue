@@ -291,6 +291,7 @@ type PodNumberField =
   | "panelWidth"
   | "hoverDelayMs"
   | "autoHideDelayMs"
+  | "stealthDelayMs"
   | "barWidth"
   | "cornerRadius"
   | "borderOpacity";
@@ -436,7 +437,6 @@ async function confirmAddPod() {
       offset: 0.5,
       stagingFolder: folder,
       opacity: 1,
-      material: "plain",
       panelMaterial: "acrylic",
       panelOpacity: 1,
       panelColor: "",
@@ -445,6 +445,8 @@ async function confirmAddPod() {
       hoverOpen: true,
       autoHide: true,
       autoHideDelayMs: 320,
+      stealth: false,
+      stealthDelayMs: 3000,
       dropAction: "ask",
       enabled: true,
       barWidth: 44,
@@ -541,8 +543,6 @@ function oobePodConfig(): Omit<Pod, "id"> {
     offset: 0.5,
     stagingFolder: oobe.value.folder,
     opacity: Number(oobe.value.opacity),
-    // 胶囊条无材质设置（固定普通）；OOBE 里选的材质只作用于面板。
-    material: "plain",
     panelMaterial: oobe.value.material,
     panelOpacity: Number(oobe.value.opacity),
     panelColor: "",
@@ -551,6 +551,8 @@ function oobePodConfig(): Omit<Pod, "id"> {
     hoverOpen: true,
     autoHide: true,
     autoHideDelayMs: 320,
+    stealth: false,
+    stealthDelayMs: 3000,
     dropAction: "ask",
     enabled: true,
     barWidth: 44,
@@ -865,9 +867,9 @@ onBeforeUnmount(() => disposeToast());
 
 const PAGES = [
   { id: "general", label: "常规" },
-  { id: "safety", label: "安心中心" },
-  { id: "block", label: "自动屏蔽" },
   { id: "pods", label: "匣" },
+  { id: "block", label: "自动屏蔽" },
+  { id: "safety", label: "安心中心" },
   { id: "hotkeys", label: "快捷键" },
   { id: "about", label: "关于" },
 ] as const;
@@ -1513,28 +1515,53 @@ const PAGES = [
                         </div>
                       </div>
                       <div class="frow">
-                        <span class="flabel">自动隐藏</span>
+                        <span class="flabel">匣面板自动收起</span>
                         <div class="fctrl">
                           <ToggleSwitch
-                            label="自动隐藏"
+                            label="匣面板自动收起"
                             :model-value="pod.autoHide"
                             @update:model-value="(v) => savePod(pod.id, { autoHide: v })"
                           />
                         </div>
                       </div>
                       <div v-if="pod.autoHide" class="frow">
-                        <span class="flabel">隐藏延迟</span>
+                        <span class="flabel">收起延迟</span>
                         <div class="fctrl">
                           <RangeSlider
                             :value="podNumberValue(pod, 'autoHideDelayMs')"
                             :min="0"
                             :max="2000"
                             :step="20"
-                            aria-label="隐藏延迟"
+                            aria-label="收起延迟"
                             @update:value="(v) => previewPodNumber(pod.id, 'autoHideDelayMs', v)"
                             @commit="(v) => commitPodNumber(pod, 'autoHideDelayMs', v)"
                           />
                           <span class="fval">{{ podNumberValue(pod, "autoHideDelayMs") }}ms</span>
+                        </div>
+                      </div>
+                      <div class="frow">
+                        <span class="flabel">隐匿模式</span>
+                        <div class="fctrl">
+                          <ToggleSwitch
+                            label="隐匿模式"
+                            :model-value="pod.stealth"
+                            @update:model-value="(v) => savePod(pod.id, { stealth: v })"
+                          />
+                        </div>
+                      </div>
+                      <div v-if="pod.stealth" class="frow">
+                        <span class="flabel">隐匿延迟</span>
+                        <div class="fctrl">
+                          <RangeSlider
+                            :value="podNumberValue(pod, 'stealthDelayMs')"
+                            :min="500"
+                            :max="20000"
+                            :step="250"
+                            aria-label="隐匿延迟"
+                            @update:value="(v) => previewPodNumber(pod.id, 'stealthDelayMs', v)"
+                            @commit="(v) => commitPodNumber(pod, 'stealthDelayMs', v)"
+                          />
+                          <span class="fval">{{ (podNumberValue(pod, "stealthDelayMs") / 1000).toFixed(2).replace(/\.?0+$/, "") }}s</span>
                         </div>
                       </div>
                     </div>
@@ -1623,7 +1650,7 @@ const PAGES = [
                     <span class="about-val">{{ s.pods.length }} 个</span>
                   </div>
                 </div>
-                <div class="reset-line">
+                <div class="reset-line about-update-line">
                   <button type="button" class="btn" @click="checkUpdates">查看最新版本与下载</button>
                 </div>
               </template>
@@ -2084,6 +2111,11 @@ select.input {
 }
 .reset-line {
   margin-top: 18px;
+}
+/* 关于页的版本按钮与居中的 about-hero / about-meta 对齐 */
+.about-update-line {
+  display: flex;
+  justify-content: center;
 }
 
 .pod-picker {

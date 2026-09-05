@@ -13,6 +13,8 @@ pub const PANEL_HIDDEN: &str = "floepod://panel-hidden";
 pub const COLLECT_CLIPBOARD: &str = "floepod://collect-clipboard";
 pub const REQUEST_FILE_PICKER: &str = "floepod://request-file-picker";
 pub const POD_LOCK_CHANGED: &str = "floepod://pod-lock-changed";
+/// 隐匿模式状态变化：胶囊条应淡化隐去（true）或淡入显示（false）。
+pub const BAR_STEALTH: &str = "floepod://bar-stealth";
 
 pub fn pod_bar_label(pod_id: u64) -> String {
     format!("pod_{pod_id}")

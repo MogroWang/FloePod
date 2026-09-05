@@ -53,7 +53,7 @@ fn apply_patch(pod: &mut Pod, patch: &serde_json::Value) -> Result<(), String> {
             "offset" => pod.offset = numeric(value, field)?,
             "stagingFolder" => pod.staging_folder = string(value, field)?,
             "opacity" => pod.opacity = numeric(value, field)?,
-            "material" => pod.material = string(value, field)?,
+            // 胶囊条材质固定普通（1.3.0 起废弃），不再接受设置。
             "panelMaterial" => pod.panel_material = string(value, field)?,
             "panelOpacity" => pod.panel_opacity = numeric(value, field)?,
             "panelColor" => pod.panel_color = string(value, field)?,
@@ -73,6 +73,12 @@ fn apply_patch(pod: &mut Pod, patch: &serde_json::Value) -> Result<(), String> {
                     .ok_or_else(|| format!("字段 {field} 必须是布尔值"))?;
             }
             "autoHideDelayMs" => pod.auto_hide_delay_ms = unsigned(value, field)?,
+            "stealth" => {
+                pod.stealth = value
+                    .as_bool()
+                    .ok_or_else(|| format!("字段 {field} 必须是布尔值"))?;
+            }
+            "stealthDelayMs" => pod.stealth_delay_ms = unsigned(value, field)?,
             "dropAction" => pod.drop_action = string(value, field)?,
             "barWidth" => {
                 pod.bar_width = u32::try_from(unsigned(value, field)?)
@@ -369,6 +375,15 @@ mod tests {
         assert!(apply_patch(&mut pod, &serde_json::json!({ "barWidth": -1 })).is_err());
         assert!(apply_patch(&mut pod, &serde_json::json!({ "cornerRadius": -1 })).is_err());
         assert!(apply_patch(&mut pod, &serde_json::json!({ "typo": true })).is_err());
+        // 胶囊条材质 1.3.0 起固定普通：设置接口不再接受 material 字段。
+        assert!(apply_patch(&mut pod, &serde_json::json!({ "material": "mica" })).is_err());
+
+        // 隐匿模式：布尔 + 数字字符串均可解析。
+        apply_patch(&mut pod, &serde_json::json!({ "stealth": true, "stealthDelayMs": "2000" }))
+            .unwrap();
+        assert!(pod.stealth);
+        assert_eq!(pod.stealth_delay_ms, 2000);
+        assert!(apply_patch(&mut pod, &serde_json::json!({ "stealth": "yes" })).is_err());
     }
 
     #[test]

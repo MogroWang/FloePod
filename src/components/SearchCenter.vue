@@ -131,9 +131,14 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer));
 </template>
 
 <style scoped>
+/* 卡片规格与设置窗口 .settings-card 保持一致：同圆角、同内边距、同控件规格 */
 .search-center {
   display: grid;
-  gap: 9px;
+  gap: 10px;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-raised);
 }
 .search-bar {
   display: grid;
@@ -146,28 +151,47 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer));
 }
 input,
 textarea {
-  min-height: 38px;
-  padding: 7px 10px;
+  min-height: 32px;
+  padding: 6px 10px;
   border: 1px solid var(--line-strong);
-  border-radius: 9px;
+  border-radius: 8px;
   background: var(--surface-raised);
   color: var(--ink);
+  font-size: 12.5px;
+  font-family: inherit;
+}
+input:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 textarea {
   resize: vertical;
 }
 button {
-  min-height: 36px;
-  padding: 0 11px;
+  min-height: 32px;
+  padding: 6px 13px;
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   background: var(--surface-raised);
   color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 550;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 150ms var(--ease-out), border-color 150ms var(--ease-out);
+}
+button:hover {
+  background: var(--surface-hover);
 }
 button.primary {
   border-color: var(--accent);
   background: var(--accent);
   color: var(--on-accent);
+}
+button.primary:hover {
+  background: var(--accent-hover);
 }
 .syntax,
 .message {
@@ -188,6 +212,7 @@ button.primary {
   border: 1px dashed var(--line-strong);
   border-radius: 10px;
   color: var(--ink-2);
+  font-size: 12.5px;
   text-align: center;
 }
 .results {

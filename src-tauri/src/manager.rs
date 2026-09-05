@@ -245,16 +245,19 @@ fn bar_geometry_for_monitor(
     (x, y, w, h)
 }
 
-fn bar_geometry(app: &AppHandle, pod: &Pod, accepting: bool) -> Option<(i32, i32, i32, i32)> {
-    // (x, y, w, h)，物理像素
+/// 胶囊条窗口的几何与所在显示器缩放率（物理像素）。
+fn bar_geometry(app: &AppHandle, pod: &Pod, accepting: bool) -> Option<((i32, i32, i32, i32), f64)> {
     let target = monitor(app, pod)?;
-    Some(bar_geometry_for_monitor(
-        target.rect,
-        &pod.edge,
-        pod.offset,
-        accepting,
+    Some((
+        bar_geometry_for_monitor(
+            target.rect,
+            &pod.edge,
+            pod.offset,
+            accepting,
+            target.scale_factor,
+            pod.bar_width,
+        ),
         target.scale_factor,
-        pod.bar_width,
     ))
 }
 
@@ -262,11 +265,20 @@ pub fn place_pod_bar(app: &AppHandle, pod: &Pod, accepting: bool) {
     let Some(bar) = pod_bar(app, pod.id) else {
         return;
     };
-    let Some((x, y, w, h)) = bar_geometry(app, pod, accepting) else {
+    let Some(((x, y, w, h), scale)) = bar_geometry(app, pod, accepting) else {
         return;
     };
     let _ = bar.set_size(PhysicalSize::new(w as u32, h as u32));
     let _ = bar.set_position(PhysicalPosition::new(x, y));
+    // 记录最近一次摆放的几何与缩放率：隐匿模式的看门狗用它判断指针是否
+    // 靠近，避免每次 tick 都读库。
+    {
+        let state = app.state::<AppState>();
+        let mut guard = state.pods.lock().unwrap();
+        let runtime = guard.entry(pod.id).or_default();
+        runtime.bar_rect = Some((x, y, w, h));
+        runtime.bar_scale = scale;
+    }
     // 胶囊条材质已废弃（固定普通半透明），无需按材质裁剪区域；
     // 以 radius=0 清除历史残留的区域，并顺带幂等清理非客户区样式。
     if let Ok(hwnd) = bar.hwnd() {
@@ -484,45 +496,38 @@ fn sync_pods_with_settings(app: &AppHandle, s: &Settings) {
     }
 }
 
-/// 面板云母 / 普通材质：tauri 的 set_effects（Win11 22H2+ 走 DWM systembackdrop）。
-/// 面板是矩形窗口 + 系统圆角，systembackdrop 与 DWM 圆角轮廓天然对齐；
-/// 云母不随窗口焦点移除，可以放心使用。
-fn apply_material(window: &WebviewWindow, material: &str) -> bool {
-    use tauri::window::{Effect, EffectsBuilder};
-    let effect = match material {
-        // 云母仅在 Windows 11 可用；不支持的系统上 set_effects 返回 Err，
-        // 忽略后表现为普通半透明。
-        "mica" => Some(Effect::Mica),
-        _ => None,
-    };
-    match effect {
-        Some(effect) => {
-            let config = EffectsBuilder::new().effects([effect]).build();
-            window.set_effects(Some(config)).is_ok()
-        }
-        None => window.set_effects(None).is_ok(),
-    }
+/// 清除 DWM systembackdrop（tauri set_effects）。亚克力与云母统一改走
+/// 随窗口常驻的 ACCENT 通道，这里只负责切换材质前清掉旧 systembackdrop，
+/// 避免两套机制叠加（云母纹理盖在 ACCENT 模糊之上）。
+fn clear_system_backdrop(window: &WebviewWindow) -> bool {
+    window.set_effects(None).is_ok()
 }
 
 /// 透明浮层材质落地：供匣面板与右键菜单共用，按材质分流到不同系统机制。
 ///
-/// 亚克力走 SWCA ACCENT（见 win::apply_panel_acrylic）：DWM 系统背景
-/// （tauri set_effects 的 systembackdrop）在窗口失焦后移除整个 backdrop，
-/// 而面板免激活显示、绝大多数时间不持有焦点，是「不聚焦就看不到材质」
-/// 的根源。云母无此限制（失焦不移除），仍走 tauri set_effects；普通即
-/// 无系统材质。任何分支都先清掉 ACCENT 与 DWM effect 两个通道，避免
-/// 云母切到亚克力时旧 systembackdrop 与新 ACCENT 叠加。
+/// 亚克力与云母统一走 SWCA ACCENT（见 win::apply_panel_acrylic /
+/// win::apply_panel_mica）：DWM 系统背景（tauri set_effects 的
+/// systembackdrop）在窗口失焦后移除整个 backdrop 且重放无效，而面板免
+/// 激活显示、绝大多数时间不持有焦点，是「不聚焦就看不到材质」的根源；
+/// ACCENT 策略随窗口常驻，聚焦与失焦表现一致。普通即无系统材质。
+/// 任何分支都先清掉 ACCENT 与 DWM effect 两个通道，避免材质切换时叠加。
 pub(crate) fn apply_window_material(window: &WebviewWindow, material: &str) -> bool {
     let Ok(hwnd) = window.hwnd() else {
         return false;
     };
     win::disable_accent(hwnd.0 as isize);
-    let _ = apply_material(window, "plain");
-    match material {
+    let _ = clear_system_backdrop(window);
+    let applied = match material {
         "acrylic" => win::apply_panel_acrylic(hwnd.0 as isize),
-        "mica" => apply_material(window, "mica"),
+        // 云母只在 Win11 有视觉效果；旧系统返回 false，依赖返回值做
+        // 降级（右键菜单近实心底色）的调用方会回落到普通。
+        "mica" => win::host_backdrop_available() && win::apply_panel_mica(hwnd.0 as isize),
         _ => true,
-    }
+    };
+    // 切换材质后 WebView2 不一定立即重新合成；主动重绘一次，旧材质不再
+    // 残留到下一次自然重绘。
+    win::redraw_window(hwnd.0 as isize);
+    applied
 }
 
 /// 强制刷新指定匣胶囊条的无边框状态。透明 WebView2 的幽灵标题栏可能由
@@ -568,13 +573,15 @@ pub fn refresh_window_material(app: &AppHandle, label: &str) {
             }
         }
         Some("mica") => {
-            let _ = apply_material(&window, "mica");
+            if let Ok(hwnd) = window.hwnd() {
+                let _ = win::apply_panel_mica(hwnd.0 as isize);
+            }
         }
         _ => {}
     }
 }
 
-/// 把与运行态相关的配置同步进 PodRuntime（自动隐藏设置）。
+/// 把与运行态相关的配置同步进 PodRuntime（自动隐藏 / 隐匿模式设置）。
 /// 面板材质不在这里处理：必须对隐藏的面板也落地，见 apply_panel_material_if_changed。
 fn sync_runtime_config(app: &AppHandle, pod: &Pod) {
     let state = app.state::<AppState>();
@@ -582,6 +589,8 @@ fn sync_runtime_config(app: &AppHandle, pod: &Pod) {
     let runtime = guard.entry(pod.id).or_default();
     runtime.auto_hide_enabled = pod.auto_hide;
     runtime.auto_hide_delay_ms = pod.auto_hide_delay_ms;
+    runtime.stealth_enabled = pod.stealth;
+    runtime.stealth_delay_ms = pod.stealth_delay_ms;
 }
 
 /// 面板材质只在变化时重设（每次显示都重设亚克力会引起重绘闪烁）。
@@ -614,6 +623,9 @@ fn apply_panel_material_if_changed(app: &AppHandle, pod: &Pod) {
         if let Some(panel) = pod_panel(app, pod.id) {
             let _ = apply_window_material(&panel, material);
         }
+        // 材质策略变化会触发 DWM 重新合成同一显示器上的兄弟窗口；
+        // 顺带刷新胶囊条渲染，保证所有匣窗口与新材料状态一致。
+        refresh_pod_bar_chrome(app, pod.id);
     }
 }
 
@@ -1034,9 +1046,82 @@ pub fn move_pod_bar(app: &AppHandle, id: u64, offset: f64) {
     place_pod_bar(app, &pod, false);
 }
 
+/// 指针距胶囊条多近视为「靠近」（逻辑像素）：隐匿中的胶囊条在该范围内淡入。
+const STEALTH_PROXIMITY: f64 = 48.0;
+
+/// 光标是否落在矩形外扩 proximity（按缩放率换算为物理像素）的范围内。
+fn cursor_near(rect: (i32, i32, i32, i32), scale: f64) -> bool {
+    let Some((cx, cy)) = win::cursor_pos() else {
+        return false;
+    };
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    let pad = (STEALTH_PROXIMITY * scale).round() as i32;
+    let (x, y, w, h) = rect;
+    cx >= x - pad && cx <= x + w + pad && cy >= y - pad && cy <= y + h + pad
+}
+
+/// 更新胶囊条的隐匿状态并按需通知前端。
+fn set_bar_stealth(app: &AppHandle, id: u64, hidden: bool) {
+    {
+        let state = app.state::<AppState>();
+        state
+            .pods
+            .lock()
+            .unwrap()
+            .entry(id)
+            .or_default()
+            .bar_stealth_hidden = hidden;
+    }
+    let label = events::pod_bar_label(id);
+    if app.get_webview_window(&label).is_some() {
+        let _ = app.emit_to(label, events::BAR_STEALTH, serde_json::json!({ "hidden": hidden }));
+    }
+}
+
+/// 隐匿模式判定：胶囊条仅在「开启隐匿、面板未打开、无交互超过延迟、且
+/// 指针不在附近」时淡化隐去；任一条件不满足则恢复显示。状态变化时向
+/// 胶囊条窗口发事件，由前端做透明度过渡，窗口本身保持可交互（拖文件到
+/// 原位置仍能暂存）。由看门狗每个 tick 调用，全部读取内存运行态。
+fn update_bar_stealth(app: &AppHandle, id: u64, now: Instant) {
+    let state = app.state::<AppState>();
+    let (enabled, delay_ms, hidden, rect, scale, panel_visible, last_change) = {
+        let guard = state.pods.lock().unwrap();
+        match guard.get(&id) {
+            Some(runtime) => (
+                runtime.stealth_enabled,
+                runtime.stealth_delay_ms,
+                runtime.bar_stealth_hidden,
+                runtime.bar_rect,
+                runtime.bar_scale,
+                runtime.panel_visible,
+                runtime.last_change,
+            ),
+            None => return,
+        }
+    };
+    // last_change 缺失（从未交互）视为已超时：隐匿匣在启动 / 恢复显示后
+    // 若指针不在附近，到期即淡出。
+    let should_hide = enabled
+        && !panel_visible
+        && last_change
+            .map(|changed| {
+                now.saturating_duration_since(changed) > Duration::from_millis(delay_ms)
+            })
+            .unwrap_or(true)
+        && !rect.map(|rect| cursor_near(rect, scale)).unwrap_or(false);
+    if should_hide != hidden {
+        set_bar_stealth(app, id, should_hide);
+    }
+}
+
 /// 看门狗：逐个匣检查--面板未固定、未在拖出、列表模式且指针离开超过宽限期 -> 淡出隐藏。
 /// 单一活动面板由 show_panel / report_presence 主动维持；这里只负责指针离开后的兜底隐藏。
-/// 关闭了「自动隐藏」的匣不参与自动隐藏，面板保持到用户手动关闭。
+/// 关闭了「匣面板自动收起」的匣不参与自动隐藏，面板保持到用户手动关闭。
+/// 隐匿模式（胶囊条淡出 / 淡入）也在同一循环里判定。
 pub fn spawn_watchdog(app: AppHandle) {
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_millis(100));
@@ -1049,12 +1134,13 @@ pub fn spawn_watchdog(app: AppHandle) {
             continue;
         }
         let ids: Vec<u64> = state.pods.lock().unwrap().keys().copied().collect();
+        let now = Instant::now();
         for id in ids {
-            let now = Instant::now();
             transition_to_hidden_locked(&app, id, |runtime| {
                 runtime.auto_hide_enabled
                     && runtime.can_auto_hide(now, Duration::from_millis(runtime.auto_hide_delay_ms))
             });
+            update_bar_stealth(&app, id, now);
         }
     });
 }

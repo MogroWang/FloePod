@@ -144,6 +144,7 @@ onMounted(refreshStatus);
 </template>
 
 <style scoped>
+/* 卡片规格与设置窗口 .settings-card 保持一致：同圆角、同行距、同分隔线 */
 .security-editor {
   overflow: hidden;
   border: 1px solid var(--line);
@@ -151,14 +152,14 @@ onMounted(refreshStatus);
   background: var(--surface-raised);
 }
 .security-editor :deep(.row) {
-  padding: 12px 14px;
+  padding: 14px 16px;
 }
 .security-note,
 .security-status {
   display: grid;
   gap: 4px;
-  margin: 12px;
-  padding: 10px;
+  margin: 14px 16px;
+  padding: 10px 12px;
   border-radius: 9px;
   background: var(--accent-soft);
 }
@@ -166,14 +167,14 @@ onMounted(refreshStatus);
 .disable-note {
   margin: 0;
   color: var(--ink-2);
-  font-size: 11px;
+  font-size: 11.5px;
 }
 .disable-note {
-  padding: 0 14px 13px;
+  padding: 0 16px 14px;
 }
 .sep {
   height: 1px;
-  margin: 0 14px;
+  margin: 0 16px;
   background: var(--line);
 }
 .number-control,
@@ -184,12 +185,19 @@ onMounted(refreshStatus);
 }
 .number-control input {
   width: 92px;
-  min-height: 34px;
-  padding: 5px 8px;
+  min-height: 32px;
+  padding: 6px 10px;
   border: 1px solid var(--line-strong);
   border-radius: 8px;
-  background: var(--surface);
+  background: var(--surface-raised);
   color: var(--ink);
+  font-size: 12.5px;
+  font-family: inherit;
+  outline: none;
+}
+.number-control input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .number-control span,
 .security-status {
@@ -201,15 +209,26 @@ onMounted(refreshStatus);
 }
 button {
   min-height: 32px;
-  padding: 0 10px;
+  padding: 6px 13px;
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   background: var(--surface-raised);
   color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 550;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 150ms var(--ease-out), border-color 150ms var(--ease-out);
+}
+button:hover {
+  background: var(--surface-hover);
 }
 button.primary {
   border-color: var(--accent);
   background: var(--accent);
   color: var(--on-accent);
+}
+button.primary:hover {
+  background: var(--accent-hover);
 }
 </style>

@@ -46,6 +46,17 @@ pub struct PodRuntime {
     pub auto_hide_enabled: bool,
     /// 鼠标离开后到自动隐藏的延迟（毫秒）。
     pub auto_hide_delay_ms: u64,
+    /// 隐匿模式配置；apply_settings 时随配置刷新（看门狗线程低频读取）。
+    pub stealth_enabled: bool,
+    /// 隐匿模式下无交互到淡化隐去的延迟（毫秒）。
+    pub stealth_delay_ms: u64,
+    /// 胶囊条当前是否处于隐匿（透明度淡出）状态；变化时向胶囊条发事件。
+    pub bar_stealth_hidden: bool,
+    /// 最近一次摆放的胶囊条矩形（物理像素），供看门狗计算指针接近距离，
+    /// 避免每次 tick 都读库取配置。
+    pub bar_rect: Option<(i32, i32, i32, i32)>,
+    /// 胶囊条所在显示器的缩放率，与 bar_rect 配套。
+    pub bar_scale: f64,
 }
 
 /// 剪切拖出开始时捕获的文件身份。稳定版 Rust 当前使用创建时间、写入时间、
@@ -113,6 +124,11 @@ impl Default for PodRuntime {
             panel_material: None,
             auto_hide_enabled: true,
             auto_hide_delay_ms: 320,
+            stealth_enabled: false,
+            stealth_delay_ms: 3000,
+            bar_stealth_hidden: false,
+            bar_rect: None,
+            bar_scale: 1.0,
         }
     }
 }

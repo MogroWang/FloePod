@@ -122,9 +122,14 @@ onMounted(loadPolicy);
 </template>
 
 <style scoped>
+/* 卡片规格与设置窗口 .settings-card 保持一致：同圆角、同内边距、同控件规格 */
 .organization-center {
   display: grid;
   gap: 10px;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-raised);
 }
 .policy-summary {
   display: grid;
@@ -154,12 +159,24 @@ onMounted(loadPolicy);
   gap: 7px;
 }
 button {
-  min-height: 36px;
-  padding: 0 11px;
+  min-height: 32px;
+  padding: 6px 13px;
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   background: var(--surface-raised);
   color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 550;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 150ms var(--ease-out), border-color 150ms var(--ease-out);
+}
+button:hover {
+  background: var(--surface-hover);
+}
+button:disabled {
+  opacity: 0.55;
+  cursor: wait;
 }
 .privacy-note,
 .message {

@@ -10,6 +10,7 @@ export const Events = {
   CollectClipboard: "floepod://collect-clipboard",
   RequestFilePicker: "floepod://request-file-picker",
   PodLockChanged: "floepod://pod-lock-changed",
+  BarStealth: "floepod://bar-stealth",
   ContextMenuShow: "floepod://context-menu-show",
   ContextMenuChoice: "floepod://context-menu-choice",
   ContextMenuClosed: "floepod://context-menu-closed",

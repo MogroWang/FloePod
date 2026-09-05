@@ -1446,7 +1446,6 @@ function executeInlineMenu(spec: MenuItemSpec) {
   justify-content: space-between;
   gap: 8px;
   padding: 8px 12px 10px;
-  border-top: 1px solid var(--glass-line);
   min-height: 44px;
 }
 .sel-count {

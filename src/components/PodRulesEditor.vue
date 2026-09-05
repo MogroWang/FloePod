@@ -238,6 +238,7 @@ async function pickSourceFolder() {
 </template>
 
 <style scoped>
+/* 卡片规格与设置窗口 .settings-card 保持一致：同圆角、同行距、同分隔线 */
 .rules-editor {
   overflow: hidden;
   border: 1px solid var(--line);
@@ -245,21 +246,28 @@ async function pickSourceFolder() {
   background: var(--surface-raised);
 }
 .rules-editor :deep(.row) {
-  padding: 12px 14px;
+  padding: 14px 16px;
 }
 .sep {
   height: 1px;
-  margin: 0 14px;
+  margin: 0 16px;
   background: var(--line);
 }
 .rule-input {
   width: 210px;
-  min-height: 34px;
-  padding: 5px 9px;
+  min-height: 32px;
+  padding: 6px 10px;
   border: 1px solid var(--line-strong);
   border-radius: 8px;
-  background: var(--surface);
+  background: var(--surface-raised);
   color: var(--ink);
+  font-size: 12.5px;
+  font-family: inherit;
+  outline: none;
+}
+.rule-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .rule-input.compact {
   width: 150px;
@@ -290,11 +298,19 @@ async function pickSourceFolder() {
 }
 .rule-button {
   flex-shrink: 0;
-  min-height: 34px;
-  padding: 0 9px;
+  min-height: 32px;
+  padding: 6px 13px;
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   background: var(--surface-raised);
   color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 550;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 150ms var(--ease-out), border-color 150ms var(--ease-out);
+}
+.rule-button:hover {
+  background: var(--surface-hover);
 }
 </style>

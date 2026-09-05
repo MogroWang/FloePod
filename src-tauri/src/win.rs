@@ -45,6 +45,15 @@ pub fn modifier_state() -> ModifierState {
     }
 }
 
+/// 当前光标的物理屏幕坐标；失败（权限不足等）返回 None。
+/// 隐匿模式用它判断指针是否靠近胶囊条。
+pub fn cursor_pos() -> Option<(i32, i32)> {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    let mut point = POINT { x: 0, y: 0 };
+    (unsafe { GetCursorPos(&mut point) } != 0).then_some((point.x, point.y))
+}
+
 /// SW_SHOWNOACTIVATE 显示 + 无激活置顶：
 /// 面板出现时不从用户当前应用抢走键盘焦点。
 pub fn show_no_activate(hwnd: isize) {
@@ -376,6 +385,78 @@ pub fn disable_accent(hwnd: isize) {
 pub fn apply_panel_acrylic(hwnd: isize) -> bool {
     // ACCENT_ENABLE_ACRYLICBLURBEHIND = 4
     set_accent(hwnd, 4)
+}
+
+/// 面板云母材质：ACCENT_ENABLE_HOSTBACKDROP（Win11 的 HostBackdrop / 云母）。
+/// 与亚克力同理，云母必须走 ACCENT 通道而不是 DWM systembackdrop：
+/// systembackdrop 在窗口失焦后被 DWM 移除且重放无效，面板免激活显示、
+/// 几乎不持有焦点；ACCENT 策略随窗口常驻，聚焦与失焦表现一致。
+/// 不支持的旧系统上调用无效果，表现为普通半透明（与旧版降级一致）。
+pub fn apply_panel_mica(hwnd: isize) -> bool {
+    // ACCENT_ENABLE_HOSTBACKDROP = 5
+    set_accent(hwnd, 5)
+}
+
+/// 云母（HOSTBACKDROP）是否可能有效：仅 Windows 11（build 22000+）。
+/// 旧系统上 SetWindowCompositionAttribute 调用成功但画不出任何材质，
+/// 依赖返回值做降级的调用方（右键菜单近实心底色）需要显式检测。
+/// 通过 ntdll!RtlGetVersion 读取真实版本号，不受应用清单兼容性段影响。
+pub fn host_backdrop_available() -> bool {
+    #[repr(C)]
+    struct OsVersionInfoW {
+        size: u32,
+        major: u32,
+        minor: u32,
+        build: u32,
+        platform_id: u32,
+        service_pack: [u16; 128],
+    }
+    type RtlGetVersionFn = unsafe extern "system" fn(*mut OsVersionInfoW) -> i32;
+    unsafe {
+        let module = windows_sys::Win32::System::LibraryLoader::GetModuleHandleA(
+            c"ntdll.dll".as_ptr().cast(),
+        );
+        if module.is_null() {
+            return false;
+        }
+        let function = windows_sys::Win32::System::LibraryLoader::GetProcAddress(
+            module,
+            c"RtlGetVersion".as_ptr().cast(),
+        );
+        let Some(function) = function else {
+            return false;
+        };
+        let rtl_get_version: RtlGetVersionFn = std::mem::transmute(function);
+        let mut info = OsVersionInfoW {
+            size: std::mem::size_of::<OsVersionInfoW>() as u32,
+            major: 0,
+            minor: 0,
+            build: 0,
+            platform_id: 0,
+            service_pack: [0; 128],
+        };
+        if rtl_get_version(&mut info) != 0 {
+            return false;
+        }
+        info.major > 10 || (info.major == 10 && info.build >= 22000)
+    }
+}
+
+/// 强制重绘窗口及其全部子窗口（WebView2 内容）。
+/// 切换 ACCENT / 材质策略后 WebView2 不一定立即重新合成，主动重绘一次，
+/// 避免旧材质残留在窗口上直到下一次自然重绘。
+pub fn redraw_window(hwnd: isize) {
+    use windows_sys::Win32::Graphics::Gdi::{
+        RedrawWindow, RDW_ALLCHILDREN, RDW_INVALIDATE, RDW_UPDATENOW,
+    };
+    unsafe {
+        RedrawWindow(
+            hwnd as *mut c_void,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW,
+        );
+    }
 }
 
 #[cfg(test)]
