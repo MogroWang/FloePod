@@ -16,7 +16,7 @@ use crate::state::{AppState, PanelMode, PodRuntime};
 use crate::win;
 
 /// 匣（边缘浮动条）长边默认值；短边（贴屏幕边缘一侧）来自每个匣的 bar_width 设置。
-/// 1.5.0 起长边由每个匣的 bar_length 设置控制，此常量仅作字段默认值的参照。
+/// 1.5.0 起长边由每个匣的 bar_length 设置控制，此值为其默认值（settings::Pod）。
 pub const POD_BAR_LONG: u32 = 190;
 /// 拖入接纳态：短条在此基础上加宽为圆角矩形
 const POD_BAR_ACCEPT_GROW: u32 = 18;

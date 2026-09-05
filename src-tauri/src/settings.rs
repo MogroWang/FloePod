@@ -5,6 +5,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
 use crate::db;
+use crate::manager::POD_BAR_LONG;
 
 pub const KEY: &str = "app";
 const NEXT_POD_ID_KEY: &str = "next_pod_id";
@@ -242,7 +243,7 @@ impl Default for Pod {
             drop_action: "ask".into(),
             enabled: true,
             bar_width: 44,
-            bar_length: 190,
+            bar_length: POD_BAR_LONG,
             bar_color: String::new(),
             corner_radius: 22,
             border_color: String::new(),
