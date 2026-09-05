@@ -379,8 +379,11 @@ mod tests {
         assert!(apply_patch(&mut pod, &serde_json::json!({ "material": "mica" })).is_err());
 
         // 隐匿模式：布尔 + 数字字符串均可解析。
-        apply_patch(&mut pod, &serde_json::json!({ "stealth": true, "stealthDelayMs": "2000" }))
-            .unwrap();
+        apply_patch(
+            &mut pod,
+            &serde_json::json!({ "stealth": true, "stealthDelayMs": "2000" }),
+        )
+        .unwrap();
         assert!(pod.stealth);
         assert_eq!(pod.stealth_delay_ms, 2000);
         assert!(apply_patch(&mut pod, &serde_json::json!({ "stealth": "yes" })).is_err());

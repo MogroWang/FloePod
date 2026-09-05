@@ -246,7 +246,11 @@ fn bar_geometry_for_monitor(
 }
 
 /// 胶囊条窗口的几何与所在显示器缩放率（物理像素）。
-fn bar_geometry(app: &AppHandle, pod: &Pod, accepting: bool) -> Option<((i32, i32, i32, i32), f64)> {
+fn bar_geometry(
+    app: &AppHandle,
+    pod: &Pod,
+    accepting: bool,
+) -> Option<((i32, i32, i32, i32), f64)> {
     let target = monitor(app, pod)?;
     Some((
         bar_geometry_for_monitor(
@@ -1078,7 +1082,11 @@ fn set_bar_stealth(app: &AppHandle, id: u64, hidden: bool) {
     }
     let label = events::pod_bar_label(id);
     if app.get_webview_window(&label).is_some() {
-        let _ = app.emit_to(label, events::BAR_STEALTH, serde_json::json!({ "hidden": hidden }));
+        let _ = app.emit_to(
+            label,
+            events::BAR_STEALTH,
+            serde_json::json!({ "hidden": hidden }),
+        );
     }
 }
 
@@ -1108,9 +1116,7 @@ fn update_bar_stealth(app: &AppHandle, id: u64, now: Instant) {
     let should_hide = enabled
         && !panel_visible
         && last_change
-            .map(|changed| {
-                now.saturating_duration_since(changed) > Duration::from_millis(delay_ms)
-            })
+            .map(|changed| now.saturating_duration_since(changed) > Duration::from_millis(delay_ms))
             .unwrap_or(true)
         && !rect.map(|rect| cursor_near(rect, scale)).unwrap_or(false);
     if should_hide != hidden {
