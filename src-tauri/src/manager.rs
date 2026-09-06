@@ -287,8 +287,9 @@ pub fn place_pod_bar(app: &AppHandle, pod: &Pod, accepting: bool) {
         runtime.bar_rect = Some((x, y, w, h));
         runtime.bar_scale = scale;
     }
-    // 边缘浮动条材质已废弃（固定普通半透明），无需按材质裁剪区域；
-    // 以 radius=0 清除历史残留的区域，并顺带幂等清理非客户区样式。
+    // 边缘浮动条材质已废弃（固定普通半透明），无需按材质裁剪形状；
+    // 以 radius=0 设置与窗口同形的矩形区域——裁掉 Windows 11 在窗口矩形外
+    // 延伸的系统框架，杜绝偶发的矩形标题栏，并顺带幂等清理非客户区样式。
     if let Ok(hwnd) = bar.hwnd() {
         win::set_bar_region(hwnd.0 as isize, w, h, 0, &pod.edge);
     }
@@ -573,8 +574,9 @@ pub(crate) fn refresh_pod_bar_chrome(app: &AppHandle, id: u64) {
 
 /// 焦点变化时幂等重放浮动面板材质：重发一次全量材质，
 /// 保证无论浮动面板是否持有焦点，材质属性始终处于已下发状态。
-/// 边缘浮动条材质已废弃（固定普通），仅顺带幂等清理非客户区样式，
-/// 杜绝任何来源恢复的标题栏样式位驻留。
+/// 同时幂等清理焦点窗口的非客户区：边缘浮动条固定普通材质，浮动面板
+/// 无论是哪种材质，透明 WebView2 的幽灵标题栏 / 系统边框都可能被焦点
+/// 变化重新合成，任何来源恢复的残留都在这里压掉。
 pub fn refresh_window_material(app: &AppHandle, label: &str) {
     let target = match events::pod_window(label) {
         Some(events::PodWindow::Bar(id)) => pod_bar(app, id).map(|window| (id, window, true)),
@@ -604,6 +606,11 @@ pub fn refresh_window_material(app: &AppHandle, label: &str) {
             // 重放同样轻推一次合成，焦点切换后材质立即可见。
             nudge_recomposite(&window);
         }
+    }
+    // 浮动面板自身的焦点变化同样会触发透明 WebView2 的非客户区合成回归，
+    // 幂等重放一次非客户区清理，样式位与 DWM 边框残留不过夜。
+    if let Ok(hwnd) = window.hwnd() {
+        win::prepare_panel_window(hwnd.0 as isize);
     }
 }
 
