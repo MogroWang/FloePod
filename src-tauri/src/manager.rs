@@ -280,18 +280,26 @@ pub fn place_pod_bar(app: &AppHandle, pod: &Pod, accepting: bool) {
     let _ = bar.set_position(PhysicalPosition::new(x, y));
     // 记录最近一次摆放的几何与缩放率：隐匿模式的看门狗用它判断指针是否
     // 靠近，避免每次 tick 都读库。
-    {
+    let region_stale = {
         let state = app.state::<AppState>();
         let mut guard = state.pods.lock().unwrap();
         let runtime = guard.entry(pod.id).or_default();
         runtime.bar_rect = Some((x, y, w, h));
         runtime.bar_scale = scale;
-    }
-    // 边缘浮动条材质已废弃（固定普通半透明），无需按材质裁剪形状；
-    // 以 radius=0 设置与窗口同形的矩形区域——裁掉 Windows 11 在窗口矩形外
-    // 延伸的系统框架，杜绝偶发的矩形标题栏，并顺带幂等清理非客户区样式。
-    if let Ok(hwnd) = bar.hwnd() {
-        win::set_bar_region(hwnd.0 as isize, w, h, 0, &pod.edge);
+        // SetWindowRgn 会触发一次完整的框架重算并打断 WebView2 合成；
+        // 拖动边缘浮动条（move_pod_bar）的每个指针事件都会走到这里，
+        // 只有几何真正变化时才重新应用同形矩形区域（首摆、接纳态加宽、
+        // 改宽度/长度设置、跨显示器缩放率变化等）。
+        let stale = runtime.bar_region_size != Some((w, h));
+        runtime.bar_region_size = Some((w, h));
+        stale
+    };
+    if region_stale {
+        if let Ok(hwnd) = bar.hwnd() {
+            // 同形矩形区域裁掉 Windows 11 在窗口矩形外延伸的系统框架，
+            // 顺带完成该窗口的首轮样式位清理（见 set_bar_region）。
+            win::set_bar_region(hwnd.0 as isize, w, h, 0, &pod.edge);
+        }
     }
 }
 
@@ -459,11 +467,12 @@ fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
         }
     }
     // 浮动面板：请求系统圆角，与 CSS 的 clip-path 圆角轮廓对齐；
-    // 顺带幂等清理可能残留的标题栏样式位，杜绝偶发的矩形标题栏。
+    // 只压制 Win11 的 1px 外描边与焦点过渡（suppress_panel_frame），
+    // 绝不动样式位与框架——面板的系统阴影依赖它们（见该函数注释）。
     if let Some(panel) = pod_panel(app, pod.id) {
         if let Ok(hwnd) = panel.hwnd() {
             win::prefer_rounded_corners(hwnd.0 as isize);
-            win::prepare_panel_window(hwnd.0 as isize);
+            win::suppress_panel_frame(hwnd.0 as isize);
         }
     }
     place_pod_bar(app, pod, false);
@@ -574,9 +583,9 @@ pub(crate) fn refresh_pod_bar_chrome(app: &AppHandle, id: u64) {
 
 /// 焦点变化时幂等重放浮动面板材质：重发一次全量材质，
 /// 保证无论浮动面板是否持有焦点，材质属性始终处于已下发状态。
-/// 同时幂等清理焦点窗口的非客户区：边缘浮动条固定普通材质，浮动面板
-/// 无论是哪种材质，透明 WebView2 的幽灵标题栏 / 系统边框都可能被焦点
-/// 变化重新合成，任何来源恢复的残留都在这里压掉。
+/// 边缘浮动条固定普通材质，无材质可重放，仅在显示 / 首摆路径做样式
+/// 清理（见 prepare_shaped_window）；浮动面板额外重放框架抑制
+/// （只写 DWM 属性，不动样式位）。
 pub fn refresh_window_material(app: &AppHandle, label: &str) {
     let target = match events::pod_window(label) {
         Some(events::PodWindow::Bar(id)) => pod_bar(app, id).map(|window| (id, window, true)),
@@ -607,10 +616,10 @@ pub fn refresh_window_material(app: &AppHandle, label: &str) {
             nudge_recomposite(&window);
         }
     }
-    // 浮动面板自身的焦点变化同样会触发透明 WebView2 的非客户区合成回归，
-    // 幂等重放一次非客户区清理，样式位与 DWM 边框残留不过夜。
+    // 浮动面板焦点变化时幂等重放一次框架抑制（只写两个 DWM 属性，
+    // 不触碰样式位与框架——面板的系统阴影依赖它们）。
     if let Ok(hwnd) = window.hwnd() {
-        win::prepare_panel_window(hwnd.0 as isize);
+        win::suppress_panel_frame(hwnd.0 as isize);
     }
 }
 
@@ -914,9 +923,9 @@ fn show_panel_locked(app: &AppHandle, id: u64, pod: &Pod, pin_on_show: bool) -> 
     apply_panel_material_if_changed(app, pod);
     let _ = panel.set_title(&format!("{} 浮动面板", pod.name));
     win::prefer_rounded_corners(hwnd.0 as isize);
-    // 显示前幂等清理残留的标题栏样式位：面板带标题文字，样式位被合成
-    // 就会显示成矩形标题栏。
-    win::prepare_panel_window(hwnd.0 as isize);
+    // 只压制 1px 外描边与焦点过渡；不动样式位、不重刷框架——面板的
+    // 系统阴影依赖 tao 常驻的框架样式位（见 suppress_panel_frame 注释）。
+    win::suppress_panel_frame(hwnd.0 as isize);
     win::show_no_activate(hwnd.0 as isize);
     // 显示兄弟浮动面板本身也可能触发透明 WebView 的非客户区合成回归。
     refresh_pod_bar_chrome(app, id);

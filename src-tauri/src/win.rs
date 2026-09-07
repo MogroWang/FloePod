@@ -72,49 +72,118 @@ pub fn show_no_activate(hwnd: isize) {
     }
 }
 
-/// 边缘浮动条专用的不抢焦点显示：显示后再做一次无条件非客户区刷新。
+/// 边缘浮动条专用的不抢焦点显示：显示后压一次非客户区样式，并强制
+/// WebView2 重新合成。
 ///
-/// WebView2 在透明无边框窗口显示 / 激活时可能重新显露幽灵标题栏（见
-/// show_window 的同款处理）；浮动条的隐藏 / 恢复走本函数，显示瞬间
-/// 即压掉残影，不再依赖后续的焦点事件兜底。
+/// WebView2 的 DirectComposition 表面在窗口隐藏期间会被 DWM 丢弃，
+/// 重新显示时需重建合成目标；竞态下首帧以不透明的默认白色呈现且可能
+/// 停留到下一次交互——这是边缘浮动条「偶发白色方角矩形」的来源
+/// （顶边浮动条尤其形似标题栏）。显示后跨合成帧轻推 1px 尺寸，强制
+/// WebView2 立即重新呈现（与浮动面板材质落地后的轻推同一机制）。
 pub fn show_bar_no_activate(hwnd: isize) {
     show_no_activate(hwnd);
     prepare_shaped_window(hwnd);
+    recompose_after_show(hwnd);
 }
 
-/// 浮动面板窗口的幂等非客户区清理：与边缘浮动条共用同一套 DWM 非客户区
-/// 关闭策略（见 disable_dwm_chrome），并刷新窗口框架与 WebView 内容。
+/// 显示后的合成轻推：-1 物理像素、跨一帧后还原。
 ///
-/// 面板依赖系统阴影与圆角，因此不做 SetWindowRgn 裁剪（区域会连阴影和
-/// DWMWCP_ROUND 圆角一起裁掉），只关闭 DWM 非客户区渲染——面板窗口带有
-/// 标题文字（「匣名 浮动面板」），样式位或框架一旦被系统合成，就会显示成
-/// 矩形标题栏；1.5.0 曾在此用 RedrawWindow(RDW_FRAME) 强刷框架，反而把
-/// 从未被绘制过的 1px 系统边框画了出来（表现为面板四周多出一圈白色边框），
-/// 所以这里只重绘内容区，窗口框架交由禁用策略压制。
-pub fn prepare_panel_window(hwnd: isize) {
-    use windows_sys::Win32::Graphics::Gdi::{
-        RedrawWindow, RDW_ALLCHILDREN, RDW_INVALIDATE, RDW_UPDATENOW,
-    };
+/// 两次尺寸变化必须跨合成帧：DWM 每帧只采样一次几何，同帧内连续两次
+/// 变化会被合并成净变化为零，WebView2 不会重新呈现。还原前复核当前
+/// 宽度，若期间有并发摆放改过尺寸则放弃还原，避免覆盖新几何。
+fn recompose_after_show(hwnd: isize) {
+    use windows_sys::Win32::Foundation::RECT;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+        GetWindowRect, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
     };
     unsafe {
         let hwnd = hwnd as *mut c_void;
-        disable_dwm_chrome(hwnd);
+        let mut rect = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        if GetWindowRect(hwnd, &mut rect) == 0 {
+            return;
+        }
+        let width = rect.right - rect.left;
+        let height = rect.bottom - rect.top;
+        if width < 3 || height < 3 {
+            return;
+        }
         SetWindowPos(
             hwnd,
             std::ptr::null_mut(),
             0,
             0,
-            0,
-            0,
-            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+            width - 1,
+            height,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOMOVE,
         );
-        RedrawWindow(
+        std::thread::sleep(std::time::Duration::from_millis(16));
+        let mut now = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        if GetWindowRect(hwnd, &mut now) != 0 && now.right - now.left == width - 1 {
+            SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                0,
+                0,
+                width,
+                height,
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOMOVE,
+            );
+        }
+    }
+}
+
+/// 浮动面板窗口的幂等框架抑制：只关掉 Win11 的 1px 系统外描边与 DWM
+/// 的焦点过渡动画。绝不清除窗口样式位、不请求框架重算、不禁用非客户
+/// 区渲染。
+///
+/// tao（Tauri 的窗口层）的无边框架构：WS_CAPTION 等样式位在窗口整个
+/// 生命周期常驻（to_window_styles 从不清除它们），无边框完全由子类化的
+/// WM_NCCALCSIZE 返回 0 实现；带系统阴影的无边框窗口（本面板）还会把
+/// 客户区内缩一圈 frame 厚度，DWM 正是在这圈非客户区里绘制系统阴影
+/// ——阴影与样式位共存亡。
+///
+/// 1.5.0 起曾对面板清除样式位并强刷框架：样式位一掉，DWM 框架连同
+/// 阴影一起消失，内缩环变成无人绘制的裸窗口表面，呈现为面板四周的
+/// 白色边框。因此这里只压制真正多余的部分——Win11 给带框架窗口外缘
+/// 描的 1px 边线（DWMWA_BORDER_COLOR 单独负责，不影响阴影）与焦点
+/// 过渡动画（透明 WebView2 场景下会闪出残影）。面板的标题栏伪影在
+/// 该架构下本就不可能出现：NCCALCSIZE 内缩后顶部非客户区只有 1-2px，
+/// 容不下任何标题栏。
+pub fn suppress_panel_frame(hwnd: isize) {
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE,
+        DWMWA_TRANSITIONS_FORCEDISABLED,
+    };
+    unsafe {
+        let hwnd = hwnd as *mut c_void;
+        // 只关掉 1px 外描边；系统阴影与 DWMWCP_ROUND 圆角继续绘制。
+        // 不支持该属性的旧系统会安全地忽略调用失败。
+        let border_color: u32 = DWMWA_COLOR_NONE;
+        DwmSetWindowAttribute(
             hwnd,
-            std::ptr::null(),
-            std::ptr::null_mut(),
-            RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW,
+            DWMWA_BORDER_COLOR as u32,
+            &border_color as *const u32 as *const c_void,
+            std::mem::size_of::<u32>() as u32,
+        );
+
+        // 焦点切换时 DWM 对窗口框架做过渡动画，透明 WebView2 场景下会
+        // 闪出残影；禁用过渡不影响 CSS 自身动效。
+        let transitions_disabled: i32 = 1;
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_TRANSITIONS_FORCEDISABLED as u32,
+            &transitions_disabled as *const i32 as *const c_void,
+            std::mem::size_of::<i32>() as u32,
         );
     }
 }
@@ -122,10 +191,13 @@ pub fn prepare_panel_window(hwnd: isize) {
 /// 关闭窗口的全部 DWM 非客户区来源：禁用非客户区渲染、禁用框架过渡、
 /// 显式不绘制边框，并清掉普通与扩展样式中的非客户区样式位。幂等。
 ///
+/// 仅供无系统阴影的自绘形状窗口（边缘浮动条 / 右键菜单）使用——
+/// DWMNCRP_DISABLED 会连系统阴影一起关掉，需要阴影的浮动面板禁用
+/// 本函数（见 suppress_panel_frame）。返回样式位是否在本轮调用中被
+/// 实际清除：只有真正清除过才需要随后的框架重算与重绘。
+///
 /// 保留 TOPMOST、TOOLWINDOW、LAYERED 等透明置顶窗口正常运行所需的位。
-/// Windows 11 即使 decorations(false) 也可能保留 1px DWM 边框；显式请求
-/// 不绘制边框，不支持该属性的旧系统会安全地忽略调用失败。
-fn disable_dwm_chrome(hwnd: *mut c_void) {
+fn disable_dwm_chrome(hwnd: *mut c_void) -> bool {
     use windows_sys::Win32::Graphics::Dwm::{
         DwmSetWindowAttribute, DWMNCRP_DISABLED, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE,
         DWMWA_NCRENDERING_POLICY, DWMWA_TRANSITIONS_FORCEDISABLED,
@@ -150,6 +222,8 @@ fn disable_dwm_chrome(hwnd: *mut c_void) {
             std::mem::size_of::<i32>() as u32,
         );
 
+        // Windows 11 即使 decorations(false) 也可能保留 1px DWM 边框；显式请求
+        // 不绘制边框。不支持该属性的旧系统会安全地忽略调用失败。
         let border_color: u32 = DWMWA_COLOR_NONE;
         DwmSetWindowAttribute(
             hwnd,
@@ -167,6 +241,7 @@ fn disable_dwm_chrome(hwnd: *mut c_void) {
         if cleaned_ex_style != ex_style {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, cleaned_ex_style as isize);
         }
+        cleaned_style != style || cleaned_ex_style != ex_style
     }
 }
 
@@ -335,26 +410,33 @@ pub fn prepare_shaped_window(hwnd: isize) {
     };
     unsafe {
         let hwnd = hwnd as *mut c_void;
-        disable_dwm_chrome(hwnd);
+        let stripped = disable_dwm_chrome(hwnd);
 
-        // 即使样式已正确也必须刷新。SWP_FRAMECHANGED 重新发送 WM_NCCALCSIZE，
-        // RedrawWindow 则让 WebView2 子窗口与非客户区立即一起重绘；效果等价于
-        // 用户通过轻微调整窗口尺寸清掉幽灵标题栏，但不会改变实际几何尺寸。
-        SetWindowPos(
-            hwnd,
-            std::ptr::null_mut(),
-            0,
-            0,
-            0,
-            0,
-            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
-        );
-        RedrawWindow(
-            hwnd,
-            std::ptr::null(),
-            std::ptr::null_mut(),
-            RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW,
-        );
+        // 只有本轮真正清掉样式位时才重刷框架。稳态（样式早已干净）下的
+        // SWP_FRAMECHANGED + RedrawWindow 是纯扰动：GDI 重绘不作用于
+        // WebView2 的 DirectComposition 表面，反而会在显示 / 焦点路径上
+        // 反复打断合成，把「重绘请求」变成偶发的白色矩形残影；样式位没
+        // 有变化时框架重算的结果也不会改变。真正清除样式位的那一次则
+        // 必须立即重算：SWP_FRAMECHANGED 重发 WM_NCCALCSIZE，让系统按
+        // 清理后的样式落定非客户区，不在初始化或跨显示器重定位时留下
+        // 刚刚生成的合成残影。
+        if stripped {
+            SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                0,
+                0,
+                0,
+                0,
+                SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+            );
+            RedrawWindow(
+                hwnd,
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW,
+            );
+        }
     }
 }
 

@@ -57,6 +57,12 @@ pub struct PodRuntime {
     pub bar_rect: Option<(i32, i32, i32, i32)>,
     /// 边缘浮动条所在显示器的缩放率，与 bar_rect 配套。
     pub bar_scale: f64,
+    /// 最近一次应用到边缘浮动条原生窗口的裁剪区域尺寸（物理像素）。
+    /// place_pod_bar 用它跳过几何未变化时的重复 SetWindowRgn——重新应用
+    /// 区域会触发一次完整的框架重算并打断 WebView2 合成，拖动边缘浮动条
+    /// 的每个指针事件都会走到该路径。窗口销毁时随运行态一起清除，
+    /// 新窗口的首轮摆放必然重新应用。
+    pub bar_region_size: Option<(i32, i32)>,
 }
 
 /// 剪切拖出开始时捕获的文件身份。稳定版 Rust 当前使用创建时间、写入时间、
@@ -129,6 +135,7 @@ impl Default for PodRuntime {
             bar_stealth_hidden: false,
             bar_rect: None,
             bar_scale: 1.0,
+            bar_region_size: None,
         }
     }
 }
