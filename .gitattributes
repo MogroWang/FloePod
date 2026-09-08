@@ -1,0 +1,3 @@
+# Keep formatter and generated-contract bytes identical on Windows and Unix.
+# Binary detection remains automatic; images and packaged assets are unchanged.
+* text=auto eol=lf
