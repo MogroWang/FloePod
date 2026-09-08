@@ -24,6 +24,71 @@ fn strip_non_client_styles(style: u32, ex_style: u32) -> (u32, u32) {
     )
 }
 
+const BAR_CHROME_SUBCLASS_ID: usize = 0x4650_4241;
+
+/// 在窗口所属 UI 线程安装浮动条的无边框消息处理，早于首次显示。
+/// tao 会从内部 WindowFlags 重新生成 WS_CAPTION 等样式；只在焦点事件
+/// 之后清理已经太迟。这里阻止样式重新写入，并在原生消息边界禁止绘制
+/// 非客户区。仅用于没有系统阴影的浮动条，不用于面板或设置窗口。
+pub fn install_bar_chrome_guard(hwnd: isize) -> bool {
+    use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+    use windows_sys::Win32::UI::Shell::SetWindowSubclass;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+    unsafe {
+        let handle = hwnd as *mut c_void;
+        if GetWindowThreadProcessId(handle, std::ptr::null_mut()) != GetCurrentThreadId() {
+            return false;
+        }
+        if SetWindowSubclass(handle, Some(bar_chrome_proc), BAR_CHROME_SUBCLASS_ID, 0) == 0 {
+            return false;
+        }
+    }
+    prepare_shaped_window(hwnd);
+    true
+}
+
+unsafe extern "system" fn bar_chrome_proc(
+    hwnd: *mut c_void,
+    message: u32,
+    wparam: usize,
+    lparam: isize,
+    subclass_id: usize,
+    _data: usize,
+) -> isize {
+    use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        STYLESTRUCT, WM_ERASEBKGND, WM_NCACTIVATE, WM_NCCALCSIZE, WM_NCDESTROY, WM_NCPAINT,
+        WM_STYLECHANGING,
+    };
+    match message {
+        WM_STYLECHANGING => {
+            // 先让下层处理，再过滤最终样式；保留置顶、可见、拖放等正常标志。
+            let result = DefSubclassProc(hwnd, message, wparam, lparam);
+            if lparam != 0 {
+                let styles = &mut *(lparam as *mut STYLESTRUCT);
+                match wparam as i32 {
+                    GWL_STYLE => styles.styleNew &= !NON_CLIENT_STYLE_BITS,
+                    GWL_EXSTYLE => styles.styleNew &= !NON_CLIENT_EX_STYLE_BITS,
+                    _ => {}
+                }
+            }
+            result
+        }
+        // 两种 NCCALCSIZE 参数形式都保持整个窗口为客户区；不留下标题栏高度。
+        WM_NCCALCSIZE | WM_NCPAINT => 0,
+        // 浮动条由透明 WebView 自绘，不让 GDI 擦背景生成白色占位块。
+        WM_ERASEBKGND => 1,
+        // 必须继续交给 tao 更新激活/焦点状态，不能直接吞掉该消息。
+        // 微软规定 lParam=-1 只禁止 DefWindowProc 重画非客户区。
+        WM_NCACTIVATE => DefSubclassProc(hwnd, message, wparam, -1),
+        WM_NCDESTROY => {
+            RemoveWindowSubclass(hwnd, Some(bar_chrome_proc), subclass_id);
+            DefSubclassProc(hwnd, message, wparam, lparam)
+        }
+        _ => DefSubclassProc(hwnd, message, wparam, lparam),
+    }
+}
+
 fn key_down(vk: u16) -> bool {
     // GetAsyncKeyState 返回 i16，高位为 1（负数）即按下
     unsafe { GetAsyncKeyState(vk as i32) < 0 }
@@ -72,74 +137,11 @@ pub fn show_no_activate(hwnd: isize) {
     }
 }
 
-/// 边缘浮动条专用的不抢焦点显示：显示后压一次非客户区样式，并强制
-/// WebView2 重新合成。
-///
-/// WebView2 的 DirectComposition 表面在窗口隐藏期间会被 DWM 丢弃，
-/// 重新显示时需重建合成目标；竞态下首帧以不透明的默认白色呈现且可能
-/// 停留到下一次交互——这是边缘浮动条「偶发白色方角矩形」的来源
-/// （顶边浮动条尤其形似标题栏）。显示后跨合成帧轻推 1px 尺寸，强制
-/// WebView2 立即重新呈现（与浮动面板材质落地后的轻推同一机制）。
+/// 浮动条不抢焦点显示。无边框约束由常驻消息处理保证，不再通过
+/// 改变宽度并阻塞 UI 线程来尝试清除标题栏残影。
 pub fn show_bar_no_activate(hwnd: isize) {
-    show_no_activate(hwnd);
     prepare_shaped_window(hwnd);
-    recompose_after_show(hwnd);
-}
-
-/// 显示后的合成轻推：-1 物理像素、跨一帧后还原。
-///
-/// 两次尺寸变化必须跨合成帧：DWM 每帧只采样一次几何，同帧内连续两次
-/// 变化会被合并成净变化为零，WebView2 不会重新呈现。还原前复核当前
-/// 宽度，若期间有并发摆放改过尺寸则放弃还原，避免覆盖新几何。
-fn recompose_after_show(hwnd: isize) {
-    use windows_sys::Win32::Foundation::RECT;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetWindowRect, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
-    };
-    unsafe {
-        let hwnd = hwnd as *mut c_void;
-        let mut rect = RECT {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        };
-        if GetWindowRect(hwnd, &mut rect) == 0 {
-            return;
-        }
-        let width = rect.right - rect.left;
-        let height = rect.bottom - rect.top;
-        if width < 3 || height < 3 {
-            return;
-        }
-        SetWindowPos(
-            hwnd,
-            std::ptr::null_mut(),
-            0,
-            0,
-            width - 1,
-            height,
-            SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOMOVE,
-        );
-        std::thread::sleep(std::time::Duration::from_millis(16));
-        let mut now = RECT {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        };
-        if GetWindowRect(hwnd, &mut now) != 0 && now.right - now.left == width - 1 {
-            SetWindowPos(
-                hwnd,
-                std::ptr::null_mut(),
-                0,
-                0,
-                width,
-                height,
-                SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOMOVE,
-            );
-        }
-    }
+    show_no_activate(hwnd);
 }
 
 /// 浮动面板窗口的幂等框架抑制：只关掉 Win11 的 1px 系统外描边与 DWM
@@ -396,11 +398,9 @@ pub fn set_rounded_region(hwnd: isize, width: i32, height: i32, radius: i32) {
 /// WS_CAPTION / WS_THICKFRAME 位、以及 DWM 的非客户区渲染，都会在小小的
 /// 边缘浮动条上画出旧式标题栏 / 边框（表现为诡异的「窗口标题」）。这里在应用
 /// 区域之前把这些来源全部去掉：清除普通与扩展样式位、请求 DWM 停止绘制
-/// 非客户区并禁用焦点过渡，最后无条件刷新窗口框架和 WebView 子窗口。
-///
-/// 必须无条件执行 SWP_FRAMECHANGED / RedrawWindow：透明 WebView2 的幽灵标题栏
-/// 属于焦点变化后的合成残影，此时样式位往往已经是正确的；旧实现仅在样式位
-/// 发生变化时刷新，所以第二次及之后的焦点切换无法清掉残影。
+/// 非客户区并禁用焦点过渡。只有实际清理了样式时才刷新框架，避免在
+/// 焦点与拖动路径反复打断 WebView2。浮动条另外安装常驻消息处理，
+/// 从源头阻止样式重新引入；本函数保留给首次清理及右键菜单使用。
 pub fn prepare_shaped_window(hwnd: isize) {
     use windows_sys::Win32::Graphics::Gdi::{
         RedrawWindow, RDW_ALLCHILDREN, RDW_FRAME, RDW_INVALIDATE, RDW_UPDATENOW,
@@ -550,6 +550,128 @@ pub fn redraw_window(hwnd: isize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bar_guard_survives_native_style_rewrites_without_swallowing_focus() {
+        use windows_sys::Win32::Foundation::{POINT, RECT};
+        use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
+        use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, GetClientRect, GetWindowRect, SendMessageW,
+            SWP_FRAMECHANGED, SWP_NOZORDER, WM_ERASEBKGND, WM_NCACTIVATE, WM_NCPAINT,
+            WS_EX_ACCEPTFILES, WS_EX_TOOLWINDOW, WS_POPUP,
+        };
+
+        #[derive(Default)]
+        struct Messages {
+            activations: usize,
+            painting: usize,
+            suppress_paint: bool,
+        }
+        unsafe extern "system" fn observer(
+            hwnd: *mut c_void,
+            message: u32,
+            wparam: usize,
+            lparam: isize,
+            _id: usize,
+            data: usize,
+        ) -> isize {
+            let seen = &mut *(data as *mut Messages);
+            match message {
+                WM_NCACTIVATE => {
+                    seen.activations += 1;
+                    seen.suppress_paint &= lparam == -1;
+                }
+                WM_NCPAINT | WM_ERASEBKGND => seen.painting += 1,
+                _ => {}
+            }
+            DefSubclassProc(hwnd, message, wparam, lparam)
+        }
+        struct TestWindow(*mut c_void);
+        impl Drop for TestWindow {
+            fn drop(&mut self) {
+                unsafe { DestroyWindow(self.0) };
+            }
+        }
+
+        unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            // 先声明 observer 状态，确保断言失败时窗口也先于它销毁。
+            let mut seen = Messages {
+                suppress_paint: true,
+                ..Messages::default()
+            };
+            let window = TestWindow(CreateWindowExW(
+                WS_EX_TOOLWINDOW | WS_EX_ACCEPTFILES | WS_EX_WINDOWEDGE,
+                class.as_ptr(),
+                std::ptr::null(),
+                WS_POPUP | WS_CAPTION | WS_SYSMENU,
+                10,
+                10,
+                44,
+                190,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            ));
+            assert!(!window.0.is_null());
+            assert_ne!(
+                SetWindowSubclass(window.0, Some(observer), 1, &mut seen as *mut _ as usize),
+                0
+            );
+            assert!(install_bar_chrome_guard(window.0 as isize));
+            assert!(install_bar_chrome_guard(window.0 as isize));
+            seen.activations = 0;
+            seen.painting = 0;
+            for (width, height) in [(44, 190), (190, 44), (66, 285), (285, 66)] {
+                // 模拟 tao 重新生成样式，以及拖放加宽/方向/DPI 变化后的框架重算。
+                SetWindowLongPtrW(
+                    window.0,
+                    GWL_STYLE,
+                    (WS_POPUP | NON_CLIENT_STYLE_BITS) as isize,
+                );
+                SetWindowLongPtrW(
+                    window.0,
+                    GWL_EXSTYLE,
+                    (WS_EX_TOOLWINDOW | WS_EX_ACCEPTFILES | NON_CLIENT_EX_STYLE_BITS) as isize,
+                );
+                SetWindowPos(
+                    window.0,
+                    std::ptr::null_mut(),
+                    10,
+                    10,
+                    width,
+                    height,
+                    SWP_NOACTIVATE | SWP_NOZORDER | SWP_FRAMECHANGED,
+                );
+                assert_eq!(
+                    GetWindowLongPtrW(window.0, GWL_STYLE) as u32 & NON_CLIENT_STYLE_BITS,
+                    0
+                );
+                assert_eq!(
+                    GetWindowLongPtrW(window.0, GWL_EXSTYLE) as u32,
+                    WS_EX_TOOLWINDOW | WS_EX_ACCEPTFILES
+                );
+                let mut client: RECT = std::mem::zeroed();
+                let mut outer: RECT = std::mem::zeroed();
+                let mut origin = POINT { x: 0, y: 0 };
+                assert_ne!(GetClientRect(window.0, &mut client), 0);
+                assert_ne!(GetWindowRect(window.0, &mut outer), 0);
+                assert_ne!(ClientToScreen(window.0, &mut origin), 0);
+                assert_eq!((client.right, client.bottom), (width, height));
+                assert_eq!((origin.x, origin.y), (outer.left, outer.top));
+                SendMessageW(window.0, WM_NCACTIVATE, 1, 0);
+                SendMessageW(window.0, WM_NCACTIVATE, 0, 0);
+                SendMessageW(window.0, WM_NCPAINT, 1, 0);
+                SendMessageW(window.0, WM_ERASEBKGND, 0, 0);
+            }
+            assert_eq!(seen.activations, 8);
+            assert!(seen.suppress_paint);
+            assert_eq!(seen.painting, 0);
+            drop(window);
+        }
+    }
 
     #[test]
     fn stripping_non_client_styles_preserves_transparency_and_tool_window_bits() {
