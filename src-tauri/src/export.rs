@@ -16,7 +16,7 @@ use crate::settings;
 use crate::staging;
 use crate::state::AppState;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportIssue {
     id: i64,
@@ -24,7 +24,7 @@ pub struct ExportIssue {
     error: String,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportResult {
     conflicts: Vec<String>,
@@ -53,6 +53,7 @@ pub fn export_items(
         return Err(format!("未知冲突策略: {conflict_strategy}"));
     }
     let state = app.state::<AppState>();
+    let _permit = state.tasks.enter()?;
     let _operation = state.file_ops.lock().unwrap();
     let (current, items) = {
         let connection = state.db.lock().unwrap();
@@ -77,13 +78,13 @@ pub fn export_items(
         return Err("目标文件夹必须是绝对路径".into());
     }
     fs::create_dir_all(&destination).map_err(|error| format!("目标文件夹不可用: {error}"))?;
-    let destination = settings::resolve_path(&destination)?;
+    let destination = crate::file_paths::resolve_path(&destination)?;
 
     let mut conflict_keys = HashSet::new();
     let mut conflicts = Vec::new();
     for (item, _) in &sources {
         let candidate = destination.join(&item.name);
-        let key = settings::path_key(&settings::resolve_path(&candidate)?);
+        let key = crate::file_paths::path_key(&crate::file_paths::resolve_path(&candidate)?);
         if fs::symlink_metadata(&candidate).is_ok() || !conflict_keys.insert(key) {
             conflicts.push(item.name.clone());
         }
@@ -169,20 +170,20 @@ pub fn export_items(
                 continue;
             }
         }
-        let resolved_target = match settings::resolve_path(&target) {
+        let resolved_target = match crate::file_paths::resolve_path(&target) {
             Ok(target) => target,
             Err(error) => {
                 result.failed.push(issue(error));
                 continue;
             }
         };
-        if !settings::path_is_within(&resolved_target, &destination)
-            || settings::paths_equal(&resolved_target, &destination)
+        if !crate::file_paths::path_is_within(&resolved_target, &destination)
+            || crate::file_paths::paths_equal(&resolved_target, &destination)
         {
             result.failed.push(issue("目标路径越出所选目录".into()));
             continue;
         }
-        if !batch_targets.insert(settings::path_key(&resolved_target)) {
+        if !batch_targets.insert(crate::file_paths::path_key(&resolved_target)) {
             result.failed.push(issue("批次内存在重复目标名称".into()));
             continue;
         }

@@ -72,15 +72,19 @@ const capsuleStyle = computed<Record<string, string>>(() => {
   if (fill) appearance["--pod-fill"] = fill;
   return vertical.value
     ? { ...appearance, width: short.value + "px", height: "100%", minWidth: barWidth.value + "px" }
-    : { ...appearance, height: short.value + "px", width: "100%", minHeight: barWidth.value + "px" };
+    : {
+        ...appearance,
+        height: short.value + "px",
+        width: "100%",
+        minHeight: barWidth.value + "px",
+      };
 });
 
 /* 仅在拖入接纳时短条变宽（圆角矩形）；悬停弹出浮动面板不改变形状。
    目标宽度 = 匣宽度 + 18，与 Rust 侧 POD_BAR_ACCEPT_GROW 一致：胶囊填满窗口，
    圆角矩形完整显示。 */
-watch(
-  [accepting, barWidth],
-  ([accept]) => shortSpring?.setTarget(accept ? acceptWidth.value : barWidth.value),
+watch([accepting, barWidth], ([accept]) =>
+  shortSpring?.setTarget(accept ? acceptWidth.value : barWidth.value),
 );
 
 function clearHoverTimer() {
@@ -124,12 +128,7 @@ function onPointerEnter() {
   if (dragging.value) return;
   hoverTimeout = window.setTimeout(() => {
     hoverTimeout = undefined;
-    if (
-      hovering.value &&
-      !accepting.value &&
-      pod.value?.enabled &&
-      pod.value.hoverOpen !== false
-    ) {
+    if (hovering.value && !accepting.value && pod.value?.enabled && pod.value.hoverOpen !== false) {
       showPanel();
     }
   }, pod.value?.hoverDelayMs ?? 120);
@@ -239,17 +238,17 @@ async function onPointerUp(e: PointerEvent) {
   if (dragging.value) {
     dragging.value = false;
     justDraggedAt = performance.now(); // 标记刚刚完成拖动，防止触发点击
-    
+
     // 计算最终的 offset
     const currentPos = vertical.value ? e.screenY : e.screenX;
     const delta = currentPos - dragStartPos;
     const finalOffset = offsetAfterDrag(dragStartOffset, delta, dragStartScreenLength);
-    
+
     // 保存到数据库
     if (pod.value) {
       await ipc.updatePod(props.podId, { offset: finalOffset });
     }
-    
+
     // 阻止拖动结束后触发 onClick
     e.preventDefault();
     e.stopPropagation();
@@ -329,53 +328,59 @@ onMounted(async () => {
   try {
     /* 原生拖放事件（文件路径） */
     if (ipc.inTauri) {
-      retainUnlistener(await getCurrentWebview().onDragDropEvent((event) => {
-        const p = event.payload;
-        if (p.type === "enter") {
-          clearHoverTimer();
-          accepting.value = true;
-          modifierSnapshot = null;
-          sampleModifiers(true);
-          setAccept(true);
-        } else if (p.type === "over") {
-          accepting.value = true;
-          sampleModifiers();
-        } else if (p.type === "leave") {
-          accepting.value = false;
-          modifierSampleSeq += 1;
-          modifierSnapshot = null;
-          modifierSample = null;
-          setAccept(false);
-        } else if (p.type === "drop") {
-          const sampled = modifierSample;
-          accepting.value = false;
-          setAccept(false);
-          modifierSampleSeq += 1;
-          modifierSnapshot = null;
-          modifierSample = null;
-          void handleDrop(p.paths, sampled);
-        }
-      }));
+      retainUnlistener(
+        await getCurrentWebview().onDragDropEvent((event) => {
+          const p = event.payload;
+          if (p.type === "enter") {
+            clearHoverTimer();
+            accepting.value = true;
+            modifierSnapshot = null;
+            sampleModifiers(true);
+            setAccept(true);
+          } else if (p.type === "over") {
+            accepting.value = true;
+            sampleModifiers();
+          } else if (p.type === "leave") {
+            accepting.value = false;
+            modifierSampleSeq += 1;
+            modifierSnapshot = null;
+            modifierSample = null;
+            setAccept(false);
+          } else if (p.type === "drop") {
+            const sampled = modifierSample;
+            accepting.value = false;
+            setAccept(false);
+            modifierSampleSeq += 1;
+            modifierSnapshot = null;
+            modifierSample = null;
+            void handleDrop(p.paths, sampled);
+          }
+        }),
+      );
     }
 
     /* 剪贴板收集热键：只由本匣处理（事件携带 podId） */
-    retainUnlistener(await listenCurrent<{ podId?: number }>(Events.CollectClipboard, async (p) => {
-      if (!p || (p.podId && p.podId !== props.podId)) return;
-      if (!pod.value) return;
-      try {
-        const text = await readText();
-        if (text.trim()) {
-          await staging.stageTextAndRefresh(props.podId, text);
+    retainUnlistener(
+      await listenCurrent(Events.CollectClipboard, async (p) => {
+        if (!p || (p.podId && p.podId !== props.podId)) return;
+        if (!pod.value) return;
+        try {
+          const text = await readText();
+          if (text.trim()) {
+            await staging.stageTextAndRefresh(props.podId, text);
+          }
+        } catch (err) {
+          console.error("collect clipboard failed", err);
         }
-      } catch (err) {
-        console.error("collect clipboard failed", err);
-      }
-    }));
+      }),
+    );
 
     /* 隐匿模式状态：显示 / 隐藏由后端判定，这里只做透明度过渡。 */
-    retainUnlistener(await listenCurrent<{ hidden?: boolean }>(Events.BarStealth, (p) => {
-      stealthHidden.value = Boolean(p?.hidden);
-    }));
+    retainUnlistener(
+      await listenCurrent(Events.BarStealth, (p) => {
+        stealthHidden.value = Boolean(p?.hidden);
+      }),
+    );
 
     // 挂载即上报一次离开：把隐匿计时锚定到前端就绪时刻，同时让后端重估
     // 隐匿状态——启动早期下发的 hidden 事件可能早于本次监听注册。
@@ -415,12 +420,19 @@ onBeforeUnmount(() => {
   >
     <div
       class="capsule"
-      :class="{ accepting, hovering, dragging, 'stealth-hidden': stealthHidden && !accepting && !dragging }"
+      :class="{
+        accepting,
+        hovering,
+        dragging,
+        'stealth-hidden': stealthHidden && !accepting && !dragging,
+      }"
       :style="capsuleStyle"
     >
       <div class="capsule-inner">
         <Transition name="fade">
-          <div v-if="accepting" class="drop-hint" :class="{ 'drop-hint-horizontal': horizontal }">松手暂存</div>
+          <div v-if="accepting" class="drop-hint" :class="{ 'drop-hint-horizontal': horizontal }">
+            松手暂存
+          </div>
         </Transition>
         <template v-if="!accepting">
           <div v-if="count > 0" class="count-badge">{{ count > 99 ? "99+" : count }}</div>
@@ -457,7 +469,9 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: box-shadow 200ms var(--ease-out), background 200ms var(--ease-out),
+  transition:
+    box-shadow 200ms var(--ease-out),
+    background 200ms var(--ease-out),
     opacity 420ms ease;
 }
 /* 隐匿模式：整体淡化隐去；指针靠近（后端判定）或重新交互时淡入 */
@@ -509,8 +523,13 @@ onBeforeUnmount(() => {
   transition: none;
 }
 @keyframes breathe {
-  0%, 100% { filter: brightness(1); }
-  50% { filter: brightness(1.18); }
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.18);
+  }
 }
 
 .capsule-inner {

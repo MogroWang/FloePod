@@ -4,9 +4,36 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::{db, settings};
+use crate::db;
 
 static OPERATION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+/// Atomic same-volume publication without replacing a name created by another process.
+pub fn rename_new(source: &Path, target: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
+    let wide = |path: &Path| -> io::Result<Vec<u16>> {
+        let path = crate::file_paths::resolve_path(path)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        let mut value: Vec<u16> = path.as_os_str().encode_wide().collect();
+        if value.contains(&0) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "路径包含空字符",
+            ));
+        }
+        value.push(0);
+        Ok(value)
+    };
+    let source = wide(source)?;
+    let target = wide(target)?;
+    // No REPLACE_EXISTING and no COPY_ALLOWED: cross-volume copies belong to our journaled protocol.
+    if unsafe { MoveFileExW(source.as_ptr(), target.as_ptr(), 0) } == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
 
 pub fn extension(name: &str) -> Option<String> {
     let index = name.rfind('.')?;
@@ -32,7 +59,7 @@ pub fn unique_target(
     let mut suffix = 1;
     loop {
         let candidate = directory.join(&name);
-        let key = settings::path_key(&settings::resolve_path(&candidate)?);
+        let key = crate::file_paths::path_key(&crate::file_paths::resolve_path(&candidate)?);
         match fs::symlink_metadata(&candidate) {
             Err(error) if error.kind() == io::ErrorKind::NotFound && !reserved.contains(&key) => {
                 reserved.insert(key);
@@ -100,13 +127,13 @@ fn copy_path_inner(source: &Path, target: &Path, depth: usize) -> io::Result<()>
     }
     let metadata = fs::symlink_metadata(source)?;
     let resolve = |path: &Path| {
-        settings::resolve_path(path)
+        crate::file_paths::resolve_path(path)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
     };
     let source = resolve(source)?;
     let target = resolve(target)?;
-    if settings::paths_equal(&source, &target)
-        || (metadata.is_dir() && settings::path_is_within(&target, &source))
+    if crate::file_paths::paths_equal(&source, &target)
+        || (metadata.is_dir() && crate::file_paths::path_is_within(&target, &source))
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -122,32 +149,56 @@ fn copy_path_inner(source: &Path, target: &Path, depth: usize) -> io::Result<()>
 
     if metadata.is_dir() {
         fs::create_dir(&target)?;
-        for entry in fs::read_dir(&source)? {
-            let entry = entry?;
-            copy_path_inner(&entry.path(), &target.join(entry.file_name()), depth + 1)?;
+        let result = (|| {
+            for entry in fs::read_dir(&source)? {
+                let entry = entry?;
+                copy_path_inner(&entry.path(), &target.join(entry.file_name()), depth + 1)?;
+            }
+            fs::set_permissions(&target, metadata.permissions())
+        })();
+        if let Err(error) = &result {
+            // Only this successfully created directory belongs to this attempt.
+            // Preserve cleanup errors so callers do not delete an unowned target.
+            if let Err(cleanup) = remove_path(&target) {
+                return Err(io::Error::other(format!(
+                    "{}；清理本次副本失败: {cleanup}",
+                    error
+                )));
+            }
         }
-        fs::set_permissions(&target, metadata.permissions())
+        result
     } else {
         let mut input = fs::File::open(&source)?;
         let mut output = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&target)?;
-        io::copy(&mut input, &mut output)?;
-        fs::set_permissions(&target, metadata.permissions())
+        let result = io::copy(&mut input, &mut output)
+            .and_then(|_| output.sync_all())
+            .and_then(|_| fs::set_permissions(&target, metadata.permissions()));
+        drop(output);
+        if let Err(error) = &result {
+            if let Err(cleanup) = remove_path(&target) {
+                return Err(io::Error::other(format!(
+                    "{}；清理本次副本失败: {cleanup}",
+                    error
+                )));
+            }
+        }
+        result
     }
 }
 
 pub fn ensure_distinct_target(source: &Path, target: &Path) -> Result<(), String> {
-    let source = settings::resolve_path(source)?;
-    let target = settings::resolve_path(target)?;
-    if settings::paths_equal(&source, &target) {
+    let source = crate::file_paths::resolve_path(source)?;
+    let target = crate::file_paths::resolve_path(target)?;
+    if crate::file_paths::paths_equal(&source, &target) {
         return Err(format!("源和目标不能相同: {}", source.display()));
     }
     if fs::symlink_metadata(&source)
         .map(|metadata| metadata.is_dir())
         .unwrap_or(false)
-        && settings::path_is_within(&target, &source)
+        && crate::file_paths::path_is_within(&target, &source)
     {
         return Err(format!(
             "不能把文件夹复制或移动到它自己的子目录: {}",
@@ -183,11 +234,7 @@ pub fn copy_for_export(
     let temporary_name = format!(".floepod-export-{}-{}", std::process::id(), db::now_ms());
     let temporary = unique_target(destination, &temporary_name, reserved)?;
     if let Err(error) = copy_path(source, &temporary) {
-        let cleanup = remove_path(&temporary).err();
-        return Err(match cleanup {
-            Some(cleanup) => format!("复制临时副本失败: {error}；清理失败: {cleanup}"),
-            None => format!("复制临时副本失败: {error}"),
-        });
+        return Err(format!("复制临时副本失败: {error}"));
     }
 
     let backup = match fs::symlink_metadata(target) {
@@ -217,7 +264,7 @@ pub fn copy_for_export(
                     });
                 }
             };
-            if let Err(error) = fs::rename(target, &backup) {
+            if let Err(error) = rename_new(target, &backup) {
                 let cleanup = remove_path(&temporary).err();
                 return Err(match cleanup {
                     Some(cleanup) => {
@@ -238,13 +285,13 @@ pub fn copy_for_export(
         }
     };
 
-    if let Err(error) = fs::rename(&temporary, target) {
+    if let Err(error) = rename_new(&temporary, target) {
         let cleanup = remove_path(&temporary).err();
         let restore = backup
             .as_ref()
             .and_then(|backup| match fs::symlink_metadata(target) {
                 Err(check) if check.kind() == io::ErrorKind::NotFound => {
-                    fs::rename(backup, target).err().map(|restore| {
+                    rename_new(backup, target).err().map(|restore| {
                         format!("恢复旧目标失败: {restore}；备份保留于 {}", backup.display())
                     })
                 }
@@ -314,7 +361,7 @@ fn restore_quarantined_move(record: &StagedMove) -> Result<(), String> {
         .ok_or_else(|| "缺少跨盘移动恢复路径".to_string())?;
     match fs::symlink_metadata(&record.original) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            fs::rename(quarantine, &record.original).map_err(|error| {
+            rename_new(quarantine, &record.original).map_err(|error| {
                 format!("恢复源路径 {} 失败: {error}", record.original.display())
             })?;
         }
@@ -326,7 +373,7 @@ fn restore_quarantined_move(record: &StagedMove) -> Result<(), String> {
 
 fn restore_moved_path(staged: &Path, original: &Path) -> Result<(), String> {
     match fs::symlink_metadata(original) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => fs::rename(staged, original)
+        Err(error) if error.kind() == io::ErrorKind::NotFound => rename_new(staged, original)
             .map_err(|error| error.to_string())
             .or_else(|_| {
                 copy_path(staged, original).map_err(|error| error.to_string())?;
@@ -360,18 +407,28 @@ pub fn rollback_staged_moves(records: &[StagedMove]) -> Vec<String> {
 
 /// 发布移动结果时，避免留下已经复制完成但尚未入库的跨盘文件。
 ///
-/// 已知取舍：Windows 上 `fs::rename` 等价于 `MOVEFILE_REPLACE_EXISTING`，
-/// `unique_target` 检查与最终 rename 之间存在极窄的覆盖窗口（仅本机其他
-/// 进程在同目录恰好创建同名文件时可触发）。改用非覆盖原语的语义改动远大于
-/// 收益，故接受此风险。
-pub fn move_into_staging(source: &Path, target: &Path) -> Result<StagedMove, String> {
-    match fs::rename(source, target) {
+/// Persist the recovery record before hiding the source under its quarantine name.
+pub fn move_into_staging(
+    source: &Path,
+    target: &Path,
+    journal: impl FnOnce(&StagedMove) -> Result<(), String>,
+) -> Result<StagedMove, String> {
+    move_into_staging_using(source, target, journal, rename_new)
+}
+
+fn move_into_staging_using(
+    source: &Path,
+    target: &Path,
+    journal: impl FnOnce(&StagedMove) -> Result<(), String>,
+    rename: impl Fn(&Path, &Path) -> io::Result<()>,
+) -> Result<StagedMove, String> {
+    match rename(source, target) {
         Ok(()) => Ok(StagedMove {
             staged: target.to_path_buf(),
             original: source.to_path_buf(),
             quarantine: None,
         }),
-        Err(direct_error) => {
+        Err(direct_error) if direct_error.raw_os_error() == Some(17) => {
             let source_parent = source
                 .parent()
                 .ok_or_else(|| format!("源路径没有父目录: {}", source.display()))?;
@@ -380,22 +437,32 @@ pub fn move_into_staging(source: &Path, target: &Path) -> Result<StagedMove, Str
                 .parent()
                 .ok_or_else(|| format!("目标路径没有父目录: {}", target.display()))?;
             let temporary = internal_path(target_parent, "inflight")?;
-            fs::rename(source, &quarantine).map_err(|error| {
+            let record = StagedMove {
+                staged: target.to_path_buf(),
+                original: source.to_path_buf(),
+                quarantine: Some(quarantine.clone()),
+            };
+            journal(&record)?;
+            rename_new(source, &quarantine).map_err(|error| {
                 format!("无法锁定跨盘移动源（直接移动错误: {direct_error}）：{error}")
             })?;
 
+            let mut copied = false;
             let publish = (|| -> Result<(), String> {
                 copy_path(&quarantine, &temporary)
                     .map_err(|error| format!("复制跨盘移动源失败: {error}"))?;
-                fs::rename(&temporary, target)
+                copied = true;
+                rename_new(&temporary, target)
                     .map_err(|error| format!("发布跨盘移动副本失败: {error}"))
             })();
             if let Err(error) = publish {
                 let mut rollback_errors = Vec::new();
-                if let Err(cleanup) = remove_path(&temporary) {
-                    rollback_errors.push(format!("清理临时副本失败: {cleanup}"));
+                if copied {
+                    if let Err(cleanup) = remove_path(&temporary) {
+                        rollback_errors.push(format!("清理临时副本失败: {cleanup}"));
+                    }
                 }
-                if let Err(restore) = fs::rename(&quarantine, source) {
+                if let Err(restore) = rename_new(&quarantine, source) {
                     rollback_errors.push(format!("恢复源路径失败: {restore}"));
                 }
                 return Err(if rollback_errors.is_empty() {
@@ -405,18 +472,119 @@ pub fn move_into_staging(source: &Path, target: &Path) -> Result<StagedMove, Str
                 });
             }
 
-            Ok(StagedMove {
-                staged: target.to_path_buf(),
-                original: source.to_path_buf(),
-                quarantine: Some(quarantine),
-            })
+            Ok(record)
         }
+        Err(error) => Err(error.to_string()),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_name_claimed_after_planning_is_never_replaced_or_removed() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.txt");
+        fs::write(&source, b"source").unwrap();
+        let target = unique_target(directory.path(), "target.txt", &mut HashSet::new()).unwrap();
+        fs::write(&target, b"another application").unwrap();
+        assert!(rename_new(&source, &target).is_err());
+        assert!(copy_path(&source, &target).is_err());
+        assert!(move_into_staging(&source, &target, |_| panic!("not cross volume")).is_err());
+        assert_eq!(fs::read(&source).unwrap(), b"source");
+        assert_eq!(fs::read(&target).unwrap(), b"another application");
+    }
+
+    #[test]
+    fn failed_copy_removes_only_the_directory_it_created() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source");
+        fs::create_dir(&source).unwrap();
+        let locked_path = source.join("locked.txt");
+        fs::write(&locked_path, b"cannot read now").unwrap();
+        let _locked = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&locked_path)
+            .unwrap();
+        let target = directory.path().join("target");
+        assert!(copy_path(&source, &target).is_err());
+        assert!(!target.exists());
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("keep.txt"), b"keep").unwrap();
+        assert!(copy_path(&source, &target).is_err());
+        assert_eq!(fs::read(target.join("keep.txt")).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn cross_volume_journal_failure_leaves_the_source_at_its_original_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.txt");
+        let target = directory.path().join("target.txt");
+        fs::write(&source, b"original").unwrap();
+        let error = move_into_staging_using(
+            &source,
+            &target,
+            |record| {
+                assert!(source.exists());
+                assert!(!record.quarantine.as_ref().unwrap().exists());
+                Err("database is full".into())
+            },
+            |_, _| Err(io::Error::from_raw_os_error(17)),
+        )
+        .unwrap_err();
+        assert_eq!(error, "database is full");
+        assert_eq!(fs::read(&source).unwrap(), b"original");
+        assert!(!target.exists());
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn cross_volume_publish_collision_restores_the_source_without_overwriting_the_target() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.txt");
+        let target = directory.path().join("target.txt");
+        fs::write(&source, b"original").unwrap();
+        let result = move_into_staging_using(
+            &source,
+            &target,
+            |_| {
+                fs::write(&target, b"another application").unwrap();
+                Ok(())
+            },
+            |_, _| Err(io::Error::from_raw_os_error(17)),
+        );
+        assert!(result.is_err());
+        assert_eq!(fs::read(&source).unwrap(), b"original");
+        assert_eq!(fs::read(&target).unwrap(), b"another application");
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn cross_volume_move_retains_the_source_until_commit_and_rolls_back() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.txt");
+        let target = directory.path().join("target.txt");
+        fs::write(&source, b"original").unwrap();
+        let record = move_into_staging_using(
+            &source,
+            &target,
+            |_| Ok(()),
+            |_, _| Err(io::Error::from_raw_os_error(17)),
+        )
+        .unwrap();
+        assert!(!source.exists());
+        assert_eq!(
+            fs::read(record.quarantine.as_ref().unwrap()).unwrap(),
+            b"original"
+        );
+        assert_eq!(fs::read(&target).unwrap(), b"original");
+        assert!(rollback_staged_moves(&[record]).is_empty());
+        assert_eq!(fs::read(&source).unwrap(), b"original");
+        assert!(!target.exists());
+    }
 
     #[test]
     fn unique_target_reserves_names_with_extensions() {

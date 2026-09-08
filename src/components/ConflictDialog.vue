@@ -31,12 +31,7 @@ const simpleLanguage = computed(() =>
       <li v-if="preview.extra > 0" class="more">以及另外 {{ preview.extra }} 个</li>
     </ul>
     <div class="actions">
-      <button
-        type="button"
-        class="act primary"
-        :disabled="busy"
-        @click="emit('resolve', 'rename')"
-      >
+      <button type="button" class="act primary" :disabled="busy" @click="emit('resolve', 'rename')">
         {{ simpleLanguage ? "两个都保留（自动改名）" : "保留两者" }}
       </button>
       <button type="button" class="act" :disabled="busy" @click="emit('resolve', 'overwrite')">

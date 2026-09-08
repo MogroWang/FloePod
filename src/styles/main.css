@@ -36,10 +36,10 @@
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
 
-  --shadow-panel: 0 18px 50px -12px oklch(0.2 0.02 230 / 0.35), 0 4px 14px -6px
-    oklch(0.2 0.02 230 / 0.18);
-  --shadow-pop: 0 10px 30px -10px oklch(0.2 0.02 230 / 0.3), 0 2px 8px -4px
-    oklch(0.2 0.02 230 / 0.15);
+  --shadow-panel:
+    0 18px 50px -12px oklch(0.2 0.02 230 / 0.35), 0 4px 14px -6px oklch(0.2 0.02 230 / 0.18);
+  --shadow-pop:
+    0 10px 30px -10px oklch(0.2 0.02 230 / 0.3), 0 2px 8px -4px oklch(0.2 0.02 230 / 0.15);
 
   --font-sans:
     "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans SC",
@@ -88,7 +88,10 @@
   font-weight: 550;
   cursor: pointer;
   font-family: inherit;
-  transition: transform 100ms ease, background 130ms ease, border-color 130ms ease;
+  transition:
+    transform 100ms ease,
+    background 130ms ease,
+    border-color 130ms ease;
 }
 .act:active {
   transform: scale(0.98);

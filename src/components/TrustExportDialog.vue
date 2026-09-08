@@ -4,12 +4,13 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type { PrivacyScanResult } from "@/domain/types";
 import { ipc } from "@/ipc/client";
 import { BROWSER_PREVIEW_EXPORT_ROOT } from "@/lib/env";
+import PrivacyScanSummary from "@/components/PrivacyScanSummary.vue";
 
 const props = defineProps<{ ids: number[]; podName: string }>();
 const emit = defineEmits<{ (event: "close"): void; (event: "completed", message: string): void }>();
 
 const scan = ref<PrivacyScanResult | null>(null);
-const loading = ref(true);
+const loading = ref(false);
 const busy = ref(false);
 const error = ref("");
 const title = ref(`${props.podName}交接材料`);
@@ -23,6 +24,7 @@ async function pickDestination(title: string): Promise<string | null> {
 }
 
 async function runScan() {
+  if (loading.value || busy.value) return;
   loading.value = true;
   error.value = "";
   try {
@@ -36,14 +38,15 @@ async function runScan() {
 
 async function safeExport() {
   if (busy.value) return;
-  const destination = await pickDestination("选择清理后副本的保存位置");
-  if (!destination) return;
+  const ids = [...props.ids];
   busy.value = true;
   try {
-    const result = await ipc.safeExportItems(props.ids, destination);
+    const destination = await pickDestination("选择清理后副本的保存位置");
+    if (!destination) return;
+    const result = await ipc.safeExportItems(ids, destination);
     emit(
       "completed",
-      `已生成 ${result.completed.length} 个清理副本${result.failed.length ? `，${result.failed.length} 项失败` : ""}`,
+      `已生成 ${result.completed.length} 个清理副本${result.failed.length ? `，${result.failed.length} 项失败` : ""}${result.failed.length ? `：${result.failed.slice(0, 3).join("；")}` : ""}`,
     );
   } catch (reason) {
     error.value = `安全导出失败：${String(reason)}`;
@@ -54,16 +57,22 @@ async function safeExport() {
 
 async function createHandoff() {
   if (busy.value || !title.value.trim()) return;
-  const destination = await pickDestination("选择交接包的保存位置");
-  if (!destination) return;
+  const request = {
+    ids: [...props.ids],
+    title: title.value.trim(),
+    note: note.value.trim(),
+    clean: cleanMetadata.value,
+  };
   busy.value = true;
   try {
+    const destination = await pickDestination("选择交接包的保存位置");
+    if (!destination) return;
     const result = await ipc.createHandoff(
-      props.ids,
+      request.ids,
       destination,
-      title.value.trim(),
-      note.value.trim(),
-      cleanMetadata.value,
+      request.title,
+      request.note,
+      request.clean,
     );
     emit(
       "completed",
@@ -86,16 +95,26 @@ onMounted(runScan);
         <h2 id="trust-title">安全导出与可信交接</h2>
         <p>所有检查和清理均在本机完成，原文件不会被修改。</p>
       </div>
-      <button type="button" class="icon-close" aria-label="关闭" :disabled="busy" @click="emit('close')">×</button>
+      <button
+        type="button"
+        class="icon-close"
+        aria-label="关闭"
+        :disabled="busy"
+        @click="emit('close')"
+      >
+        ×
+      </button>
     </header>
 
     <p v-if="loading" class="notice" role="status">正在本地检查 {{ ids.length }} 个项目…</p>
     <template v-else-if="scan">
-      <div class="scan-summary" role="status">
-        已检查 {{ scan.filesScanned }} 个文件，发现 {{ scan.issues.length }} 个可能的隐私或交付问题。
-      </div>
+      <PrivacyScanSummary :scan="scan" />
       <ul v-if="scan.issues.length" class="issue-list">
-        <li v-for="(issue, index) in scan.issues" :key="`${issue.path}-${issue.code}-${index}`" :data-severity="issue.severity">
+        <li
+          v-for="(issue, index) in scan.issues"
+          :key="`${issue.path}-${issue.code}-${index}`"
+          :data-severity="issue.severity"
+        >
           <div>
             <strong>{{ issue.message }}</strong>
             <small>{{ issue.path }}</small>
@@ -103,7 +122,6 @@ onMounted(runScan);
           <span>{{ issue.canClean ? "可生成清理副本" : "请人工确认" }}</span>
         </li>
       </ul>
-      <p v-else class="notice success">没有发现已知的常见隐私问题，仍建议交付前人工复核。</p>
       <p class="disclaimer">{{ scan.disclaimer }}</p>
     </template>
 
@@ -114,7 +132,9 @@ onMounted(runScan);
         <h3>生成清理后的副本</h3>
         <p>移除图片 EXIF/GPS、PDF 文档属性以及 Office 作者和公司字段；不修改原件。</p>
       </div>
-      <button type="button" class="button" :disabled="busy || loading" @click="safeExport">选择位置并生成</button>
+      <button type="button" class="button" :disabled="busy || loading" @click="safeExport">
+        选择位置并生成
+      </button>
     </section>
 
     <section class="handoff-section">
@@ -131,7 +151,12 @@ onMounted(runScan);
         <input v-model="cleanMetadata" type="checkbox" />
         <span>逐文件生成元数据清理副本后再打包</span>
       </label>
-      <button type="button" class="button primary" :disabled="busy || loading || !title.trim()" @click="createHandoff">
+      <button
+        type="button"
+        class="button primary"
+        :disabled="busy || loading || !title.trim()"
+        @click="createHandoff"
+      >
         {{ busy ? "正在处理…" : "选择位置并生成交接包" }}
       </button>
       <p>交接包包含文件清单 CSV、SHA256SUMS、JSON 机器清单和可直接打开的交接说明 HTML。</p>

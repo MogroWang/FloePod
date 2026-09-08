@@ -19,7 +19,7 @@ pwsh -File scripts/package-msix.ps1
 - 裸 `FloePod.exe`；
 - 便携 ZIP。
 
-CI 和 Release 会对最终资产生成 `SHA256SUMS.txt` 与 GitHub 构建来源证明。正式分发前应配置 Authenticode 证书；仓库不会附带、生成或伪造生产证书。
+CI 和 Release 会对最终资产生成 `SHA256SUMS.txt`；受信任的 Release 阶段另生成 GitHub 构建来源证明。证书未配置时允许 unsigned 发布并如实标注；仓库不会附带、生成或伪造生产证书。合并事件、版本门禁和 required checks 配置见 [自动发布说明](release.md)。
 
 ## Authenticode
 
@@ -35,7 +35,7 @@ Release 工作流支持以下 GitHub Actions secrets：
 ```powershell
 $env:FLOEPOD_SIGN_CERT_PATH = "D:\secure\floepod.pfx"
 $env:FLOEPOD_SIGN_CERT_PASSWORD = "由安全输入提供"
-pwsh -File scripts/sign-windows-artifacts.ps1 -Path .\dist\FloePod-1.6.0-win-x64.msix
+pwsh -File scripts/sign-windows-artifacts.ps1 -Path .\dist\FloePod-1.6.1-win-x64.msix
 ```
 
 不要把证书或密码提交到仓库。
@@ -43,7 +43,7 @@ pwsh -File scripts/sign-windows-artifacts.ps1 -Path .\dist\FloePod-1.6.0-win-x64
 ## 静默安装
 
 ```powershell
-msiexec.exe /i FloePod_1.6.0_x64_en-US.msi /qn /norestart
+msiexec.exe /i FloePod_1.6.1_x64_en-US.msi /qn /norestart
 ```
 
 NSIS 通常支持 `/S`，MSIX 可由管理员使用 `Add-AppxPackage`、Intune 或受信任的软件分发系统部署。MSIX 的 `Publisher` 必须与签名证书主题完全一致；可通过 `FLOEPOD_MSIX_PUBLISHER` 或 `package-msix.ps1 -Publisher` 指定。

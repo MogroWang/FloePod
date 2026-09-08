@@ -1,28 +1,46 @@
 //! 本地隐私提示与安全副本生成。扫描不会上传文件，也不会修改原件。
 
-use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{BufReader, Read, Seek, Write};
+#[cfg(test)]
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
-use exif::{In, Reader as ExifReader, Tag};
-use regex::Regex;
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
+#[cfg(test)]
 use zip::write::SimpleFileOptions;
-use zip::{ZipArchive, ZipWriter};
+#[cfg(test)]
+use zip::ZipWriter;
 
 use crate::db;
 use crate::file_ops;
-use crate::rules;
 use crate::security;
 use crate::staging;
 use crate::state::AppState;
 
-const MAX_METADATA_SCAN_BYTES: u64 = 32 * 1024 * 1024;
+pub(crate) mod clean;
+pub(crate) mod metadata;
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+mod scan;
+pub use scan::scan_paths;
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanStatus {
+    Checked,
+    Skipped,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MetadataCheck {
+    pub path: String,
+    pub status: ScanStatus,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PrivacyIssue {
     pub path: String,
@@ -32,16 +50,20 @@ pub struct PrivacyIssue {
     pub can_clean: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PrivacyScanResult {
     pub files_scanned: usize,
+    pub files_checked: usize,
+    pub files_skipped: usize,
+    pub files_failed: usize,
+    pub files: Vec<MetadataCheck>,
     pub issues: Vec<PrivacyIssue>,
     pub duplicates: Vec<Vec<String>>,
     pub disclaimer: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CleanResult {
     pub source: String,
@@ -50,26 +72,11 @@ pub struct CleanResult {
     pub warnings: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SafeExportResult {
     pub completed: Vec<CleanResult>,
     pub failed: Vec<String>,
-}
-
-fn id_pattern() -> &'static Regex {
-    static PATTERN: OnceLock<Regex> = OnceLock::new();
-    PATTERN.get_or_init(|| Regex::new(r"(?i)(?:\D|^)[1-9]\d{5}(?:18|19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[0-9x](?:\D|$)").unwrap())
-}
-
-fn phone_pattern() -> &'static Regex {
-    static PATTERN: OnceLock<Regex> = OnceLock::new();
-    PATTERN.get_or_init(|| Regex::new(r"(?:\D|^)1[3-9]\d{9}(?:\D|$)").unwrap())
-}
-
-fn email_pattern() -> &'static Regex {
-    static PATTERN: OnceLock<Regex> = OnceLock::new();
-    PATTERN.get_or_init(|| Regex::new(r"(?i)[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}").unwrap())
 }
 
 fn push_issue(
@@ -87,281 +94,6 @@ fn push_issue(
         message: message.into(),
         can_clean,
     });
-}
-
-fn scan_name(path: &Path, issues: &mut Vec<PrivacyIssue>) {
-    let name = path
-        .file_name()
-        .map(|value| value.to_string_lossy().to_string())
-        .unwrap_or_default();
-    if id_pattern().is_match(&name) {
-        push_issue(
-            issues,
-            path,
-            "filename-id",
-            "high",
-            "文件名可能包含身份证号码",
-            false,
-        );
-    }
-    if phone_pattern().is_match(&name) {
-        push_issue(
-            issues,
-            path,
-            "filename-phone",
-            "medium",
-            "文件名可能包含手机号码",
-            false,
-        );
-    }
-    if email_pattern().is_match(&name) {
-        push_issue(
-            issues,
-            path,
-            "filename-email",
-            "medium",
-            "文件名可能包含电子邮箱",
-            false,
-        );
-    }
-    let lower = name.to_lowercase();
-    if name.starts_with('.')
-        || lower.ends_with(".tmp")
-        || lower.ends_with(".bak")
-        || lower.ends_with('~')
-        || lower.starts_with("~$")
-    {
-        push_issue(
-            issues,
-            path,
-            "temporary-file",
-            "medium",
-            "隐藏文件、临时文件或备份文件通常不应交付",
-            false,
-        );
-    }
-}
-
-fn scan_exif(path: &Path, issues: &mut Vec<PrivacyIssue>) -> Result<(), String> {
-    let file = fs::File::open(path).map_err(|error| error.to_string())?;
-    let mut reader = BufReader::new(file);
-    let Ok(exif) = ExifReader::new().read_from_container(&mut reader) else {
-        return Ok(());
-    };
-    let has_gps = exif.get_field(Tag::GPSLatitude, In::PRIMARY).is_some()
-        || exif.get_field(Tag::GPSLongitude, In::PRIMARY).is_some();
-    if has_gps {
-        push_issue(
-            issues,
-            path,
-            "exif-gps",
-            "high",
-            "图片 EXIF 中包含 GPS 位置信息",
-            true,
-        );
-    }
-    let identity_tags = [
-        Tag::Artist,
-        Tag::Make,
-        Tag::Model,
-        Tag::Software,
-        Tag::Copyright,
-    ];
-    if identity_tags
-        .iter()
-        .any(|tag| exif.get_field(*tag, In::PRIMARY).is_some())
-    {
-        push_issue(
-            issues,
-            path,
-            "exif-identity",
-            "medium",
-            "图片 EXIF 中包含作者、设备型号、软件或版权信息",
-            true,
-        );
-    }
-    Ok(())
-}
-
-fn office_metadata<R: Read + Seek>(reader: R) -> Result<Vec<String>, String> {
-    let mut archive = ZipArchive::new(reader).map_err(|error| error.to_string())?;
-    let mut findings = Vec::new();
-    for entry in ["docProps/core.xml", "docProps/app.xml"] {
-        let Ok(mut file) = archive.by_name(entry) else {
-            continue;
-        };
-        if file.size() > 2 * 1024 * 1024 {
-            continue;
-        }
-        let mut xml = String::new();
-        file.read_to_string(&mut xml)
-            .map_err(|error| error.to_string())?;
-        for (needle, label) in [
-            ("<dc:creator", "作者"),
-            ("<cp:lastModifiedBy", "最后编辑者"),
-            ("<Company", "公司"),
-            ("<Manager", "管理者"),
-        ] {
-            if xml.contains(needle) {
-                findings.push(label.into());
-            }
-        }
-    }
-    findings.sort();
-    findings.dedup();
-    Ok(findings)
-}
-
-fn scan_document_metadata(path: &Path, issues: &mut Vec<PrivacyIssue>) -> Result<(), String> {
-    let extension = path
-        .extension()
-        .map(|value| value.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
-    match extension.as_str() {
-        "jpg" | "jpeg" | "tif" | "tiff" | "png" | "webp" => scan_exif(path, issues)?,
-        "pdf" => {
-            if let Ok(document) = lopdf::Document::load(path) {
-                if document.trailer.get(b"Info").is_ok() {
-                    push_issue(
-                        issues,
-                        path,
-                        "pdf-metadata",
-                        "medium",
-                        "PDF 包含标题、作者、创建工具或其他文档属性",
-                        true,
-                    );
-                }
-            } else {
-                push_issue(
-                    issues,
-                    path,
-                    "damaged-document",
-                    "high",
-                    "PDF 无法解析，可能已损坏或受密码保护",
-                    false,
-                );
-            }
-        }
-        "docx" | "xlsx" | "pptx" | "odt" | "ods" | "odp" => {
-            match fs::File::open(path)
-                .map_err(|error| error.to_string())
-                .and_then(office_metadata)
-            {
-                Ok(findings) if !findings.is_empty() => push_issue(
-                    issues,
-                    path,
-                    "office-metadata",
-                    "medium",
-                    format!("文档属性包含：{}", findings.join("、")),
-                    true,
-                ),
-                Err(_) => push_issue(
-                    issues,
-                    path,
-                    "damaged-document",
-                    "high",
-                    "Office/OpenDocument 文件无法解析，可能已损坏",
-                    false,
-                ),
-                _ => {}
-            }
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
-fn collect_files(path: &Path, files: &mut Vec<PathBuf>, issues: &mut Vec<PrivacyIssue>) {
-    scan_name(path, issues);
-    let Ok(metadata) = fs::symlink_metadata(path) else {
-        push_issue(issues, path, "unreadable", "high", "文件无法读取", false);
-        return;
-    };
-    if file_ops::is_reparse_or_symlink(&metadata) {
-        push_issue(
-            issues,
-            path,
-            "link",
-            "high",
-            "符号链接或目录重解析点可能指向交接范围之外",
-            false,
-        );
-        return;
-    }
-    if metadata.is_file() {
-        if metadata.len() == 0 {
-            push_issue(issues, path, "zero-byte", "medium", "文件大小为 0", false);
-        }
-        files.push(path.to_path_buf());
-        return;
-    }
-    if metadata.is_dir() {
-        let Ok(entries) = fs::read_dir(path) else {
-            push_issue(issues, path, "unreadable", "high", "目录无法读取", false);
-            return;
-        };
-        let mut entries = entries.filter_map(Result::ok).collect::<Vec<_>>();
-        entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_lowercase());
-        for entry in entries {
-            collect_files(&entry.path(), files, issues);
-        }
-    }
-}
-
-pub fn scan_paths(paths: &[PathBuf]) -> PrivacyScanResult {
-    let mut issues = Vec::new();
-    let mut files = Vec::new();
-    for path in paths {
-        collect_files(path, &mut files, &mut issues);
-    }
-    let mut hashes: HashMap<(u64, String), Vec<String>> = HashMap::new();
-    for path in &files {
-        if fs::metadata(path)
-            .map(|metadata| metadata.len() <= MAX_METADATA_SCAN_BYTES)
-            .unwrap_or(false)
-        {
-            if let Err(error) = scan_document_metadata(path, &mut issues) {
-                push_issue(
-                    &mut issues,
-                    path,
-                    "metadata-scan-error",
-                    "low",
-                    format!("无法完成元数据检查：{error}"),
-                    false,
-                );
-            }
-        }
-        if let Ok(metadata) = fs::metadata(path) {
-            if let Ok(hash) = rules::sha256_file(path) {
-                hashes
-                    .entry((metadata.len(), hash))
-                    .or_default()
-                    .push(path.to_string_lossy().to_string());
-            }
-        }
-    }
-    let duplicates = hashes
-        .into_values()
-        .filter(|group| group.len() > 1)
-        .collect::<Vec<_>>();
-    for group in &duplicates {
-        for path in group {
-            push_issue(
-                &mut issues,
-                Path::new(path),
-                "duplicate",
-                "low",
-                format!("内容与同批次另外 {} 个文件重复", group.len() - 1),
-                false,
-            );
-        }
-    }
-    PrivacyScanResult {
-        files_scanned: files.len(),
-        issues,
-        duplicates,
-        disclaimer: "本地规则只能提示常见风险，不代表完全匿名，也不构成合规认证。".into(),
-    }
 }
 
 pub fn scan_items(app: &AppHandle, ids: &[i64]) -> Result<PrivacyScanResult, String> {
@@ -382,106 +114,6 @@ pub fn scan_items(app: &AppHandle, ids: &[i64]) -> Result<PrivacyScanResult, Str
     Ok(scan_paths(&paths))
 }
 
-fn clean_image(source: &Path, output: &Path) -> Result<Vec<String>, String> {
-    let image = image::open(source).map_err(|error| format!("无法解码图片: {error}"))?;
-    let format = image::ImageFormat::from_path(source).unwrap_or(image::ImageFormat::Png);
-    image
-        .save_with_format(output, format)
-        .map_err(|error| format!("无法写入清理后的图片: {error}"))?;
-    Ok(vec!["EXIF、GPS、作者、设备和软件元数据".into()])
-}
-
-fn clean_pdf(source: &Path, output: &Path) -> Result<Vec<String>, String> {
-    let mut document = lopdf::Document::load(source).map_err(|error| error.to_string())?;
-    let mut removed = Vec::new();
-    if document.trailer.remove(b"Info").is_some() {
-        removed.push("PDF 文档属性".into());
-    }
-    let root = document
-        .trailer
-        .get(b"Root")
-        .and_then(lopdf::Object::as_reference)
-        .ok();
-    if let Some(root) = root {
-        if let Ok(catalog) = document.get_dictionary_mut(root) {
-            if catalog.remove(b"Metadata").is_some() {
-                removed.push("PDF XMP 元数据".into());
-            }
-        }
-    }
-    document.save(output).map_err(|error| error.to_string())?;
-    Ok(removed)
-}
-
-fn scrub_xml(xml: &str) -> (String, Vec<String>) {
-    static FIELDS: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
-    let fields = FIELDS.get_or_init(|| {
-        [
-            (r"(?is)<dc:creator\b[^>]*>.*?</dc:creator>", "作者"),
-            (
-                r"(?is)<cp:lastModifiedBy\b[^>]*>.*?</cp:lastModifiedBy>",
-                "最后编辑者",
-            ),
-            (r"(?is)<Company\b[^>]*>.*?</Company>", "公司"),
-            (r"(?is)<Manager\b[^>]*>.*?</Manager>", "管理者"),
-        ]
-        .into_iter()
-        .map(|(pattern, label)| (Regex::new(pattern).unwrap(), label))
-        .collect()
-    });
-    let mut value = xml.to_string();
-    let mut removed = Vec::new();
-    for (pattern, label) in fields {
-        if pattern.is_match(&value) {
-            value = pattern.replace_all(&value, "").to_string();
-            removed.push((*label).into());
-        }
-    }
-    (value, removed)
-}
-
-fn clean_office(source: &Path, output: &Path) -> Result<Vec<String>, String> {
-    let input = fs::File::open(source).map_err(|error| error.to_string())?;
-    let mut archive = ZipArchive::new(input).map_err(|error| error.to_string())?;
-    let output_file = fs::File::create(output).map_err(|error| error.to_string())?;
-    let mut writer = ZipWriter::new(output_file);
-    let mut removed = Vec::new();
-    for index in 0..archive.len() {
-        let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
-        let name = entry.name().replace('\\', "/");
-        let options = SimpleFileOptions::default().compression_method(entry.compression());
-        if entry.is_dir() {
-            writer
-                .add_directory(name, options)
-                .map_err(|error| error.to_string())?;
-            continue;
-        }
-        writer
-            .start_file(name.clone(), options)
-            .map_err(|error| error.to_string())?;
-        if matches!(name.as_str(), "docProps/core.xml" | "docProps/app.xml") {
-            if entry.size() > 2 * 1024 * 1024 {
-                return Err(format!("文档属性文件异常过大，拒绝清理: {name}"));
-            }
-            let mut xml = String::new();
-            entry
-                .read_to_string(&mut xml)
-                .map_err(|error| error.to_string())?;
-            let (xml, fields) = scrub_xml(&xml);
-            removed.extend(fields);
-            writer
-                .write_all(xml.as_bytes())
-                .map_err(|error| error.to_string())?;
-        } else {
-            std::io::copy(&mut entry, &mut writer).map_err(|error| error.to_string())?;
-        }
-    }
-    writer.finish().map_err(|error| error.to_string())?;
-    removed.sort();
-    removed.dedup();
-    Ok(removed)
-}
-
 pub fn clean_copy(source: &Path, output: &Path) -> Result<CleanResult, String> {
     if !source.is_file() {
         return Err("隐私清理目前只针对单个文件；文件夹会在交接包中逐文件处理".into());
@@ -491,19 +123,25 @@ pub fn clean_copy(source: &Path, output: &Path) -> Result<CleanResult, String> {
         .ok_or_else(|| "清理副本目标没有父目录".to_string())?;
     fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     file_ops::ensure_distinct_target(source, output)?;
-    let temporary = file_ops::unique_target(
-        parent,
-        &format!(".floepod-privacy-{}-{}", std::process::id(), db::now_ms()),
-        &mut HashSet::new(),
-    )?;
+    let workspace = tempfile::Builder::new()
+        .prefix(".floepod-privacy-")
+        .tempdir_in(parent)
+        .map_err(|error| format!("无法创建清理临时目录: {error}"))?;
+    let temporary = workspace.path().join("cleaned");
     let extension = source
         .extension()
         .map(|value| value.to_string_lossy().to_lowercase())
         .unwrap_or_default();
     let cleaned = match extension.as_str() {
-        "jpg" | "jpeg" | "png" | "webp" | "bmp" | "tif" | "tiff" => clean_image(source, &temporary),
-        "pdf" => clean_pdf(source, &temporary),
-        "docx" | "xlsx" | "pptx" | "odt" | "ods" | "odp" => clean_office(source, &temporary),
+        "jpg" | "jpeg" | "png" | "webp" | "bmp" | "tif" | "tiff" | "pdf" | "docx" | "xlsx"
+        | "pptx" | "odt" | "ods" | "odp" => crate::parser_worker::invoke::<Vec<String>>(
+            crate::parser_worker::Operation::Clean {
+                source: source.to_path_buf(),
+                output: temporary.clone(),
+            },
+            Vec::new(),
+        )
+        .map_err(|error| format!("清理未完成: {error:?}")),
         _ => file_ops::copy_path(source, &temporary)
             .map(|_| Vec::new())
             .map_err(|error| error.to_string()),
@@ -515,7 +153,7 @@ pub fn clean_copy(source: &Path, output: &Path) -> Result<CleanResult, String> {
             return Err(error);
         }
     };
-    if let Err(error) = fs::rename(&temporary, output) {
+    if let Err(error) = file_ops::rename_new(&temporary, output) {
         let cleanup = file_ops::remove_path(&temporary).err();
         return Err(match cleanup {
             Some(cleanup) => format!("无法发布清理副本: {error}；清理临时文件失败: {cleanup}"),
@@ -536,6 +174,7 @@ pub fn safe_export(
     destination: String,
 ) -> Result<SafeExportResult, String> {
     let state = app.state::<AppState>();
+    let _permit = state.tasks.enter()?;
     let _operation = state.file_ops.lock().unwrap();
     let (settings, items) = {
         let connection = state.db.lock().unwrap();
@@ -598,7 +237,7 @@ pub fn safe_export(
         })
         .collect::<Vec<_>>();
     if !history_items.is_empty() {
-        let _ = crate::operations::record(
+        if let Err(error) = crate::operations::record(
             &state.db.lock().unwrap(),
             crate::operations::OperationDraft::completed(
                 "privacy_export",
@@ -611,14 +250,107 @@ pub fn safe_export(
                 serde_json::json!({}),
                 history_items,
             ),
-        );
+        ) {
+            crate::logging::write(&format!(
+                "[privacy] 安全副本已生成，但操作记录写入失败: {error}"
+            ));
+            for result in &mut completed {
+                result
+                    .warnings
+                    .push(format!("副本已生成，但无法建立操作记录与撤销入口: {error}"));
+            }
+        }
     }
     Ok(SafeExportResult { completed, failed })
 }
 
 #[cfg(test)]
 mod tests {
+    use super::clean::scrub_xml;
     use super::*;
+
+    #[test]
+    fn oversized_and_unsupported_metadata_are_skipped_not_clean() {
+        let temp = tempfile::tempdir().unwrap();
+        let large = temp.path().join("large.jpg");
+        fs::File::create(&large)
+            .unwrap()
+            .set_len(metadata::MAX_INPUT_BYTES + 1)
+            .unwrap();
+        let text = temp.path().join("note.txt");
+        fs::write(&text, "hello").unwrap();
+        let result = scan_paths(&[large, text]);
+        assert_eq!(result.files_scanned, 2);
+        assert_eq!(result.files_checked, 0);
+        assert_eq!(result.files_skipped, 2);
+        assert!(result.files.iter().all(|file| file.reason.is_some()));
+    }
+
+    #[test]
+    fn malformed_documents_and_missing_files_have_explicit_failed_status() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut paths = Vec::new();
+        for extension in ["pdf", "jpg", "docx"] {
+            let path = temp.path().join(format!("broken.{extension}"));
+            fs::write(&path, b"not a document").unwrap();
+            paths.push(path);
+        }
+        paths.push(temp.path().join("missing.pdf"));
+        let result = scan_paths(&paths);
+        assert_eq!(result.files_failed, 4);
+        assert_eq!(result.files_checked, 0);
+        assert!(result
+            .files
+            .iter()
+            .all(|file| file.status == ScanStatus::Failed));
+    }
+
+    fn office_fixture(path: &Path, entry: &str, xml: &[u8]) {
+        let mut archive = ZipWriter::new(fs::File::create(path).unwrap());
+        archive
+            .start_file(entry, SimpleFileOptions::default())
+            .unwrap();
+        archive.write_all(xml).unwrap();
+        archive.finish().unwrap();
+    }
+
+    #[test]
+    fn opendocument_metadata_is_detected_and_cleaned_in_a_copy() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source.odt");
+        office_fixture(&source, "meta.xml", br#"<office:document-meta xmlns:office="urn:office" xmlns:dc="urn:dc" xmlns:meta="urn:meta"><office:meta><dc:creator>Alice</dc:creator><meta:initial-creator>Bob</meta:initial-creator></office:meta></office:document-meta>"#);
+        let original = fs::read(&source).unwrap();
+        let result = scan_paths(std::slice::from_ref(&source));
+        assert_eq!(result.files_checked, 1);
+        assert!(result
+            .issues
+            .iter()
+            .any(|issue| issue.code == "office-metadata"));
+        let output = temp.path().join("clean.odt");
+        clean_copy(&source, &output).unwrap();
+        assert_eq!(fs::read(&source).unwrap(), original);
+        assert!(!scan_paths(&[output])
+            .issues
+            .iter()
+            .any(|issue| issue.code == "office-metadata"));
+    }
+
+    #[test]
+    fn oversized_or_invalid_office_properties_cannot_report_checked() {
+        let temp = tempfile::tempdir().unwrap();
+        let large = temp.path().join("large.docx");
+        office_fixture(
+            &large,
+            "docProps/core.xml",
+            &vec![b'x'; metadata::MAX_PROPERTY_BYTES as usize + 1],
+        );
+        let broken = temp.path().join("broken.docx");
+        office_fixture(&broken, "docProps/core.xml", b"<root><creator>");
+        let result = scan_paths(&[large, broken]);
+        assert_eq!(result.files_skipped, 1);
+        assert_eq!(result.files_failed, 1);
+        assert_eq!(result.files_checked, 0);
+    }
 
     #[test]
     fn filename_patterns_report_common_identifiers_without_uploading_content() {
@@ -635,9 +367,20 @@ mod tests {
     #[test]
     fn xml_scrubber_removes_author_company_and_editor() {
         let xml = "<x><dc:creator>A</dc:creator><cp:lastModifiedBy>B</cp:lastModifiedBy><Company>C</Company></x>";
-        let (cleaned, removed) = scrub_xml(xml);
+        let (cleaned, removed) = scrub_xml(xml).unwrap();
         assert!(!cleaned.contains('A'));
         assert_eq!(removed.len(), 3);
+    }
+
+    #[test]
+    fn xml_scrubber_handles_aliases_empty_fields_and_rejects_dtd() {
+        let (cleaned, removed) = scrub_xml(r#"<root xmlns:alias="urn:dc"><alias:creator>Alice</alias:creator><Company/><Title>Keep</Title></root>"#).unwrap();
+        assert!(!cleaned.contains("Alice"));
+        assert!(cleaned.contains("Keep"));
+        assert!(!removed.is_empty());
+        assert!(
+            scrub_xml(r#"<!DOCTYPE r [<!ENTITY x SYSTEM "file:///secret">]><r>&x;</r>"#).is_err()
+        );
     }
 
     #[test]

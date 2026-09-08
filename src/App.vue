@@ -27,23 +27,22 @@ function resolveWindowLabel(): string {
 
 const label = resolveWindowLabel();
 const target = parseWindowLabel(label);
-const view = target?.kind === "settings"
-  ? SettingsWindow
-  : target?.kind === "podPanel"
-    ? PodPanel
-    : target?.kind === "podBar"
-      ? PodBar
-      : target?.kind === "contextMenu"
-        ? ContextMenuWindow
-        : null;
+const view =
+  target?.kind === "settings"
+    ? SettingsWindow
+    : target?.kind === "podPanel"
+      ? PodPanel
+      : target?.kind === "podBar"
+        ? PodBar
+        : target?.kind === "contextMenu"
+          ? ContextMenuWindow
+          : null;
 const viewProps = target && "podId" in target ? { podId: target.podId } : {};
 </script>
 
 <template>
   <component v-if="view" :is="view" v-bind="viewProps" />
-  <main v-else class="window-error" role="alert">
-    无法识别窗口：{{ label }}
-  </main>
+  <main v-else class="window-error" role="alert">无法识别窗口：{{ label }}</main>
 </template>
 
 <style scoped>
@@ -53,6 +52,8 @@ const viewProps = target && "podId" in target ? { podId: target.podId } : {};
   padding: 16px;
   color: #ffb4ab;
   background: #211a1a;
-  font: 14px/1.5 system-ui, sans-serif;
+  font:
+    14px/1.5 system-ui,
+    sans-serif;
 }
 </style>

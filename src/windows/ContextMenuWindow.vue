@@ -76,12 +76,7 @@ onMounted(async () => {
   // 菜单窗口跟随应用主题（深浅色与浮动面板一致）。
   await settingsStore.load().catch((err) => console.error("menu theme load failed", err));
   await ipc.contextMenuReady().catch((err) => console.error("menu ready failed", err));
-  disposeShow = await listenCurrent<{
-    seq: number;
-    podId: number;
-    items: MenuItemSpec[];
-    material?: Material;
-  }>(Events.ContextMenuShow, (payload) => {
+  disposeShow = await listenCurrent(Events.ContextMenuShow, (payload) => {
     closing = false;
     seq.value = payload.seq;
     podId.value = payload.podId;

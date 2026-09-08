@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
@@ -20,7 +20,7 @@ use crate::operations;
 use crate::settings::{self, Hotkeys, Pod, Settings};
 use crate::state::AppState;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, rename_all = "camelCase")]
 pub struct OrganizationPolicy {
     pub organization_name: String,
@@ -58,7 +58,7 @@ impl Default for OrganizationPolicy {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PolicyStatus {
     pub managed: bool,
@@ -66,7 +66,7 @@ pub struct PolicyStatus {
     pub policy: OrganizationPolicy,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportedArtifact {
     pub path: String,
@@ -170,13 +170,13 @@ pub fn enforce_pod(app: &AppHandle, pod: &Pod, changing_rules: bool) -> Result<(
         return Err("机构策略已锁定规则匣设置".into());
     }
     if !status.policy.allowed_data_roots.is_empty() && !pod.staging_folder.trim().is_empty() {
-        let folder = settings::resolve_path(Path::new(&pod.staging_folder))?;
+        let folder = crate::file_paths::resolve_path(Path::new(&pod.staging_folder))?;
         let allowed = status
             .policy
             .allowed_data_roots
             .iter()
-            .filter_map(|root| settings::resolve_path(Path::new(root)).ok())
-            .any(|root| settings::path_is_within(&folder, &root));
+            .filter_map(|root| crate::file_paths::resolve_path(Path::new(root)).ok())
+            .any(|root| crate::file_paths::path_is_within(&folder, &root));
         if !allowed {
             return Err("暂存目录不在机构允许的数据目录白名单中".into());
         }
@@ -443,8 +443,8 @@ pub fn import_settings(
     crate::manager::apply_settings(app, &candidate);
     crate::watcher::restart_all(app);
     crate::hotkeys::register(app, &candidate)?;
-    let _ = app.emit(crate::events::SETTINGS_CHANGED, candidate.clone());
-    let _ = app.emit(crate::events::PODS_CHANGED, ());
+    let _ = crate::events::SETTINGS_CHANGED.emit(app, candidate.clone());
+    let _ = crate::events::PODS_CHANGED.emit(app, ());
     Ok(candidate)
 }
 

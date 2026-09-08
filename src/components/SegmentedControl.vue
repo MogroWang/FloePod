@@ -20,7 +20,10 @@ const thumbStyle = ref<{ width: string; transform: string }>({
 });
 
 const index = computed(() =>
-  Math.max(0, props.options.findIndex((o) => o.value === props.modelValue)),
+  Math.max(
+    0,
+    props.options.findIndex((o) => o.value === props.modelValue),
+  ),
 );
 
 let ro: ResizeObserver | null = null;
@@ -110,7 +113,9 @@ watch([index, () => props.options], async () => {
   background: var(--surface-raised);
   border-radius: 7px;
   box-shadow: 0 1px 4px oklch(0.2 0.02 230 / 0.18);
-  transition: transform 180ms var(--ease-out), width 180ms var(--ease-out);
+  transition:
+    transform 180ms var(--ease-out),
+    width 180ms var(--ease-out);
 }
 .seg-item {
   position: relative;

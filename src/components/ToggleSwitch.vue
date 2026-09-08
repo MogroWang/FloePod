@@ -33,7 +33,9 @@ function toggle() {
   background: var(--surface-3);
   box-shadow: inset 0 0 0 1px var(--line-strong);
   cursor: pointer;
-  transition: background 200ms ease, box-shadow 200ms ease;
+  transition:
+    background 200ms ease,
+    box-shadow 200ms ease;
 }
 .switch.on {
   background: var(--accent);

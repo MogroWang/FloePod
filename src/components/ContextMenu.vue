@@ -11,15 +11,12 @@ const emit = defineEmits<{ (e: "execute", item: MenuItemSpec): void }>();
 
 /** 菜单图标按动作 id 映射（lucide 风格线性路径）。 */
 const ICON_PATHS: Record<string, string[]> = {
-  open: [
-    "M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6",
-    "M14 4h6v6",
-    "M20 4l-9 9",
+  open: ["M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6", "M14 4h6v6", "M20 4l-9 9"],
+  reveal: ["M10 14 20 4M14 4h6v6M11 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-5"],
+  copy: [
+    "M9 9h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V10a1 1 0 0 1 1-1Z",
+    "M5 15V5a2 2 0 0 1 2-2h10",
   ],
-  reveal: [
-    "M10 14 20 4M14 4h6v6M11 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-5",
-  ],
-  copy: ["M9 9h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V10a1 1 0 0 1 1-1Z", "M5 15V5a2 2 0 0 1 2-2h10"],
   copyPath: [
     "M9.5 14.5 14.5 9.5",
     "M10.5 6.5 12 5a4.24 4.24 0 0 1 6 6l-1.5 1.5",
@@ -78,10 +75,7 @@ function iconPaths(id: string): string[] {
   /* 透明菜单窗口里不能使用 backdrop-filter：WebView2 会在透明背景上
      渲染出整块发黑的伪影；阴影同样会溢出窗口矩形导致裁切发灰，菜单
      不再使用阴影，窗口区域与卡片完全同形。 */
-  background: var(
-    --context-menu-surface,
-    color-mix(in srgb, var(--surface) 96%, transparent)
-  );
+  background: var(--context-menu-surface, color-mix(in srgb, var(--surface) 96%, transparent));
   border: 1px solid var(--glass-line);
   transform-origin: top left;
   animation: menu-pop 160ms var(--ease-out);
@@ -109,7 +103,9 @@ function iconPaths(id: string): string[] {
   letter-spacing: 0.005em;
   text-align: left;
   cursor: default;
-  transition: background 100ms ease, transform 80ms ease;
+  transition:
+    background 100ms ease,
+    transform 80ms ease;
 }
 .menu-item:hover:not(.disabled) {
   background: color-mix(in oklab, var(--surface-2) 72%, transparent);

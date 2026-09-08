@@ -27,7 +27,15 @@ export const useStagingStore = defineStore("staging", {
 
   actions: {
     setActivePod(id: number) {
+      this.refreshSeq += 1;
       this.activePodId = id;
+      this.items = [];
+      this.selectedIds.clear();
+    },
+
+    discardSnapshot() {
+      this.refreshSeq += 1;
+      this.items = [];
       this.selectedIds.clear();
     },
 
@@ -93,7 +101,7 @@ export const useStagingStore = defineStore("staging", {
     },
 
     async listenChanges(podId: number) {
-      return listenCurrent<{ podId: number }>(Events.ItemsChanged, (p) => {
+      return listenCurrent(Events.ItemsChanged, (p) => {
         if (!p.podId || p.podId === podId) {
           void this.refresh(podId).catch((err) => console.error("staging refresh failed", err));
         }

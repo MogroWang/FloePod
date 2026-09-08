@@ -1,0 +1,8 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+contracts/ipc.json
+src/ipc/generated.ts
+src/ipc/commands.ts
+src/ipc/eventNames.ts

@@ -1,6 +1,6 @@
 [package]
 name = "floe-pod"
-version = "1.6.0"
+version = "1.6.1"
 description = "浮匣 FloePod - 本地优先的屏幕边缘文件暂存工具"
 authors = ["MogroWang Studio"]
 edition = "2021"
@@ -11,6 +11,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+syn = { version = "2", features = ["full"] }
+quote = "1"
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
@@ -23,9 +25,11 @@ tauri-plugin-drag = "2.1"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+schemars = "1.2"
 rusqlite = { version = "0.40", features = ["bundled"] }
 notify = "8"
 trash = "5"
+tempfile = "3"
 image = { version = "0.25", default-features = false, features = [
   "png",
   "jpeg",
@@ -37,6 +41,7 @@ image = { version = "0.25", default-features = false, features = [
 ] }
 sha2 = "0.10"
 regex = "1"
+quick-xml = "0.41"
 kamadak-exif = "0.6"
 lopdf = { version = "0.44", default-features = false }
 zip = { version = "6.0", default-features = false, features = ["deflate"] }
@@ -60,6 +65,7 @@ windows-sys = { version = "0.59", features = [
   "Win32_System_Memory",
   "Win32_System_Ole",
   "Win32_System_Threading",
+  "Win32_System_JobObjects",
   "Win32_System_LibraryLoader",
   "Win32_Storage_FileSystem",
   "Win32_UI_WindowsAndMessaging",
@@ -73,6 +79,3 @@ lto = true
 codegen-units = 1
 strip = true
 panic = "abort"
-
-[dev-dependencies]
-tempfile = "3"

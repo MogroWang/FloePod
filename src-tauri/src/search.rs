@@ -20,7 +20,7 @@ use crate::state::AppState;
 const MAX_TEXT_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_INDEX_CHARS: usize = 200_000;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchHit {
     pub item: StagedItem,
@@ -30,7 +30,7 @@ pub struct SearchHit {
     pub matched_on: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct IndexResult {
     pub indexed: usize,
@@ -39,7 +39,7 @@ pub struct IndexResult {
     pub ocr_available: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Annotation {
     pub tags: Vec<String>,
@@ -56,7 +56,15 @@ fn strip_xml(xml: &str) -> String {
 }
 
 fn read_text_file(path: &Path) -> Result<String, String> {
-    let bytes = fs::read(path).map_err(|error| error.to_string())?;
+    let mut bytes = Vec::new();
+    fs::File::open(path)
+        .map_err(|error| error.to_string())?
+        .take(MAX_TEXT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if bytes.len() as u64 > MAX_TEXT_BYTES {
+        return Err("文本超过索引大小限制".into());
+    }
     let text = String::from_utf8(bytes)
         .or_else(|error| {
             let bytes = error.into_bytes();
@@ -70,32 +78,45 @@ fn read_text_file(path: &Path) -> Result<String, String> {
                 Err(())
             }
         })
-        .unwrap_or_default();
+        .map_err(|()| "文本编码无法识别，未建立空白索引".to_string())?;
     Ok(text)
 }
 
-fn extract_office(path: &Path) -> Result<String, String> {
+pub(crate) fn extract_office(path: &Path) -> Result<String, String> {
     let file = fs::File::open(path).map_err(|error| error.to_string())?;
+    if file.metadata().map_err(|error| error.to_string())?.len() > MAX_TEXT_BYTES * 32 {
+        return Err("Office 文件超过索引大小限制".into());
+    }
     let mut archive = ZipArchive::new(file).map_err(|error| error.to_string())?;
+    if archive.len() > 10_000 {
+        return Err("Office 压缩包条目超过索引限制".into());
+    }
     let mut parts = Vec::new();
     let mut indexed_chars = 0usize;
     for index in 0..archive.len() {
         if indexed_chars >= MAX_INDEX_CHARS {
             break;
         }
-        let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
+        let entry = archive.by_index(index).map_err(|error| error.to_string())?;
         let name = entry.name().replace('\\', "/");
         let include = name == "word/document.xml"
             || name == "xl/sharedStrings.xml"
             || name.starts_with("ppt/slides/slide") && name.ends_with(".xml")
             || name == "content.xml";
-        if !include || entry.size() > MAX_TEXT_BYTES {
+        if !include {
             continue;
+        }
+        if entry.size() > MAX_TEXT_BYTES {
+            return Err("Office 文本超过索引大小限制".into());
         }
         let mut xml = String::new();
         entry
+            .take(MAX_TEXT_BYTES + 1)
             .read_to_string(&mut xml)
             .map_err(|error| error.to_string())?;
+        if xml.len() as u64 > MAX_TEXT_BYTES {
+            return Err("Office 文本超过索引大小限制".into());
+        }
         let text = strip_xml(&xml)
             .chars()
             .take(MAX_INDEX_CHARS.saturating_sub(indexed_chars))
@@ -106,8 +127,25 @@ fn extract_office(path: &Path) -> Result<String, String> {
     Ok(parts.join("\n"))
 }
 
-fn extract_pdf(path: &Path) -> Result<String, String> {
-    let document = lopdf::Document::load(path).map_err(|error| error.to_string())?;
+pub(crate) fn extract_pdf(path: &Path) -> Result<String, String> {
+    let mut bytes = Vec::new();
+    fs::File::open(path)
+        .map_err(|error| error.to_string())?
+        .take(MAX_TEXT_BYTES * 32 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if bytes.len() as u64 > MAX_TEXT_BYTES * 32 {
+        return Err("PDF 超过索引大小限制".into());
+    }
+    let document = lopdf::Document::load_mem_with_options(
+        &bytes,
+        lopdf::LoadOptions {
+            strict: true,
+            max_decompressed_size: Some(8 * 1024 * 1024),
+            ..Default::default()
+        },
+    )
+    .map_err(|error| error.to_string())?;
     let pages = document
         .get_pages()
         .keys()
@@ -185,8 +223,23 @@ fn extract_text(path: &Path) -> Result<Option<String>, String> {
             }
             read_text_file(path)?
         }
-        "pdf" => extract_pdf(path)?,
-        "docx" | "xlsx" | "pptx" | "odt" | "ods" | "odp" => extract_office(path)?,
+        "pdf" => crate::parser_worker::invoke(
+            crate::parser_worker::Operation::PdfText {
+                source: path.to_path_buf(),
+            },
+            Vec::new(),
+        )
+        .map_err(|error| format!("PDF 索引未完成: {error:?}"))?,
+        "docx" | "xlsx" | "pptx" | "odt" | "ods" | "odp" => crate::parser_worker::invoke::<String>(
+            crate::parser_worker::Operation::OfficeText {
+                source: path.to_path_buf(),
+            },
+            Vec::new(),
+        )
+        .map_err(|error| match error {
+            crate::privacy::metadata::ScanError::Skipped(reason)
+            | crate::privacy::metadata::ScanError::Failed(reason) => reason,
+        })?,
         "jpg" | "jpeg" | "png" | "webp" | "bmp" | "tif" | "tiff" => ocr_image(path)?,
         _ => return Ok(None),
     };

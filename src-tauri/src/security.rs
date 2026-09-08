@@ -4,20 +4,21 @@
 //! 解锁状态只驻留内存；进程退出、紧急锁定或超时后需要重新进行系统验证。
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use crate::db;
 use crate::events;
-use crate::operations::{self, OperationDraft, OperationItemDraft};
 use crate::settings::Pod;
 use crate::staging;
 use crate::state::AppState;
 
-#[derive(Debug, Clone, Serialize)]
+pub mod retention;
+
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SecurityStatus {
     pub pod_id: u64,
@@ -196,10 +197,13 @@ pub fn unlock(app: &AppHandle, pod_id: u64) -> Result<SecurityStatus, String> {
         .lock()
         .unwrap()
         .insert(pod_id, deadline(&pod));
-    let _ = app.emit_to(
+    let _ = events::POD_LOCK_CHANGED.emit_to(
+        app,
         events::pod_panel_label(pod_id),
-        events::POD_LOCK_CHANGED,
-        serde_json::json!({ "podId": pod_id, "locked": false }),
+        crate::events::PodLockChanged {
+            pod_id,
+            locked: false,
+        },
     );
     status(app, pod_id)
 }
@@ -211,10 +215,13 @@ pub fn lock(app: &AppHandle, pod_id: u64) {
         .unwrap()
         .remove(&pod_id);
     crate::manager::hide_panel(app, pod_id);
-    let _ = app.emit_to(
+    let _ = events::POD_LOCK_CHANGED.emit_to(
+        app,
         events::pod_panel_label(pod_id),
-        events::POD_LOCK_CHANGED,
-        serde_json::json!({ "podId": pod_id, "locked": true }),
+        crate::events::PodLockChanged {
+            pod_id,
+            locked: true,
+        },
     );
 }
 
@@ -234,10 +241,13 @@ pub fn lock_all(app: &AppHandle) {
         .clear();
     for id in ids {
         crate::manager::hide_panel(app, id);
-        let _ = app.emit_to(
+        let _ = events::POD_LOCK_CHANGED.emit_to(
+            app,
             events::pod_panel_label(id),
-            events::POD_LOCK_CHANGED,
-            serde_json::json!({ "podId": id, "locked": true }),
+            crate::events::PodLockChanged {
+                pod_id: id,
+                locked: true,
+            },
         );
     }
 }
@@ -280,99 +290,6 @@ pub fn ensure_configured(settings: &crate::settings::Settings) {
                 pod.name
             ));
         }
-    }
-}
-
-pub fn purge_retention(app: &AppHandle) {
-    let state = app.state::<AppState>();
-    let Ok(settings) = staging::load_settings(&state) else {
-        return;
-    };
-    let now = db::now_ms();
-    let mandatory_retention = crate::policy::load()
-        .ok()
-        .filter(|status| status.managed)
-        .map(|status| status.policy.mandatory_retention_days)
-        .unwrap_or(0);
-    let mut changed = Vec::new();
-    let _file_operation = state.file_ops.lock().unwrap();
-    for pod in settings.pods.iter().filter(|pod| {
-        pod.enabled
-            && pod.security.enabled
-            && (pod.security.retention_days > 0 || mandatory_retention > 0)
-    }) {
-        let retention_days = match (pod.security.retention_days, mandatory_retention) {
-            (0, mandatory) => mandatory,
-            (configured, 0) => configured,
-            (configured, mandatory) => configured.min(mandatory),
-        };
-        let cutoff = now.saturating_sub(retention_days as i64 * 86_400_000);
-        let items = match db::items_of_pod(&state.db.lock().unwrap(), pod.id as i64) {
-            Ok(items) => items,
-            Err(_) => continue,
-        };
-        let mut deleted = Vec::new();
-        for item in items.into_iter().filter(|item| item.created_at <= cutoff) {
-            let path = PathBuf::from(&item.staging_path);
-            let outcome = match fs::symlink_metadata(&path) {
-                Ok(_) => trash::delete(&path).map_err(|error| error.to_string()),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                Err(error) => Err(error.to_string()),
-            };
-            match outcome {
-                Ok(()) => deleted.push(item),
-                Err(error) => crate::logging::write(&format!(
-                    "[security] 到期清理 {} 失败: {error}",
-                    item.staging_path
-                )),
-            }
-        }
-        if !deleted.is_empty() {
-            let deleted_ids = deleted.iter().map(|item| item.id).collect::<Vec<_>>();
-            let connection = state.db.lock().unwrap();
-            if db::delete_items_by_ids(&connection, &deleted_ids).is_ok() {
-                let count = deleted.len();
-                let history = OperationDraft {
-                    kind: "retention_cleanup".into(),
-                    pod_id: Some(pod.id as i64),
-                    summary: format!("按保留期清理「{}」中的 {count} 项", pod.name),
-                    status: "completed".into(),
-                    undoable_until: None,
-                    metadata: serde_json::json!({
-                        "retentionDays": retention_days,
-                        "policyManaged": mandatory_retention > 0,
-                    }),
-                    items: deleted
-                        .into_iter()
-                        .map(|item| {
-                            let snapshot = operations::snapshot(&item);
-                            OperationItemDraft {
-                                item_id: Some(item.id),
-                                name: item.name,
-                                source_path: Some(item.staging_path),
-                                target_path: None,
-                                action: "retention-delete".into(),
-                                status: "completed".into(),
-                                error: None,
-                                snapshot,
-                                compensation: None,
-                            }
-                        })
-                        .collect(),
-                };
-                if let Err(error) = operations::record(&connection, history) {
-                    crate::logging::write(&format!("[security] 记录保留期清理失败: {error}"));
-                }
-                changed.push(pod.id);
-            }
-        }
-    }
-    for pod_id in changed {
-        let _ = app.emit_to(
-            events::pod_panel_label(pod_id),
-            events::ITEMS_CHANGED,
-            serde_json::json!({ "podId": pod_id }),
-        );
     }
 }
 

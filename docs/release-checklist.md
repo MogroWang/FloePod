@@ -1,12 +1,15 @@
 # Windows 发布检查单
 
-发布前先记录 Windows、WebView2、构建提交和显示器配置。涉及删除、移动、升级的场景请使用测试数据。
+以下自动质量检查在 PR CI 阶段执行，合并后的 Release 不重复运行，也不等待人工勾选本清单。真实桌面回归请记录 Windows、WebView2、构建提交和显示器配置；涉及删除、移动、升级时使用测试数据。自动发布与必须设置的仓库规则见 [release.md](release.md)。
 
 ## 自动检查
 
 ```powershell
 pnpm install --frozen-lockfile
 pnpm test
+pnpm format:check
+pnpm version:check
+pnpm ipc:check
 pnpm build
 cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 cargo test --manifest-path src-tauri/Cargo.toml --locked

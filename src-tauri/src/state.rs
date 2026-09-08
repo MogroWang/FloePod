@@ -28,6 +28,8 @@ impl PanelMode {
 /// 单个「匣」的运行时状态（看门狗 / 浮动面板显隐）。
 #[derive(Debug)]
 pub struct PodRuntime {
+    /// Native hide deadline after the frontend fade; a later show/hide replaces the old deadline.
+    pub panel_hide_at: Option<Instant>,
     pub bar_inside: bool,
     pub panel_inside: bool,
     pub panel_visible: bool,
@@ -65,10 +67,9 @@ pub struct PodRuntime {
     pub bar_region_size: Option<(i32, i32)>,
 }
 
-/// 剪切拖出开始时捕获的文件身份。稳定版 Rust 当前使用创建时间、写入时间、
-/// 大小和类型做保守校验；文件系统 ID 字段为未来可用的按句柄身份信息预留。
+/// 剪切拖出开始时捕获的句柄身份、元数据和内容摘要。
 /// 即使仍是同一个文件，只要拖拽期间内容发生变化也拒绝删除。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DragCutFileIdentity {
     pub volume_serial_number: Option<u32>,
     pub file_index: Option<u64>,
@@ -79,6 +80,7 @@ pub struct DragCutFileIdentity {
     pub is_dir: bool,
     /// 目录的确定性递归元数据摘要；普通文件为 `None`。
     pub tree_fingerprint: Option<u64>,
+    pub content_signature: Option<String>,
 }
 
 impl DragCutFileIdentity {
@@ -97,6 +99,7 @@ impl DragCutFileIdentity {
             && self.is_file == current.is_file
             && self.is_dir == current.is_dir
             && self.tree_fingerprint == current.tree_fingerprint
+            && self.content_signature == current.content_signature
     }
 }
 
@@ -118,6 +121,7 @@ pub struct DragCutSnapshot {
 impl Default for PodRuntime {
     fn default() -> Self {
         Self {
+            panel_hide_at: None,
             bar_inside: false,
             panel_inside: false,
             panel_visible: false,
@@ -141,6 +145,17 @@ impl Default for PodRuntime {
 }
 
 impl PodRuntime {
+    pub fn take_due_hide(&mut self, now: Instant) -> bool {
+        if self.panel_visible {
+            self.panel_hide_at = None;
+            return false;
+        }
+        if self.panel_hide_at.is_some_and(|deadline| deadline <= now) {
+            self.panel_hide_at = None;
+            return true;
+        }
+        false
+    }
     /// 「单一活动浮动面板」可以收起的普通浮动面板。拖出与交互模式都必须受到保护。
     pub fn can_dismiss(&self) -> bool {
         self.panel_visible
@@ -173,6 +188,13 @@ impl PodRuntime {
 }
 
 pub struct AppState {
+    pub tasks: crate::lifecycle::TaskGate,
+    pub retention_task: crate::lifecycle::PeriodicTask,
+    pub watchdog_task: crate::lifecycle::PeriodicTask,
+    pub auto_block_task: crate::lifecycle::PeriodicTask,
+    pub reconcile_task: crate::lifecycle::PeriodicTask,
+    pub shutdown_started: AtomicBool,
+    pub shutdown_finished: AtomicBool,
     pub db: Mutex<Connection>,
     pub data_dir: PathBuf,
     /// pod_id -> 运行时状态
@@ -217,6 +239,13 @@ pub struct AppState {
 impl AppState {
     pub fn new(db: Connection, data_dir: PathBuf) -> Self {
         Self {
+            tasks: crate::lifecycle::TaskGate::default(),
+            retention_task: crate::lifecycle::PeriodicTask::default(),
+            watchdog_task: crate::lifecycle::PeriodicTask::default(),
+            auto_block_task: crate::lifecycle::PeriodicTask::default(),
+            reconcile_task: crate::lifecycle::PeriodicTask::default(),
+            shutdown_started: AtomicBool::new(false),
+            shutdown_finished: AtomicBool::new(false),
             db: Mutex::new(db),
             data_dir,
             pods: Mutex::new(HashMap::new()),
@@ -253,6 +282,22 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_new_hide_replaces_the_old_fade_deadline_and_show_cancels_it() {
+        let now = Instant::now();
+        let mut runtime = PodRuntime {
+            panel_hide_at: Some(now),
+            ..Default::default()
+        };
+        runtime.panel_visible = true;
+        assert!(!runtime.take_due_hide(now));
+        runtime.mark_hidden(now);
+        runtime.panel_hide_at = Some(now + std::time::Duration::from_millis(220));
+        assert!(!runtime.take_due_hide(now + std::time::Duration::from_millis(100)));
+        assert!(runtime.take_due_hide(now + std::time::Duration::from_millis(220)));
+        assert!(!runtime.take_due_hide(now + std::time::Duration::from_secs(1)));
+    }
     use std::time::Duration;
 
     #[test]

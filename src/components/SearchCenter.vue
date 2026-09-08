@@ -7,26 +7,32 @@ const query = ref("");
 const hits = ref<SearchHit[]>([]);
 const loading = ref(false);
 const indexing = ref(false);
+const saving = ref(false);
 const message = ref("");
 const editing = ref<SearchHit | null>(null);
 const tagsDraft = ref("");
 const noteDraft = ref("");
 let searchTimer: number | undefined;
+let searchRevision = 0;
 
 async function runSearch() {
   window.clearTimeout(searchTimer);
+  const revision = ++searchRevision;
   loading.value = true;
   try {
-    hits.value = await ipc.searchItems(query.value);
+    const result = await ipc.searchItems(query.value);
+    if (revision !== searchRevision) return;
+    hits.value = result;
     message.value = `找到 ${hits.value.length} 项`;
   } catch (error) {
-    message.value = `搜索失败：${String(error)}`;
+    if (revision === searchRevision) message.value = `搜索失败：${String(error)}`;
   } finally {
-    loading.value = false;
+    if (revision === searchRevision) loading.value = false;
   }
 }
 
 function queueSearch() {
+  searchRevision += 1;
   window.clearTimeout(searchTimer);
   searchTimer = window.setTimeout(runSearch, 180);
 }
@@ -37,8 +43,8 @@ async function rebuild() {
   message.value = "正在本机提取文档文字和图片 OCR，不会上传内容…";
   try {
     const result = await ipc.rebuildSearchIndex();
-    message.value = `索引完成：${result.indexed} 项已索引，${result.skipped} 项跳过，${result.failures.length} 项需要检查。`;
     await runSearch();
+    message.value = `索引完成：${result.indexed} 项已索引，${result.skipped} 项跳过，${result.failures.length} 项需要检查。${result.failures.slice(0, 3).join("；")}`;
   } catch (error) {
     message.value = `索引失败：${String(error)}`;
   } finally {
@@ -53,22 +59,36 @@ function edit(hit: SearchHit) {
 }
 
 async function saveAnnotation() {
-  if (!editing.value) return;
+  if (!editing.value || saving.value) return;
+  const itemId = editing.value.item.id;
+  const originalTags = tagsDraft.value;
+  const originalNote = noteDraft.value;
+  saving.value = true;
   const tags = tagsDraft.value
     .split(/[，,;；]+/)
     .map((tag) => tag.trim())
     .filter(Boolean);
   try {
-    await ipc.updateItemAnnotation(editing.value.item.id, tags, noteDraft.value);
-    editing.value = null;
-    message.value = "标签和备注已保存到本地数据库。";
+    await ipc.updateItemAnnotation(itemId, tags, originalNote);
+    if (
+      editing.value?.item.id === itemId &&
+      tagsDraft.value === originalTags &&
+      noteDraft.value === originalNote
+    )
+      editing.value = null;
     await runSearch();
+    message.value = "标签和备注已保存到本地数据库。";
   } catch (error) {
     message.value = `保存失败：${String(error)}`;
+  } finally {
+    saving.value = false;
   }
 }
 
-onBeforeUnmount(() => window.clearTimeout(searchTimer));
+onBeforeUnmount(() => {
+  window.clearTimeout(searchTimer);
+  searchRevision += 1;
+});
 </script>
 
 <template>
@@ -88,7 +108,11 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer));
         {{ indexing ? "正在建立索引…" : "更新本地索引" }}
       </button>
     </div>
-    <p class="syntax">筛选示例：<code>tag:报销</code>、<code>type:pdf</code>、<code>来源:Downloads</code>、<code>after:2026-09-01</code>、<code>上周</code></p>
+    <p class="syntax">
+      筛选示例：<code>tag:报销</code>、<code>type:pdf</code>、<code>来源:Downloads</code>、<code>after:2026-09-01</code>、<code
+        >上周</code
+      >
+    </p>
     <p class="message" role="status" aria-live="polite">{{ message }}</p>
 
     <div v-if="loading" class="empty">正在搜索…</div>
@@ -112,7 +136,13 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer));
       </li>
     </ul>
 
-    <div v-if="editing" class="annotation" role="dialog" aria-modal="true" aria-labelledby="annotation-title">
+    <div
+      v-if="editing"
+      class="annotation"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="annotation-title"
+    >
       <h3 id="annotation-title">{{ editing.item.name }}</h3>
       <label>
         <span>标签（逗号分隔）</span>
@@ -180,7 +210,9 @@ button {
   font-weight: 550;
   font-family: inherit;
   cursor: pointer;
-  transition: background 150ms var(--ease-out), border-color 150ms var(--ease-out);
+  transition:
+    background 150ms var(--ease-out),
+    border-color 150ms var(--ease-out);
 }
 button:hover {
   background: var(--surface-hover);
