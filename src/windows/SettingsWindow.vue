@@ -430,52 +430,11 @@ async function confirmAddPod() {
   try {
     const n = s.value?.pods.length ?? 0;
     const edge = (["left", "right", "top", "bottom"] as Edge[])[n % 4];
+    // 未在表单中选择的字段交给后端 Pod::default，避免默认值与校验范围漂移。
     const pod = await ipc.createPod({
       name: addDraft.name.trim() || `匣 ${n + 1}`,
       edge,
-      monitor: "",
-      offset: 0.5,
       stagingFolder: folder,
-      opacity: 1,
-      panelMaterial: "acrylic",
-      panelOpacity: 1,
-      panelColor: "",
-      panelWidth: 380,
-      hoverDelayMs: 120,
-      hoverOpen: true,
-      autoHide: true,
-      autoHideDelayMs: 320,
-      stealth: false,
-      stealthDelayMs: 3000,
-      dropAction: "ask",
-      enabled: true,
-      barWidth: 44,
-      cornerRadius: 22,
-      borderColor: "",
-      borderOpacity: 1,
-      rules: {
-        enabled: false,
-        template: "manual",
-        allowedExtensions: [],
-        nameContains: "",
-        sourceFolder: "",
-        maxSizeMb: 0,
-        renamePattern: "{name}",
-        subfolderPattern: "",
-        duplicatePolicy: "allow",
-        checksumSidecar: false,
-        expireDays: 0,
-        removeAfterExport: false,
-      },
-      security: {
-        enabled: false,
-        requireWindowsHello: true,
-        autoLockMinutes: 10,
-        retentionDays: 0,
-        cleanupAfterExport: false,
-        suppressThumbnails: true,
-        suppressIndex: true,
-      },
     });
     await settingsStore.refreshPods();
     selectedPodId.value = pod.id;
@@ -535,55 +494,16 @@ async function removePodWithFolder() {
   await doRemovePod(target, "folder", "已删除匣（暂存文件夹已移入回收站）");
 }
 
-function oobePodConfig(): Omit<Pod, "id"> {
+function oobePodConfig(): Partial<Pod> {
+  // 只提交向导中的用户选择；面板宽度等默认值统一由后端补齐。
   return {
     name: oobe.value.name || "我的匣",
     edge: oobe.value.edge,
     monitor: oobe.value.monitor,
-    offset: 0.5,
     stagingFolder: oobe.value.folder,
     opacity: Number(oobe.value.opacity),
     panelMaterial: oobe.value.material,
     panelOpacity: Number(oobe.value.opacity),
-    panelColor: "",
-    panelWidth: 380,
-    hoverDelayMs: 120,
-    hoverOpen: true,
-    autoHide: true,
-    autoHideDelayMs: 320,
-    stealth: false,
-    stealthDelayMs: 3000,
-    dropAction: "ask",
-    enabled: true,
-    barWidth: 44,
-    barLength: 190,
-    barColor: "",
-    cornerRadius: 22,
-    borderColor: "",
-    borderOpacity: 1,
-    rules: {
-      enabled: false,
-      template: "manual",
-      allowedExtensions: [],
-      nameContains: "",
-      sourceFolder: "",
-      maxSizeMb: 0,
-      renamePattern: "{name}",
-      subfolderPattern: "",
-      duplicatePolicy: "allow",
-      checksumSidecar: false,
-      expireDays: 0,
-      removeAfterExport: false,
-    },
-    security: {
-      enabled: false,
-      requireWindowsHello: true,
-      autoLockMinutes: 10,
-      retentionDays: 0,
-      cleanupAfterExport: false,
-      suppressThumbnails: true,
-      suppressIndex: true,
-    },
   };
 }
 
