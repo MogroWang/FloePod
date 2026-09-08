@@ -345,6 +345,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn creation_forms_use_valid_backend_defaults_and_preserve_user_choices() {
+        let temporary = tempfile::tempdir().unwrap();
+        let data_dir = temporary.path().join("data");
+        let connection = db::open(&data_dir).unwrap();
+        let data_dir = data_dir.to_string_lossy();
+        let mut current = settings::load(&connection, &data_dir, VERSION).unwrap();
+        // 对应设置页新增匣与首次引导的实际请求字段，走解析、完整校验、落库和重读。
+        for (index, mut config) in [
+            serde_json::json!({ "name": "新建匣", "edge": "right" }),
+            serde_json::json!({
+                "name": "我的匣", "edge": "left", "monitor": "",
+                "opacity": 0.75, "panelOpacity": 0.75, "panelMaterial": "plain"
+            }),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let folder = temporary.path().join(format!("pod-{index}"));
+            fs::create_dir_all(&folder).unwrap();
+            config["stagingFolder"] = serde_json::json!(folder);
+            let mut pod = from_config(&config).unwrap();
+            pod.id = settings::next_pod_id_from(&connection, &current).unwrap();
+            settings::upsert_pod_from(&connection, &mut current, &pod, &data_dir).unwrap();
+            let loaded = settings::load(&connection, &data_dir, VERSION).unwrap();
+            let saved = loaded.pods.iter().find(|entry| entry.id == pod.id).unwrap();
+            assert_eq!(saved.panel_width, 440);
+            assert_eq!(saved.name, config["name"].as_str().unwrap());
+            assert_eq!(saved.edge, config["edge"].as_str().unwrap());
+            if index == 1 {
+                assert_eq!(saved.opacity, 0.75);
+                assert_eq!(saved.panel_opacity, 0.75);
+                assert_eq!(saved.panel_material, "plain");
+            }
+        }
+        // 默认值统一不代表放宽校验：显式传入历史非法宽度仍应拒绝。
+        current.pods[0].panel_width = 380;
+        assert!(settings::validate(&current, &data_dir).is_err());
+    }
+
+    #[test]
     fn config_accepts_legacy_numeric_strings_and_rejects_bad_fields() {
         let pod = from_config(&serde_json::json!({
             "name": "我的匣",

@@ -459,6 +459,22 @@ fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
     // 边缘浮动条形状由前端自绘：禁用 Windows 11 系统窗口圆角，
     // 否则 DWM 圆角会把贴边的圆角矩形裁掉，看起来「显示不全」。
     if let Some(bar) = pod_bar(app, pod.id) {
+        // SetWindowSubclass 必须在窗口所属线程调用；run_on_main_thread 与
+        // 后续窗口操作按顺序分派，确保首次显示前安装。按标签重新取得窗口，
+        // 避免禁用/重建匣后使用已销毁的 HWND。重复安装同一回调是幂等的。
+        let handle = app.clone();
+        let id = pod.id;
+        if let Err(error) = bar.run_on_main_thread(move || {
+            if let Some(bar) = pod_bar(&handle, id) {
+                if let Ok(hwnd) = bar.hwnd() {
+                    if !win::install_bar_chrome_guard(hwnd.0 as isize) {
+                        crate::logging::write("[window] 安装浮动条无边框消息处理失败");
+                    }
+                }
+            }
+        }) {
+            crate::logging::write(&format!("[window] 分派浮动条初始化失败: {error}"));
+        }
         if let Ok(hwnd) = bar.hwnd() {
             win::disable_rounding(hwnd.0 as isize);
             // 材质需要用窗口区域（region）裁剪成胶囊形状：先清掉样式里残留的
