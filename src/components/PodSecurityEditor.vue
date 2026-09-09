@@ -54,7 +54,10 @@ onMounted(refreshStatus);
   <div class="security-editor">
     <div class="security-note">
       <strong>不自制加密算法</strong>
-      <p>文件静态加密交给 Windows EFS，应用解锁交给 Windows Hello/PIN。启用失败时不会保存成“假加密”状态。</p>
+      <p>
+        文件静态加密交给 Windows EFS，应用解锁交给 Windows
+        Hello/PIN。启用失败时不会保存成“假加密”状态。
+      </p>
     </div>
     <SettingsRow label="启用敏感匣" hint="要求暂存目录位于支持 EFS 的 NTFS 卷">
       <ToggleSwitch
@@ -139,7 +142,9 @@ onMounted(refreshStatus);
         <button v-else type="button" @click="lockNow">立即锁定</button>
       </div>
     </div>
-    <p class="disable-note">关闭敏感匣只停止应用内锁定，不会擅自解密磁盘上已有文件；如需解密请使用 Windows 文件属性。</p>
+    <p class="disable-note">
+      关闭敏感匣只停止应用内锁定，不会擅自解密磁盘上已有文件；如需解密请使用 Windows 文件属性。
+    </p>
   </div>
 </template>
 
@@ -218,7 +223,9 @@ button {
   font-weight: 550;
   font-family: inherit;
   cursor: pointer;
-  transition: background 150ms var(--ease-out), border-color 150ms var(--ease-out);
+  transition:
+    background 150ms var(--ease-out),
+    border-color 150ms var(--ease-out);
 }
 button:hover {
   background: var(--surface-hover);

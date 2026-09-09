@@ -1,9 +1,8 @@
 import type { MonitorInfo } from "./types.ts";
 
 export function monitorLogicalSpan(monitor: MonitorInfo, vertical: boolean): number {
-  const scale = Number.isFinite(monitor.scaleFactor) && monitor.scaleFactor > 0
-    ? monitor.scaleFactor
-    : 1;
+  const scale =
+    Number.isFinite(monitor.scaleFactor) && monitor.scaleFactor > 0 ? monitor.scaleFactor : 1;
   const physical = vertical ? monitor.height : monitor.width;
   return physical > 0 ? physical / scale : 0;
 }

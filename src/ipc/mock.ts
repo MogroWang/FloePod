@@ -1,3 +1,4 @@
+import packageInfo from "../../package.json";
 import type {
   DragCutToken,
   DropAction,
@@ -46,6 +47,7 @@ let settings: Settings = {
       offset: 0.5,
       stagingFolder: BROWSER_PREVIEW_STAGING_ROOT,
       opacity: 1,
+      material: "plain",
       panelMaterial: "acrylic",
       panelOpacity: 1,
       panelColor: "",
@@ -89,7 +91,7 @@ let settings: Settings = {
       },
     },
   ],
-  version: "1.3.0-mock",
+  version: packageInfo.version,
   dataDir: "浏览器预览",
 };
 
@@ -205,7 +207,10 @@ function panelState(podId: number): PanelState {
   }
   return state;
 }
-export async function mockInvoke<T>(command: CommandName, args?: Record<string, unknown>): Promise<T> {
+export async function mockInvoke<T>(
+  command: CommandName,
+  args?: Record<string, unknown>,
+): Promise<T> {
   const result = (value: unknown) => value as T;
   switch (command) {
     case Commands.GetBootstrap:
@@ -234,6 +239,7 @@ export async function mockInvoke<T>(command: CommandName, args?: Record<string, 
         offset: 0.5,
         stagingFolder: "",
         opacity: 1,
+        material: "plain",
         panelMaterial: "acrylic",
         panelOpacity: 1,
         panelColor: "",
@@ -302,7 +308,9 @@ export async function mockInvoke<T>(command: CommandName, args?: Record<string, 
       return result(settings);
     case Commands.StageText: {
       const content = String(args?.content ?? "");
-      const requested = String(args?.title ?? "").trim().replace(/\.txt$/i, "");
+      const requested = String(args?.title ?? "")
+        .trim()
+        .replace(/\.txt$/i, "");
       const base = requested || `文字 ${items.length + 1}`;
       const item: StagedItem = {
         id: Date.now(),
@@ -386,6 +394,10 @@ export async function mockInvoke<T>(command: CommandName, args?: Record<string, 
     case Commands.ScanPrivacy:
       return result({
         filesScanned: 2,
+        filesChecked: 2,
+        filesSkipped: 0,
+        filesFailed: 0,
+        files: [],
         issues: [
           {
             path: "D:\\staging\\照片.jpg",
@@ -414,21 +426,23 @@ export async function mockInvoke<T>(command: CommandName, args?: Record<string, 
     case Commands.SearchItems: {
       const query = String(args?.query ?? "").toLowerCase();
       const podId = args?.podId == null ? null : Number(args.podId);
-      return result(items
-        .filter((item) => podId === null || item.podId === podId)
-        .filter((item) => {
-          const annotation = annotations.get(item.id) ?? { tags: [], note: "" };
-          return [item.name, item.originalPath ?? "", annotation.note, ...annotation.tags]
-            .join(" ")
-            .toLowerCase()
-            .includes(query);
-        })
-        .map((item) => ({
-          item,
-          ...(annotations.get(item.id) ?? { tags: [], note: "" }),
-          snippet: item.kind === "text" ? "浏览器预览中的本地索引示例" : "",
-          matchedOn: ["文件名"],
-        })));
+      return result(
+        items
+          .filter((item) => podId === null || item.podId === podId)
+          .filter((item) => {
+            const annotation = annotations.get(item.id) ?? { tags: [], note: "" };
+            return [item.name, item.originalPath ?? "", annotation.note, ...annotation.tags]
+              .join(" ")
+              .toLowerCase()
+              .includes(query);
+          })
+          .map((item) => ({
+            item,
+            ...(annotations.get(item.id) ?? { tags: [], note: "" }),
+            snippet: item.kind === "text" ? "浏览器预览中的本地索引示例" : "",
+            matchedOn: ["文件名"],
+          })),
+      );
     }
     case Commands.UpdateItemAnnotation:
       annotations.set(Number(args?.itemId), {
@@ -495,7 +509,12 @@ export async function mockInvoke<T>(command: CommandName, args?: Record<string, 
         items = items.filter((item) => !moved.has(item.id));
       }
       return result({
-        conflicts: [], completedIds: ids, skippedIds: [], staleIds: [], failed: [], warnings: [],
+        conflicts: [],
+        completedIds: ids,
+        skippedIds: [],
+        staleIds: [],
+        failed: [],
+        warnings: [],
       } satisfies ExportResult);
     }
     case Commands.ReadThumbnail:
@@ -508,7 +527,11 @@ export async function mockInvoke<T>(command: CommandName, args?: Record<string, 
       const state = panelState(Number(args?.podId));
       if (state.visible) {
         Object.assign(state, {
-          mode: "list", paths: [], pinned: false, visible: false, draggingOut: false,
+          mode: "list",
+          paths: [],
+          pinned: false,
+          visible: false,
+          draggingOut: false,
         });
       } else {
         state.visible = true;
@@ -518,7 +541,11 @@ export async function mockInvoke<T>(command: CommandName, args?: Record<string, 
     }
     case Commands.HidePanel:
       Object.assign(panelState(Number(args?.podId)), {
-        mode: "list", paths: [], pinned: false, visible: false, draggingOut: false,
+        mode: "list",
+        paths: [],
+        pinned: false,
+        visible: false,
+        draggingOut: false,
       });
       return result(undefined);
     case Commands.SetPanelMode: {
@@ -542,9 +569,11 @@ export async function mockInvoke<T>(command: CommandName, args?: Record<string, 
       if (!paths.length || new Set(paths).size !== paths.length) {
         throw new Error("剪切列表为空或包含重复路径");
       }
-      if (paths.some((path) => !items.some(
-        (item) => item.podId === podId && item.stagingPath === path,
-      ))) {
+      if (
+        paths.some(
+          (path) => !items.some((item) => item.podId === podId && item.stagingPath === path),
+        )
+      ) {
         throw new Error("剪切路径不属于当前匣");
       }
       const token: DragCutToken = `mock-cut-${++cutSequence}`;

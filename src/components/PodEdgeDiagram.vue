@@ -73,9 +73,7 @@ function edgeUnderPointer(rect: DOMRect, x: number, y: number): string | null {
 }
 
 function projectedOffset(rect: DOMRect, edge: string, x: number, y: number): number {
-  return VERTICAL_EDGES.has(edge)
-    ? clampOffset(y / rect.height)
-    : clampOffset(x / rect.width);
+  return VERTICAL_EDGES.has(edge) ? clampOffset(y / rect.height) : clampOffset(x / rect.width);
 }
 
 function onDotPointerDown(event: PointerEvent) {
@@ -181,7 +179,9 @@ function onDotKeydown(event: KeyboardEvent) {
 .edge {
   position: absolute;
   background: var(--line);
-  transition: background 160ms var(--ease-out), height 160ms var(--ease-out),
+  transition:
+    background 160ms var(--ease-out),
+    height 160ms var(--ease-out),
     width 160ms var(--ease-out);
 }
 .edge.on {
@@ -219,11 +219,15 @@ function onDotKeydown(event: KeyboardEvent) {
   border: 0;
   border-radius: 50%;
   background: var(--accent);
-  box-shadow: 0 0 0 2px var(--surface-raised), 0 2px 6px oklch(0 0 0 / 0.25);
+  box-shadow:
+    0 0 0 2px var(--surface-raised),
+    0 2px 6px oklch(0 0 0 / 0.25);
   transform: translate(-50%, -50%);
   cursor: grab;
   touch-action: none;
-  transition: left 160ms var(--ease-out), top 160ms var(--ease-out),
+  transition:
+    left 160ms var(--ease-out),
+    top 160ms var(--ease-out),
     transform 100ms var(--ease-out);
 }
 .dot:hover {
@@ -238,7 +242,9 @@ function onDotKeydown(event: KeyboardEvent) {
   cursor: grabbing;
   transition: none;
   transform: translate(-50%, -50%) scale(1.25);
-  box-shadow: 0 0 0 3px var(--surface-raised), 0 3px 10px oklch(0 0 0 / 0.3);
+  box-shadow:
+    0 0 0 3px var(--surface-raised),
+    0 3px 10px oklch(0 0 0 / 0.3);
 }
 .dot.dragging:hover {
   transform: translate(-50%, -50%) scale(1.25);

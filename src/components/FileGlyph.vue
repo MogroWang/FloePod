@@ -7,10 +7,10 @@ import { computed } from "vue";
 import { THUMBNAIL_IMAGE_EXTS } from "@/lib/format";
 import type { ItemKind } from "@/domain/types";
 
-const props = withDefaults(
-  defineProps<{ kind: ItemKind; ext?: string | null; size?: number }>(),
-  { ext: null, size: 20 },
-);
+const props = withDefaults(defineProps<{ kind: ItemKind; ext?: string | null; size?: number }>(), {
+  ext: null,
+  size: 20,
+});
 
 type Glyph =
   | "image"
@@ -44,8 +44,33 @@ const glyph = computed<Glyph>(() => {
   if (e === "pdf" || e === "md" || e === "markdown") return "pdf";
   if (
     [
-      "ts", "tsx", "js", "jsx", "vue", "rs", "py", "java", "c", "h", "cpp", "cs", "go",
-      "rb", "php", "swift", "kt", "sh", "bat", "ps1", "html", "css", "scss", "json", "yaml", "yml", "toml",
+      "ts",
+      "tsx",
+      "js",
+      "jsx",
+      "vue",
+      "rs",
+      "py",
+      "java",
+      "c",
+      "h",
+      "cpp",
+      "cs",
+      "go",
+      "rb",
+      "php",
+      "swift",
+      "kt",
+      "sh",
+      "bat",
+      "ps1",
+      "html",
+      "css",
+      "scss",
+      "json",
+      "yaml",
+      "yml",
+      "toml",
     ].includes(e)
   )
     return "code";
@@ -68,7 +93,9 @@ const glyph = computed<Glyph>(() => {
     aria-hidden="true"
   >
     <template v-if="glyph === 'folder'">
-      <path d="M3.5 7.5a1.5 1.5 0 0 1 1.5-1.5h4l2 2.5h8a1.5 1.5 0 0 1 1.5 1.5v7a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5Z" />
+      <path
+        d="M3.5 7.5a1.5 1.5 0 0 1 1.5-1.5h4l2 2.5h8a1.5 1.5 0 0 1 1.5 1.5v7a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5Z"
+      />
     </template>
     <template v-else-if="glyph === 'shortcut'">
       <path d="M10 14 20 4" />
@@ -76,7 +103,9 @@ const glyph = computed<Glyph>(() => {
       <path d="M11 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-5" />
     </template>
     <template v-else-if="glyph === 'text'">
-      <path d="M5 4.5A1.5 1.5 0 0 1 6.5 3h7L19 8.5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19.5Z" />
+      <path
+        d="M5 4.5A1.5 1.5 0 0 1 6.5 3h7L19 8.5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19.5Z"
+      />
       <path d="M13 3v6h6" />
       <path d="M8.5 13h7M8.5 16.5h5" />
     </template>
@@ -95,17 +124,23 @@ const glyph = computed<Glyph>(() => {
       <circle cx="15.8" cy="15.9" r="2.2" />
     </template>
     <template v-else-if="glyph === 'doc' || glyph === 'pdf'">
-      <path d="M5 4.5A1.5 1.5 0 0 1 6.5 3h7L19 8.5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19.5Z" />
+      <path
+        d="M5 4.5A1.5 1.5 0 0 1 6.5 3h7L19 8.5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19.5Z"
+      />
       <path d="M13 3v6h6" />
       <path d="M8.5 16.5h7M8.5 13h7M8.5 9.5h2" />
     </template>
     <template v-else-if="glyph === 'sheet'">
-      <path d="M5 4.5A1.5 1.5 0 0 1 6.5 3h7L19 8.5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19.5Z" />
+      <path
+        d="M5 4.5A1.5 1.5 0 0 1 6.5 3h7L19 8.5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19.5Z"
+      />
       <path d="M13 3v6h6" />
       <path d="M8.5 12.5h7M8.5 15.5h7" />
     </template>
     <template v-else-if="glyph === 'slides'">
-      <path d="M5 4.5A1.5 1.5 0 0 1 6.5 3h7L19 8.5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19.5Z" />
+      <path
+        d="M5 4.5A1.5 1.5 0 0 1 6.5 3h7L19 8.5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19.5Z"
+      />
       <path d="M13 3v6h6" />
       <path d="M8.5 12.5 11 15l3.5-4" />
     </template>
@@ -118,7 +153,9 @@ const glyph = computed<Glyph>(() => {
       <path d="M10.5 13h3" />
     </template>
     <template v-else>
-      <path d="M5 4.5A1.5 1.5 0 0 1 6.5 3h7L19 8.5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19.5Z" />
+      <path
+        d="M5 4.5A1.5 1.5 0 0 1 6.5 3h7L19 8.5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19.5Z"
+      />
       <path d="M13 3v6h6" />
     </template>
   </svg>

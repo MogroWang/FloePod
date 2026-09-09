@@ -5,7 +5,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::db::StagedItem;
 use crate::export::ExportResult;
-use crate::settings::{Hotkeys, Pod, Settings};
+use crate::settings::{Hotkeys, Pod, PodPatch, Settings, SettingsPatch};
 use crate::staging::StagePathsResult;
 use crate::thumbnail::ThumbnailPayload;
 use crate::{
@@ -15,17 +15,25 @@ use crate::{
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-async fn blocking<T, F>(label: &'static str, task: F) -> Result<T, String>
+#[cfg(test)]
+#[path = "../contract/tests.rs"]
+mod contract;
+
+async fn blocking<T, F>(app: AppHandle, label: &'static str, task: F) -> Result<T, String>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T, String> + Send + 'static,
 {
-    tauri::async_runtime::spawn_blocking(task)
-        .await
-        .map_err(|error| format!("{label}后台任务异常终止：{error}"))?
+    let permit = app.state::<crate::state::AppState>().tasks.enter()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
+        task()
+    })
+    .await
+    .map_err(|error| format!("{label}后台任务异常终止：{error}"))?
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Bootstrap {
     settings: Settings,
@@ -58,19 +66,15 @@ pub fn get_hotkey_defaults() -> Hotkeys {
 #[tauri::command]
 pub async fn create_pod(
     app: AppHandle,
-    config: serde_json::Value,
+    config: PodPatch,
     reuse_existing: bool,
 ) -> Result<Pod, String> {
-    pods::create(app, config, reuse_existing)
+    pods::create(app, config.0, reuse_existing)
 }
 
 #[tauri::command]
-pub async fn update_pod(
-    app: AppHandle,
-    pod_id: u64,
-    patch: serde_json::Value,
-) -> Result<Pod, String> {
-    pods::update(app, pod_id, patch)
+pub async fn update_pod(app: AppHandle, pod_id: u64, patch: PodPatch) -> Result<Pod, String> {
+    pods::update(app, pod_id, patch.0)
 }
 
 #[tauri::command]
@@ -79,8 +83,14 @@ pub async fn delete_pod(app: AppHandle, pod_id: u64, mode: String) -> Result<(),
 }
 
 #[tauri::command]
-pub async fn save_settings(app: AppHandle, patch: serde_json::Value) -> Result<Settings, String> {
-    pods::save_settings(app, patch)
+pub async fn save_settings(app: AppHandle, patch: SettingsPatch) -> Result<Settings, String> {
+    pods::save_settings(app, patch.0)
+}
+
+/// WebView 挂载后主动同步，弥补首次加载前未排队的事件。
+#[tauri::command]
+pub async fn get_panel_state(app: AppHandle, pod_id: u64) -> manager::PanelSnapshot {
+    manager::panel_snapshot(&app, pod_id)
 }
 
 #[tauri::command]
@@ -93,7 +103,7 @@ pub async fn stage_paths(
     let history_app = app.clone();
     let history_paths = paths.clone();
     let history_action = action.clone();
-    let result = blocking("文件暂存", move || {
+    let result = blocking(app.clone(), "文件暂存", move || {
         staging::stage_paths(app, pod_id, paths, action)
     })
     .await;
@@ -145,7 +155,7 @@ pub async fn stage_text(
     content: String,
     title: Option<String>,
 ) -> Result<StagedItem, String> {
-    blocking("文字暂存", move || {
+    blocking(app.clone(), "文字暂存", move || {
         staging::stage_text(app, pod_id, content, title)
     })
     .await
@@ -158,7 +168,7 @@ pub fn list_pod_items(app: AppHandle, pod_id: u64) -> Result<Vec<StagedItem>, St
 
 #[tauri::command]
 pub async fn remove_items(app: AppHandle, ids: Vec<i64>, delete_files: bool) -> Result<(), String> {
-    blocking("移出暂存项目", move || {
+    blocking(app.clone(), "移出暂存项目", move || {
         staging::remove_items(app, ids, delete_files)
     })
     .await
@@ -178,7 +188,10 @@ pub async fn undo_operation(
     app: AppHandle,
     operation_id: i64,
 ) -> Result<operations::UndoResult, String> {
-    blocking("撤销操作", move || operations::undo(app, operation_id)).await
+    blocking(app.clone(), "撤销操作", move || {
+        operations::undo(app, operation_id)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -186,7 +199,7 @@ pub async fn retry_operation(
     app: AppHandle,
     operation_id: i64,
 ) -> Result<operations::RetryResult, String> {
-    blocking("重试失败项", move || {
+    blocking(app.clone(), "重试失败项", move || {
         operations::retry(app, operation_id)
     })
     .await
@@ -198,7 +211,7 @@ pub async fn preview_remove_items(
     ids: Vec<i64>,
     delete_files: bool,
 ) -> Result<operations::OperationPreview, String> {
-    blocking("预览移出操作", move || {
+    blocking(app.clone(), "预览移出操作", move || {
         operations::preview_remove(&app, &ids, delete_files)
     })
     .await
@@ -211,7 +224,7 @@ pub async fn preview_export_items(
     dest_dir: String,
     mode: String,
 ) -> Result<operations::OperationPreview, String> {
-    blocking("预览导出操作", move || {
+    blocking(app.clone(), "预览导出操作", move || {
         operations::preview_export(&app, &ids, &dest_dir, &mode)
     })
     .await
@@ -222,7 +235,7 @@ pub async fn scan_privacy(
     app: AppHandle,
     ids: Vec<i64>,
 ) -> Result<privacy::PrivacyScanResult, String> {
-    blocking("本地隐私检查", move || {
+    blocking(app.clone(), "本地隐私检查", move || {
         privacy::scan_items(&app, &ids)
     })
     .await
@@ -234,7 +247,7 @@ pub async fn safe_export_items(
     ids: Vec<i64>,
     dest_dir: String,
 ) -> Result<privacy::SafeExportResult, String> {
-    blocking("生成隐私清理副本", move || {
+    blocking(app.clone(), "生成隐私清理副本", move || {
         privacy::safe_export(app, ids, dest_dir)
     })
     .await
@@ -249,15 +262,21 @@ pub async fn create_handoff(
     note: String,
     clean_metadata: bool,
 ) -> Result<handoff::HandoffResult, String> {
-    blocking("生成可信交接包", move || {
+    blocking(app.clone(), "生成可信交接包", move || {
         handoff::create(app, ids, dest_dir, title, note, clean_metadata)
     })
     .await
 }
 
 #[tauri::command]
-pub async fn verify_handoff(directory: String) -> Result<handoff::VerifyResult, String> {
-    blocking("验证可信交接包", move || handoff::verify(directory)).await
+pub async fn verify_handoff(
+    app: AppHandle,
+    directory: String,
+) -> Result<handoff::VerifyResult, String> {
+    blocking(app.clone(), "验证可信交接包", move || {
+        handoff::verify(directory)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -265,7 +284,7 @@ pub async fn rebuild_search_index(
     app: AppHandle,
     pod_id: Option<u64>,
 ) -> Result<search::IndexResult, String> {
-    blocking("重建本地搜索索引", move || {
+    blocking(app.clone(), "重建本地搜索索引", move || {
         search::rebuild(&app, pod_id)
     })
     .await
@@ -277,7 +296,10 @@ pub async fn search_items(
     query: String,
     pod_id: Option<u64>,
 ) -> Result<Vec<search::SearchHit>, String> {
-    blocking("本地搜索", move || search::search(&app, query, pod_id)).await
+    blocking(app.clone(), "本地搜索", move || {
+        search::search(&app, query, pod_id)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -287,7 +309,7 @@ pub async fn update_item_annotation(
     tags: Vec<String>,
     note: String,
 ) -> Result<(), String> {
-    blocking("保存标签和备注", move || {
+    blocking(app.clone(), "保存标签和备注", move || {
         search::update_annotation(&app, item_id, tags, note)
     })
     .await
@@ -311,7 +333,7 @@ pub async fn unlock_sensitive_pod(
     app: AppHandle,
     pod_id: u64,
 ) -> Result<security::SecurityStatus, String> {
-    blocking("Windows Hello 解锁", move || {
+    blocking(app.clone(), "Windows Hello 解锁", move || {
         security::unlock(&app, pod_id)
     })
     .await
@@ -338,7 +360,7 @@ pub async fn export_audit_log(
     dest_dir: String,
     format: String,
 ) -> Result<policy::ExportedArtifact, String> {
-    blocking("导出本地审计记录", move || {
+    blocking(app.clone(), "导出本地审计记录", move || {
         policy::export_audit(&app, dest_dir, format)
     })
     .await
@@ -349,7 +371,7 @@ pub async fn export_diagnostic_bundle(
     app: AppHandle,
     dest_dir: String,
 ) -> Result<policy::ExportedArtifact, String> {
-    blocking("生成本地诊断包", move || {
+    blocking(app.clone(), "生成本地诊断包", move || {
         policy::diagnostic_bundle(&app, dest_dir)
     })
     .await
@@ -360,7 +382,7 @@ pub async fn export_settings_file(
     app: AppHandle,
     dest_dir: String,
 ) -> Result<policy::ExportedArtifact, String> {
-    blocking("导出设置", move || {
+    blocking(app.clone(), "导出设置", move || {
         policy::export_settings(&app, dest_dir)
     })
     .await
@@ -368,7 +390,7 @@ pub async fn export_settings_file(
 
 #[tauri::command]
 pub async fn import_settings_file(app: AppHandle, source: String) -> Result<Settings, String> {
-    blocking("导入设置", move || {
+    blocking(app.clone(), "导入设置", move || {
         policy::import_settings(&app, source)
     })
     .await
@@ -380,7 +402,7 @@ pub async fn prepare_drag_cut(
     pod_id: u64,
     paths: Vec<String>,
 ) -> Result<String, String> {
-    blocking("准备剪切拖出", move || {
+    blocking(app.clone(), "准备剪切拖出", move || {
         drag_out::prepare(app, pod_id, paths)
     })
     .await
@@ -388,7 +410,10 @@ pub async fn prepare_drag_cut(
 
 #[tauri::command]
 pub async fn finalize_drag_cut(app: AppHandle, token: String) -> Result<(), String> {
-    blocking("剪切源清理", move || drag_out::finalize(app, token)).await
+    blocking(app.clone(), "剪切源清理", move || {
+        drag_out::finalize(app, token)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -404,7 +429,7 @@ pub async fn export_items(
     mode: String,
     on_conflict: String,
 ) -> Result<ExportResult, String> {
-    blocking("导出项目", move || {
+    blocking(app.clone(), "导出项目", move || {
         export::export_items(app, ids, dest_dir, mode, on_conflict)
     })
     .await
@@ -415,7 +440,10 @@ pub async fn read_thumbnail(
     app: AppHandle,
     path: String,
 ) -> Result<Option<ThumbnailPayload>, String> {
-    blocking("读取缩略图", move || thumbnail::read(app, path)).await
+    blocking(app.clone(), "读取缩略图", move || {
+        thumbnail::read(app, path)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -485,7 +513,7 @@ pub fn open_settings(app: AppHandle) {
 
 #[tauri::command]
 pub async fn open_staged_item(app: AppHandle, item_id: i64) -> Result<(), String> {
-    blocking("打开文件", move || {
+    blocking(app.clone(), "打开文件", move || {
         staging::open_staged_item(&app, item_id)
     })
     .await
@@ -493,7 +521,7 @@ pub async fn open_staged_item(app: AppHandle, item_id: i64) -> Result<(), String
 
 #[tauri::command]
 pub async fn open_pod_folder(app: AppHandle, pod_id: u64) -> Result<(), String> {
-    blocking("打开文件夹", move || {
+    blocking(app.clone(), "打开文件夹", move || {
         staging::open_pod_folder(&app, pod_id)
     })
     .await
@@ -501,7 +529,7 @@ pub async fn open_pod_folder(app: AppHandle, pod_id: u64) -> Result<(), String> 
 
 #[tauri::command]
 pub async fn copy_staged_to_clipboard(app: AppHandle, item_ids: Vec<i64>) -> Result<(), String> {
-    blocking("复制到剪贴板", move || {
+    blocking(app.clone(), "复制到剪贴板", move || {
         staging::copy_staged_to_clipboard(&app, &item_ids)
     })
     .await
@@ -509,7 +537,7 @@ pub async fn copy_staged_to_clipboard(app: AppHandle, item_ids: Vec<i64>) -> Res
 
 #[tauri::command]
 pub async fn reveal_staged_items(app: AppHandle, item_ids: Vec<i64>) -> Result<(), String> {
-    blocking("打开所在位置", move || {
+    blocking(app.clone(), "打开所在位置", move || {
         staging::reveal_staged_items(&app, &item_ids)
     })
     .await
@@ -521,8 +549,8 @@ pub fn write_clipboard_text(text: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn read_clipboard_files() -> Result<Vec<String>, String> {
-    blocking("读取剪贴板文件", crate::clipboard::read_files).await
+pub async fn read_clipboard_files(app: AppHandle) -> Result<Vec<String>, String> {
+    blocking(app.clone(), "读取剪贴板文件", crate::clipboard::read_files).await
 }
 
 // ---- 右键菜单窗口 ----

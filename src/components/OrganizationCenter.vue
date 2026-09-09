@@ -97,7 +97,9 @@ onMounted(loadPolicy);
 <template>
   <div class="organization-center">
     <div v-if="policy" class="policy-summary" :data-managed="policy.managed">
-      <strong>{{ policy.managed ? policy.policy.organizationName || "受机构策略管理" : "个人 / 社区模式" }}</strong>
+      <strong>{{
+        policy.managed ? policy.policy.organizationName || "受机构策略管理" : "个人 / 社区模式"
+      }}</strong>
       <span v-if="policy.managed">策略文件：{{ policy.source }}</span>
       <span v-else>没有安装机构策略文件，全部数据和设置由本机用户控制。</span>
       <ul v-if="policy.managed">
@@ -105,7 +107,9 @@ onMounted(loadPolicy);
         <li v-if="policy.policy.requirePrivacyScan">普通导出前必须进行隐私检查</li>
         <li v-if="policy.policy.lockRules">规则模板由管理员锁定</li>
         <li v-if="policy.policy.disableFulltextIndex">禁止全文和 OCR 索引</li>
-        <li v-if="policy.policy.mandatoryRetentionDays">最长保留 {{ policy.policy.mandatoryRetentionDays }} 天</li>
+        <li v-if="policy.policy.mandatoryRetentionDays">
+          最长保留 {{ policy.policy.mandatoryRetentionDays }} 天
+        </li>
       </ul>
     </div>
 
@@ -116,7 +120,10 @@ onMounted(loadPolicy);
       <button type="button" :disabled="busy" @click="exportSettings">备份设置</button>
       <button type="button" :disabled="busy" @click="importSettings">导入设置</button>
     </div>
-    <p class="privacy-note">诊断包默认隐藏暂存路径，不包含文件内容、缩略图、OCR 正文或文件名；只有机构策略明确允许时才保留路径。</p>
+    <p class="privacy-note">
+      诊断包默认隐藏暂存路径，不包含文件内容、缩略图、OCR
+      正文或文件名；只有机构策略明确允许时才保留路径。
+    </p>
     <p class="message" role="status" aria-live="polite">{{ message }}</p>
   </div>
 </template>
@@ -169,7 +176,9 @@ button {
   font-weight: 550;
   font-family: inherit;
   cursor: pointer;
-  transition: background 150ms var(--ease-out), border-color 150ms var(--ease-out);
+  transition:
+    background 150ms var(--ease-out),
+    border-color 150ms var(--ease-out);
 }
 button:hover {
   background: var(--surface-hover);

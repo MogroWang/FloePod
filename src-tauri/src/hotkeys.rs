@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 use crate::events;
@@ -57,10 +57,10 @@ pub fn register(app: &AppHandle, s: &Settings) -> Result<(), String> {
         reg(&s.hotkeys.toggle_bar, on_toggle_bars)?;
         reg(&s.hotkeys.collect_clipboard, |app| {
             if let Some(id) = collect_into_first_pod(app) {
-                let _ = app.emit_to(
+                let _ = events::COLLECT_CLIPBOARD.emit_to(
+                    app,
                     events::pod_bar_label(id),
-                    events::COLLECT_CLIPBOARD,
-                    serde_json::json!({ "podId": id }),
+                    crate::events::PodEvent { pod_id: id },
                 );
             }
         })?;
@@ -78,10 +78,10 @@ pub fn register(app: &AppHandle, s: &Settings) -> Result<(), String> {
                     return;
                 }
                 manager::show_panel(app, pod_id);
-                let _ = app.emit_to(
+                let _ = events::REQUEST_FILE_PICKER.emit_to(
+                    app,
                     events::pod_panel_label(pod_id),
-                    events::REQUEST_FILE_PICKER,
-                    serde_json::json!({ "podId": pod_id }),
+                    crate::events::PodEvent { pod_id },
                 );
             }) {
                 // 单个 Alt+数字与其他软件冲突时不能让用户原有的三组快捷键

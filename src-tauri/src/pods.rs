@@ -2,7 +2,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use crate::db;
 use crate::events;
@@ -126,7 +126,7 @@ fn staging_folder_changed(old: &str, new: &str) -> Result<bool, String> {
     match (old.is_empty(), new.is_empty()) {
         (true, true) => Ok(false),
         (true, false) | (false, true) => Ok(true),
-        (false, false) => Ok(!settings::configured_paths_equal(
+        (false, false) => Ok(!crate::file_paths::configured_paths_equal(
             Path::new(old),
             Path::new(new),
         )?),
@@ -139,6 +139,7 @@ pub fn create(
     reuse_existing: bool,
 ) -> Result<Pod, String> {
     let state = app.state::<AppState>();
+    let _permit = state.tasks.enter()?;
     let _operation = state.settings_ops.lock().unwrap();
     let pod = {
         let connection = state.db.lock().unwrap();
@@ -171,12 +172,13 @@ pub fn create(
     state
         .watcher_dirty
         .store(true, std::sync::atomic::Ordering::Relaxed);
-    let _ = app.emit(events::PODS_CHANGED, ());
+    let _ = events::PODS_CHANGED.emit(&app, ());
     Ok(pod)
 }
 
 pub fn update(app: AppHandle, pod_id: u64, patch: serde_json::Value) -> Result<Pod, String> {
     let state = app.state::<AppState>();
+    let _permit = state.tasks.enter()?;
     let _settings_operation = state.settings_ops.lock().unwrap();
     let file_operation = state.file_ops.lock().unwrap();
     let (pod, folder_changed, needs_reconcile) = {
@@ -220,7 +222,7 @@ pub fn update(app: AppHandle, pod_id: u64, patch: serde_json::Value) -> Result<P
     if folder_changed {
         events::emit_items_changed(&app, pod_id);
     }
-    let _ = app.emit(events::PODS_CHANGED, ());
+    let _ = events::PODS_CHANGED.emit(&app, ());
     Ok(pod)
 }
 
@@ -234,6 +236,7 @@ pub fn delete(app: AppHandle, pod_id: u64, mode: &str) -> Result<(), String> {
         other => return Err(format!("未知删除模式: {other}")),
     };
     let state = app.state::<AppState>();
+    let _permit = state.tasks.enter()?;
     let _settings_operation = state.settings_ops.lock().unwrap();
     let file_operation = state.file_ops.lock().unwrap();
     let current: Settings = {
@@ -252,7 +255,7 @@ pub fn delete(app: AppHandle, pod_id: u64, mode: &str) -> Result<(), String> {
             .ok_or_else(|| "匣不存在".to_string())?;
         let raw = pod.staging_folder.trim();
         if !raw.is_empty() {
-            let folder = settings::resolve_path(Path::new(raw))?;
+            let folder = crate::file_paths::resolve_path(Path::new(raw))?;
             match fs::symlink_metadata(&folder) {
                 Ok(_) => trash::delete(&folder)
                     .map_err(|error| format!("无法把暂存文件夹移入回收站: {error}"))?,
@@ -275,12 +278,13 @@ pub fn delete(app: AppHandle, pod_id: u64, mode: &str) -> Result<(), String> {
     state.mark_staged();
     drop(file_operation);
     manager::apply_settings(&app, &manager::current_settings(&app));
-    let _ = app.emit(events::PODS_CHANGED, ());
+    let _ = events::PODS_CHANGED.emit(&app, ());
     Ok(())
 }
 
 pub fn save_settings(app: AppHandle, patch: serde_json::Value) -> Result<Settings, String> {
     let state = app.state::<AppState>();
+    let _permit = state.tasks.enter()?;
     let _operation = state.settings_ops.lock().unwrap();
     let (previous, next) = {
         let connection = state.db.lock().unwrap();
@@ -300,7 +304,7 @@ pub fn save_settings(app: AppHandle, patch: serde_json::Value) -> Result<Setting
                 settings::persist(&connection, &previous).err()
             };
             if restore_settings.is_none() {
-                let _ = app.emit(events::SETTINGS_CHANGED, previous);
+                let _ = events::SETTINGS_CHANGED.emit(&app, previous);
             }
             let mut errors = vec![error];
             if let Some(error) = restore_hotkeys {
@@ -329,7 +333,7 @@ pub fn save_settings(app: AppHandle, patch: serde_json::Value) -> Result<Setting
             };
             match restore {
                 Ok(()) => {
-                    let _ = app.emit(events::SETTINGS_CHANGED, previous.clone());
+                    let _ = events::SETTINGS_CHANGED.emit(&app, previous.clone());
                 }
                 Err(error) => errors.push(format!("恢复旧设置也失败：{error}")),
             }

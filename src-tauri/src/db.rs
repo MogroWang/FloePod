@@ -132,11 +132,12 @@ pub fn migrate(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct StagedItem {
     pub id: i64,
     pub pod_id: i64,
+    #[schemars(extend("enum" = ["file","folder","text","shortcut"]))]
     pub kind: String,
     pub staging_path: String,
     pub original_path: Option<String>,

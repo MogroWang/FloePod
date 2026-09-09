@@ -32,6 +32,7 @@ import type {
   UndoResult,
   VerifyResult,
 } from "@/domain/types";
+import type { CommandContract } from "./generated";
 import { Commands, type CommandName } from "./commands";
 
 const inTauri = "__TAURI_INTERNALS__" in window;
@@ -40,10 +41,16 @@ const inTauri = "__TAURI_INTERNALS__" in window;
  * 浏览器预览的 mock 按需动态加载：既让 `pnpm dev` 在纯浏览器里可用，
  * 又保证 mock 代码（含伪造路径）不会被打进 Tauri 生产包。
  */
-async function invoke<T>(command: CommandName, args?: Record<string, unknown>): Promise<T> {
-  if (inTauri) return invokeTauri<T>(command, args);
+async function invoke<Name extends CommandName>(
+  command: Name,
+  ...args: keyof CommandContract[Name]["args"] extends never
+    ? [args?: CommandContract[Name]["args"]]
+    : [args: CommandContract[Name]["args"]]
+): Promise<CommandContract[Name]["result"]> {
+  if (inTauri) return invokeTauri(command, args[0]);
+  if (!import.meta.env.DEV) throw new Error("当前窗口没有连接到 FloePod 原生服务");
   const { mockInvoke } = await import("./mock");
-  return mockInvoke<T>(command, args);
+  return mockInvoke(command, args[0]);
 }
 
 export const ipc = {
@@ -72,8 +79,7 @@ export const ipc = {
     invoke(Commands.StagePaths, { podId, paths, action }),
   stageText: (podId: number, content: string, title?: string): Promise<StagedItem> =>
     invoke(Commands.StageText, { podId, content, title: title ?? null }),
-  listPodItems: (podId: number): Promise<StagedItem[]> =>
-    invoke(Commands.ListPodItems, { podId }),
+  listPodItems: (podId: number): Promise<StagedItem[]> => invoke(Commands.ListPodItems, { podId }),
   removeItems: (ids: number[], deleteFiles: boolean): Promise<void> =>
     invoke(Commands.RemoveItems, { ids, deleteFiles }),
   listOperations: (hours = 24, limit = 100): Promise<OperationEntry[]> =>
@@ -88,10 +94,8 @@ export const ipc = {
     ids: number[],
     destDir: string,
     mode: ExportMode,
-  ): Promise<OperationPreview> =>
-    invoke(Commands.PreviewExportItems, { ids, destDir, mode }),
-  scanPrivacy: (ids: number[]): Promise<PrivacyScanResult> =>
-    invoke(Commands.ScanPrivacy, { ids }),
+  ): Promise<OperationPreview> => invoke(Commands.PreviewExportItems, { ids, destDir, mode }),
+  scanPrivacy: (ids: number[]): Promise<PrivacyScanResult> => invoke(Commands.ScanPrivacy, { ids }),
   safeExportItems: (ids: number[], destDir: string): Promise<SafeExportResult> =>
     invoke(Commands.SafeExportItems, { ids, destDir }),
   createHandoff: (
@@ -116,8 +120,7 @@ export const ipc = {
     invoke(Commands.GetPodSecurityStatus, { podId }),
   unlockSensitivePod: (podId: number): Promise<SecurityStatus> =>
     invoke(Commands.UnlockSensitivePod, { podId }),
-  lockSensitivePod: (podId: number): Promise<void> =>
-    invoke(Commands.LockSensitivePod, { podId }),
+  lockSensitivePod: (podId: number): Promise<void> => invoke(Commands.LockSensitivePod, { podId }),
   lockAllSensitivePods: (): Promise<void> => invoke(Commands.LockAllSensitivePods),
   getOrganizationPolicy: (): Promise<PolicyStatus> => invoke(Commands.GetOrganizationPolicy),
   exportAuditLog: (destDir: string, format: "json" | "csv"): Promise<ExportedArtifact> =>
@@ -134,8 +137,7 @@ export const ipc = {
     destDir: string,
     mode: ExportMode,
     onConflict: ConflictStrategy,
-  ): Promise<ExportResult> =>
-    invoke(Commands.ExportItems, { ids, destDir, mode, onConflict }),
+  ): Promise<ExportResult> => invoke(Commands.ExportItems, { ids, destDir, mode, onConflict }),
   readThumbnail: (path: string): Promise<ThumbnailPayload | null> =>
     invoke(Commands.ReadThumbnail, { path }),
 
@@ -144,8 +146,7 @@ export const ipc = {
   hidePanel: (podId: number): Promise<void> => invoke(Commands.HidePanel, { podId }),
   setPanelMode: (podId: number, mode: PanelMode): Promise<void> =>
     invoke(Commands.SetPanelMode, { podId, mode }),
-  getPanelState: (podId: number): Promise<PanelState> =>
-    invoke(Commands.GetPanelState, { podId }),
+  getPanelState: (podId: number): Promise<PanelState> => invoke(Commands.GetPanelState, { podId }),
   reportPresence: (podId: number, window: string, inside: boolean): Promise<void> =>
     invoke(Commands.ReportPresence, { podId, window, inside }),
   setPanelPinned: (podId: number, pinned: boolean): Promise<void> =>
@@ -160,10 +161,8 @@ export const ipc = {
     invoke(Commands.MovePodBar, { podId, offset }),
   openSettings: (): Promise<void> => invoke(Commands.OpenSettings),
   /** 打开暂存条目：路径由后端按条目 id 重新校验，WebView 无法驱使系统打开任意路径。 */
-  openStagedItem: (itemId: number): Promise<void> =>
-    invoke(Commands.OpenStagedItem, { itemId }),
-  openPodFolder: (podId: number): Promise<void> =>
-    invoke(Commands.OpenPodFolder, { podId }),
+  openStagedItem: (itemId: number): Promise<void> => invoke(Commands.OpenStagedItem, { itemId }),
+  openPodFolder: (podId: number): Promise<void> => invoke(Commands.OpenPodFolder, { podId }),
   copyStagedToClipboard: (itemIds: number[]): Promise<void> =>
     invoke(Commands.CopyStagedToClipboard, { itemIds }),
   revealStagedItems: (itemIds: number[]): Promise<void> =>
@@ -220,6 +219,5 @@ export const ipc = {
     invoke(Commands.PrepareDragCut, { podId, paths }),
   finalizeDragCut: (token: DragCutToken): Promise<void> =>
     invoke(Commands.FinalizeDragCut, { token }),
-  cancelDragCut: (token: DragCutToken): Promise<void> =>
-    invoke(Commands.CancelDragCut, { token }),
+  cancelDragCut: (token: DragCutToken): Promise<void> => invoke(Commands.CancelDragCut, { token }),
 };

@@ -1,7 +1,7 @@
 {
   "name": "floepod",
   "private": true,
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "浮匣 FloePod - 本地优先的屏幕边缘文件暂存工具",
   "type": "module",
   "packageManager": "pnpm@11.22.0",
@@ -11,25 +11,33 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
-    "test": "node --test \"src/**/*.test.ts\"",
+    "test": "node --test \"src/**/*.test.ts\" \"scripts/*.test.mjs\"",
+    "version:check": "node scripts/project-version.mjs",
+    "ipc:generate": "node scripts/ipc.mjs --write",
+    "ipc:check": "node scripts/ipc.mjs",
+    "format": "prettier --write src scripts .github package.json .prettierrc.json",
+    "format:check": "prettier --check src scripts .github package.json .prettierrc.json",
     "preview": "vite preview",
     "tauri": "tauri",
     "icons": "tauri icon"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
-    "@tauri-apps/plugin-clipboard-manager": "^2",
-    "@tauri-apps/plugin-dialog": "^2",
-    "@tauri-apps/plugin-opener": "^2",
-    "pinia": "^3",
-    "vue": "^3.5"
+    "@tauri-apps/plugin-clipboard-manager": "^2.3.3",
+    "@tauri-apps/plugin-dialog": "^2.7.3",
+    "@tauri-apps/plugin-opener": "^2.5.5",
+    "pinia": "^3.0.4",
+    "vue": "^3.5.42"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
-    "@types/node": "^24",
-    "@vitejs/plugin-vue": "^6",
-    "typescript": "~5.9",
-    "vite": "^7",
-    "vue-tsc": "^3"
+    "@types/node": "^24.13.3",
+    "@vitejs/plugin-vue": "^6.0.8",
+    "ajv": "8.20.0",
+    "prettier": "3.9.6",
+    "typescript": "~5.9.3",
+    "vite": "^7.3.6",
+    "vue-tsc": "^3.3.11",
+    "yaml": "2.9.0"
   }
 }

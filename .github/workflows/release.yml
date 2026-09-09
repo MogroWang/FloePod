@@ -1,224 +1,139 @@
 name: Release Windows
-
 on:
-  push:
-    # 兼容仓库既有的 1.3.0 标签，并允许未来使用 v1.3.0。
-    tags: ["v*", "[0-9]*"]
-
+  workflow_run:
+    workflows: [Merged PR notification]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      notification_run_id:
+        description: "需要恢复发布的成功合并通知 run ID"
+        required: true
+        type: string
+permissions:
+  contents: read
+# GitHub queues up to 100 pending runs instead of replacing older releases.
 concurrency:
-  group: release-${{ github.ref }}
+  group: floepod-release
   cancel-in-progress: false
-
+  queue: max
 jobs:
-  dependency-audit:
-    name: Audit release dependencies
+  resolve:
+    name: Verify merged release source
+    if: (github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     permissions:
       contents: read
-      checks: write
-
+      actions: read
+      pull-requests: read
+    outputs:
+      sha: ${{ steps.identity.outputs.sha }}
+      pr: ${{ steps.identity.outputs.pr }}
+      notification: ${{ steps.identity.outputs.notification }}
     steps:
-      - name: Check out repository
+      - name: Load resolver from this workflow's trusted immutable definition
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
-
-      - name: Set up pnpm and Node.js
-        uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2
-        with:
-          runtime: node@24.19.0
-          install: false
-
-      - name: Audit JavaScript dependencies
-        run: pnpm audit --audit-level high
-
-      - name: Audit Rust dependencies
-        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          working-directory: src-tauri
-
-  build-and-release:
-    name: Build, attest, and publish Windows release
-    needs: dependency-audit
+      - name: Verify notification, PR, merge SHA and default-branch ancestry
+        id: identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release-identity.mjs
+  publish:
+    name: Build, sign, attest and publish merged source
+    needs: resolve
     runs-on: windows-latest
-    timeout-minutes: 75
+    timeout-minutes: 90
     permissions:
       contents: write
       id-token: write
       attestations: write
-
+    env:
+      RELEASE_SHA: ${{ needs.resolve.outputs.sha }}
+      RELEASE_PR: ${{ needs.resolve.outputs.pr }}
+      NOTIFICATION_RUN: ${{ needs.resolve.outputs.notification }}
+      GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
     steps:
-      - name: Check out tagged source
+      - name: Check out the verified immutable merged source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          ref: ${{ needs.resolve.outputs.sha }}
           persist-credentials: false
-
+      - name: Verify HEAD, source versions and idempotent release state
+        id: state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release-state.mjs --prepare
       - name: Set up pnpm and Node.js
+        if: steps.state.outputs.published != 'true'
         uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2
         with:
           runtime: node@24.19.0
-          cache: true
           install: false
-
-      - name: Set up Rust
-        # rust-toolchain.toml 钉住 1.97.1；这里显式传同一版本，避免额外安装 stable
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
+      - name: Set up locked Rust toolchain
+        if: steps.state.outputs.published != 'true'
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: "1.97.1"
-          components: clippy, rustfmt
-
-      - name: Cache Rust dependencies and build outputs
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: src-tauri -> target
-
-      - name: Install frontend dependencies
+      - name: Install locked dependencies
+        if: steps.state.outputs.published != 'true'
         run: pnpm install --frozen-lockfile
-
-      - name: Run frontend contract tests
-        run: pnpm test
-
-      - name: Verify tag and project versions
-        id: version
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $tag = $env:GITHUB_REF_NAME
-          if ($tag -notmatch '^v?(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$') {
-            throw "Release tag must be semantic version shaped, for example 1.3.0 or v1.3.0; got $tag"
-          }
-          $version = $Matches.version
-          $packageVersion = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          $tauriVersion = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
-          $cargoMatch = Select-String -Path src-tauri/Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
-          if (-not $cargoMatch) {
-            throw "Could not read the package version from src-tauri/Cargo.toml"
-          }
-          $cargoVersion = $cargoMatch.Matches[0].Groups[1].Value
-          $versions = @(@($packageVersion, $tauriVersion, $cargoVersion) | Select-Object -Unique)
-          if ($versions.Count -ne 1 -or $versions[0] -ne $version) {
-            throw "Tag $tag does not match package.json ($packageVersion), tauri.conf.json ($tauriVersion), and Cargo.toml ($cargoVersion)."
-          }
-          "version=$version" >> $env:GITHUB_OUTPUT
-
-      - name: Check Rust formatting
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
-
-      - name: Run Rust tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
-
-      - name: Run Rust lints
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
-
-      - name: Build Tauri application, NSIS, and MSI installers
-        run: pnpm tauri build --ci
-
-      - name: Build MSIX package
-        shell: pwsh
-        run: ./scripts/package-msix.ps1
-
-      - name: Prepare Authenticode certificate
+      - name: Build executable without repeating CI quality gates
+        if: steps.state.outputs.published != 'true'
+        run: pnpm tauri build --ci --no-bundle --config '{"build":{"beforeBuildCommand":"pnpm exec vite build"}}'
+      - name: Prepare certificate for Tauri signing callbacks
+        if: steps.state.outputs.published != 'true'
         shell: pwsh
         env:
           SIGN_CERTIFICATE: ${{ secrets.WINDOWS_SIGN_CERTIFICATE_BASE64 }}
           SIGN_PASSWORD: ${{ secrets.WINDOWS_SIGN_CERTIFICATE_PASSWORD }}
-        if: env.SIGN_CERTIFICATE != ''
         run: |
-          $certificate = Join-Path $env:RUNNER_TEMP "floepod-signing.pfx"
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:SIGN_CERTIFICATE) {
+            'Authenticode: unsigned (no certificate configured).' >> $env:GITHUB_STEP_SUMMARY
+            exit 0
+          }
+          $certificate = Join-Path $env:RUNNER_TEMP 'floepod-signing.pfx'
           [IO.File]::WriteAllBytes($certificate, [Convert]::FromBase64String($env:SIGN_CERTIFICATE))
+          $env:FLOEPOD_SIGN_CERT_PATH = $certificate
+          $env:FLOEPOD_SIGN_CERT_PASSWORD = $env:SIGN_PASSWORD
+          $cert = [Security.Cryptography.X509Certificates.X509Certificate2]::new($certificate, $env:SIGN_PASSWORD)
+          try { $publisher = $cert.Subject } finally { $cert.Dispose() }
+          if ($publisher -match '[\r\n]') { throw 'Invalid certificate subject' }
           "FLOEPOD_SIGN_CERT_PATH=$certificate" >> $env:GITHUB_ENV
-          "FLOEPOD_SIGN_CERT_PASSWORD=$env:SIGN_PASSWORD" >> $env:GITHUB_ENV
-
-      - name: Sign and verify Windows packages
-        shell: pwsh
-        if: env.FLOEPOD_SIGN_CERT_PATH != ''
-        run: |
-          $paths = @(
-            "src-tauri/target/release/FloePod.exe"
-            (Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "*.exe" -File).FullName
-            (Get-ChildItem "src-tauri/target/release/bundle/msi" -Filter "*.msi" -File).FullName
-            (Get-ChildItem "dist" -Filter "FloePod-*-win-x64.msix" -File).FullName
-          )
-          ./scripts/sign-windows-artifacts.ps1 -Path $paths
-
-      - name: Build portable package from the final executable
-        run: node scripts/package-portable.mjs
-
-      - name: Collect release assets and checksums
+          "FLOEPOD_MSIX_PUBLISHER=$publisher" >> $env:GITHUB_ENV
+      - name: Package final executable as NSIS, MSI and MSIX
+        if: steps.state.outputs.published != 'true'
         shell: pwsh
         env:
-          RELEASE_VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          $ErrorActionPreference = "Stop"
-          $releaseDir = Join-Path $env:GITHUB_WORKSPACE "dist/release"
-          New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
-
-          $binary = Get-Item "src-tauri/target/release/FloePod.exe"
-          $installers = @(Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "*.exe" -File)
-          $msiPackages = @(Get-ChildItem "src-tauri/target/release/bundle/msi" -Filter "*.msi" -File)
-          $portablePackages = @(Get-ChildItem "dist" -Filter "FloePod-$env:RELEASE_VERSION-win-x64-portable.zip" -File)
-          $msixPackages = @(Get-ChildItem "dist" -Filter "FloePod-$env:RELEASE_VERSION-win-x64.msix" -File)
-          if ($installers.Count -ne 1) {
-            throw "Expected exactly one NSIS installer, found $($installers.Count)."
-          }
-          if ($portablePackages.Count -ne 1) {
-            throw "Expected exactly one portable package, found $($portablePackages.Count)."
-          }
-          if ($msiPackages.Count -ne 1) {
-            throw "Expected exactly one MSI package, found $($msiPackages.Count)."
-          }
-          if ($msixPackages.Count -ne 1) {
-            throw "Expected exactly one MSIX package, found $($msixPackages.Count)."
-          }
-
-          Copy-Item -LiteralPath $binary.FullName -Destination (Join-Path $releaseDir "FloePod-$env:RELEASE_VERSION-windows-x64.exe")
-          Copy-Item -LiteralPath $installers[0].FullName -Destination $releaseDir
-          Copy-Item -LiteralPath $msiPackages[0].FullName -Destination $releaseDir
-          Copy-Item -LiteralPath $portablePackages[0].FullName -Destination $releaseDir
-          Copy-Item -LiteralPath $msixPackages[0].FullName -Destination $releaseDir
-
-          $checksums = Get-ChildItem $releaseDir -File |
-            Sort-Object Name |
-            ForEach-Object {
-              $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-              "$hash  $($_.Name)"
-            }
-          $checksums | Set-Content -LiteralPath (Join-Path $releaseDir "SHA256SUMS.txt") -Encoding utf8NoBOM
-
-      - name: Attest release build provenance
+          FLOEPOD_SIGN_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGN_CERTIFICATE_PASSWORD }}
+        run: ./scripts/bundle-windows.ps1
+      - name: Package portable ZIP
+        if: steps.state.outputs.published != 'true'
+        run: node scripts/package-portable.mjs
+      - name: Validate versions, final assets, signatures and checksums
+        if: steps.state.outputs.published != 'true'
+        run: ./scripts/collect-windows-artifacts.ps1 -Destination dist/release -Commit $env:RELEASE_SHA
+      - name: Record actual immutable source provenance
+        if: steps.state.outputs.published != 'true'
+        run: node scripts/release-provenance.mjs
+      - name: Attest final assets
+        if: steps.state.outputs.published != 'true'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: dist/release/*
-
-      - name: Upload release build artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: FloePod-${{ steps.version.outputs.version }}-windows-x64
-          path: dist/release/
-          if-no-files-found: error
-          retention-days: 30
-          compression-level: 0
-
-      - name: Publish GitHub Release
-        shell: pwsh
+          predicate-type: https://slsa.dev/provenance/v1
+          predicate-path: dist/release-provenance.json
+      - name: Publish and verify GitHub upload digests
+        if: steps.state.outputs.published != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          $ErrorActionPreference = "Stop"
-          $assets = @(Get-ChildItem "dist/release" -File | Sort-Object Name | ForEach-Object FullName)
-          if ($assets.Count -eq 0) {
-            throw "No release assets were collected."
-          }
-          gh release create $env:GITHUB_REF_NAME @assets `
-            --verify-tag `
-            --generate-notes `
-            --title "FloePod $env:RELEASE_VERSION"
-
-      - name: Remove temporary signing certificate
-        if: always() && env.FLOEPOD_SIGN_CERT_PATH != ''
+        run: node scripts/release-state.mjs --publish
+      - name: Remove temporary certificate
+        if: always()
         shell: pwsh
-        run: Remove-Item -LiteralPath $env:FLOEPOD_SIGN_CERT_PATH -Force -ErrorAction SilentlyContinue
+        run: |
+          $certificate = Join-Path $env:RUNNER_TEMP 'floepod-signing.pfx'
+          if (Test-Path -LiteralPath $certificate) { Remove-Item -LiteralPath $certificate -Force }

@@ -13,7 +13,7 @@ use crate::db::{self, StagedItem};
 use crate::events;
 use crate::file_ops;
 use crate::manager;
-use crate::settings::{self, Settings};
+use crate::settings::Settings;
 use crate::state::AppState;
 
 const INSTALL_RETRY_INTERVAL: Duration = Duration::from_secs(10);
@@ -24,11 +24,17 @@ fn current_settings(app: &AppHandle) -> Result<Settings, String> {
 }
 
 pub fn spawn(app: AppHandle) {
-    std::thread::spawn(move || {
-        let mut recovering_unavailable_folder = false;
-        let mut last_install_retry = Instant::now();
-        loop {
-            std::thread::sleep(Duration::from_millis(800));
+    let owner = app.clone();
+    let mut recovering_unavailable_folder = false;
+    let mut last_install_retry = Instant::now();
+    let mut retry_after = None;
+    if let Err(error) = owner.state::<AppState>().reconcile_task.start(
+        "directory-reconcile",
+        Duration::from_millis(800),
+        move |_| {
+            if retry_after.is_some_and(|deadline| Instant::now() < deadline) {
+                return Ok(());
+            }
             if INSTALL_RETRY_NEEDED.load(Ordering::Relaxed)
                 && last_install_retry.elapsed() >= INSTALL_RETRY_INTERVAL
             {
@@ -37,12 +43,12 @@ pub fn spawn(app: AppHandle) {
             }
             let state = app.state::<AppState>();
             if !state.watcher_dirty.swap(false, Ordering::Relaxed) {
-                continue;
+                return Ok(());
             }
             if state.staged_recently() {
                 // 延后处理应用自身事件，同时保留抑制窗口内到达的外部变更。
                 state.watcher_dirty.store(true, Ordering::Relaxed);
-                continue;
+                return Ok(());
             }
             match reconcile_all(&app) {
                 Ok(()) => {
@@ -54,12 +60,15 @@ pub fn spawn(app: AppHandle) {
                 Err(error) => {
                     crate::logging::write(&format!("[watcher] 对账部分失败: {error}"));
                     recovering_unavailable_folder = true;
-                    std::thread::sleep(Duration::from_secs(4));
+                    retry_after = Some(Instant::now() + Duration::from_secs(4));
                     state.watcher_dirty.store(true, Ordering::Relaxed);
                 }
             }
-        }
-    });
+            Ok(())
+        },
+    ) {
+        crate::logging::write(&format!("[watcher] {error}"));
+    }
 }
 
 pub fn restart_all(app: &AppHandle) {
@@ -138,7 +147,7 @@ struct DirectorySnapshot {
 }
 
 fn read_snapshot(pod_id: u64, configured_folder: &Path) -> Result<DirectorySnapshot, String> {
-    let root = settings::resolve_path(configured_folder)?;
+    let root = crate::file_paths::resolve_path(configured_folder)?;
     if !root.is_dir() {
         return Err(format!("暂存目录不存在或不可用: {}", root.display()));
     }
@@ -152,18 +161,20 @@ fn read_snapshot(pod_id: u64, configured_folder: &Path) -> Result<DirectorySnaps
         let name = entry.file_name();
         let internal_name = name.to_string_lossy();
         if file_ops::is_internal_temp_name(&internal_name) {
-            unsafe_keys.insert(settings::path_key(&raw_path));
+            unsafe_keys.insert(crate::file_paths::path_key(&raw_path));
             continue;
         }
         let metadata = std::fs::symlink_metadata(&raw_path)
             .map_err(|error| format!("读取 {} 元数据失败: {error}", raw_path.display()))?;
         let direct_path = root.join(&name);
         if file_ops::is_reparse_or_symlink(&metadata) {
-            unsafe_keys.insert(settings::path_key(&direct_path));
+            unsafe_keys.insert(crate::file_paths::path_key(&direct_path));
             continue;
         }
-        let path = settings::resolve_path(&direct_path)?;
-        if !settings::path_is_within(&path, &root) || settings::paths_equal(&path, &root) {
+        let path = crate::file_paths::resolve_path(&direct_path)?;
+        if !crate::file_paths::path_is_within(&path, &root)
+            || crate::file_paths::paths_equal(&path, &root)
+        {
             return Err(format!("目录项越出暂存目录: {}", path.display()));
         }
         let name = name.to_string_lossy().to_string();
@@ -216,16 +227,16 @@ fn reconcile_pod(
             invalid_ids.push(item.id);
             continue;
         };
-        let Ok(parent) = settings::resolve_path(parent) else {
+        let Ok(parent) = crate::file_paths::resolve_path(parent) else {
             // 无法访问不代表文件已删除；取得完整可读快照前保留记录。
             continue;
         };
         let safe_path = parent.join(name);
-        if !settings::paths_equal(&parent, &snapshot.root) {
+        if !crate::file_paths::paths_equal(&parent, &snapshot.root) {
             invalid_ids.push(item.id);
             continue;
         }
-        let key = settings::path_key(&safe_path);
+        let key = crate::file_paths::path_key(&safe_path);
         let unsafe_entry = snapshot.unsafe_keys.contains(&key)
             || std::fs::symlink_metadata(&raw)
                 .map(|metadata| file_ops::is_reparse_or_symlink(&metadata))
@@ -244,7 +255,7 @@ fn reconcile_pod(
         .transaction()
         .map_err(|error| error.to_string())?;
     for disk in snapshot.observed {
-        let key = settings::path_key(Path::new(&disk.staging_path));
+        let key = crate::file_paths::path_key(Path::new(&disk.staging_path));
         if let Some(existing) = known.remove(&key) {
             let observed_kind = if existing.kind == "text"
                 && disk.kind == "file"

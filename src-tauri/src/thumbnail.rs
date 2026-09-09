@@ -15,7 +15,7 @@ const MAX_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_DIMENSION: u32 = 16_384;
 const MAX_ALLOCATION: u64 = 256 * 1024 * 1024;
 
-#[derive(Serialize)]
+#[derive(Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ThumbnailPayload {
     mime: String,
