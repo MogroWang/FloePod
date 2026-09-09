@@ -88,17 +88,7 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $output)) {
 }
 
 if ($env:FLOEPOD_SIGN_CERT_PATH) {
-  $signtool = Get-Command signtool.exe -ErrorAction SilentlyContinue
-  if (-not $signtool) {
-    throw "已请求签名但未找到 signtool.exe"
-  }
-  $arguments = @("sign", "/fd", "SHA256", "/tr", "http://timestamp.digicert.com", "/td", "SHA256", "/f", $env:FLOEPOD_SIGN_CERT_PATH)
-  if ($env:FLOEPOD_SIGN_CERT_PASSWORD) {
-    $arguments += @("/p", $env:FLOEPOD_SIGN_CERT_PASSWORD)
-  }
-  $arguments += $output
-  & $signtool.Source @arguments
-  if ($LASTEXITCODE -ne 0) { throw "MSIX Authenticode 签名失败" }
+  & (Join-Path $PSScriptRoot "sign-windows-artifacts.ps1") -Path $output
 }
 
 Remove-Item -LiteralPath $stage -Recurse -Force

@@ -21,9 +21,11 @@ const preview = computed(() => previewSlice(names.value));
 const simpleLanguage = computed(() =>
   Boolean(settingsStore.settings?.accessibility.simpleLanguage),
 );
-const chooserTitle = computed(() => simpleLanguage.value
-  ? `你想把这 ${props.paths.length} 项怎样放进匣？`
-  : `暂存 ${props.paths.length} 项`);
+const chooserTitle = computed(() =>
+  simpleLanguage.value
+    ? `你想把这 ${props.paths.length} 项怎样放进匣？`
+    : `暂存 ${props.paths.length} 项`,
+);
 </script>
 
 <template>

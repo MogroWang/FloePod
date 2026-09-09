@@ -93,12 +93,14 @@ function applyTemplate(value: string) {
 
 function updateExtensions(value: string) {
   update({
-    allowedExtensions: [...new Set(
-      value
-        .split(/[，,;；\s]+/)
-        .map((extension) => extension.trim().replace(/^\./, "").toLowerCase())
-        .filter(Boolean),
-    )],
+    allowedExtensions: [
+      ...new Set(
+        value
+          .split(/[，,;；\s]+/)
+          .map((extension) => extension.trim().replace(/^\./, "").toLowerCase())
+          .filter(Boolean),
+      ),
+    ],
     template: "manual",
   });
 }
@@ -116,11 +118,20 @@ async function pickSourceFolder() {
 <template>
   <div class="rules-editor">
     <SettingsRow label="启用规则" hint="只运行下方可见规则，不执行脚本或联网动作">
-      <ToggleSwitch label="启用规则" :model-value="rules.enabled" @update:model-value="(value) => update({ enabled: value })" />
+      <ToggleSwitch
+        label="启用规则"
+        :model-value="rules.enabled"
+        @update:model-value="(value) => update({ enabled: value })"
+      />
     </SettingsRow>
     <div class="sep" />
     <SettingsRow label="工作流模板" hint="选择后仍可继续修改每一项">
-      <select class="rule-input compact" :value="rules.template" aria-label="工作流模板" @change="applyTemplate(($event.target as HTMLSelectElement).value)">
+      <select
+        class="rule-input compact"
+        :value="rules.template"
+        aria-label="工作流模板"
+        @change="applyTemplate(($event.target as HTMLSelectElement).value)"
+      >
         <option v-for="template in templates" :key="template.value" :value="template.value">
           {{ template.label }}
         </option>
@@ -144,15 +155,36 @@ async function pickSourceFolder() {
         :disabled="!rules.enabled"
         maxlength="128"
         aria-label="文件名必须包含"
-        @change="update({ nameContains: ($event.target as HTMLInputElement).value, template: 'manual' })"
+        @change="
+          update({ nameContains: ($event.target as HTMLInputElement).value, template: 'manual' })
+        "
       />
     </SettingsRow>
     <div class="sep" />
     <SettingsRow label="指定来源文件夹" hint="留空不限制来源">
       <div class="path-control">
-        <input class="rule-input path" :value="rules.sourceFolder" aria-label="指定来源文件夹" readonly />
-        <button type="button" class="rule-button" :disabled="!rules.enabled" @click="pickSourceFolder">选择…</button>
-        <button v-if="rules.sourceFolder" type="button" class="rule-button" @click="update({ sourceFolder: '', template: 'manual' })">清除</button>
+        <input
+          class="rule-input path"
+          :value="rules.sourceFolder"
+          aria-label="指定来源文件夹"
+          readonly
+        />
+        <button
+          type="button"
+          class="rule-button"
+          :disabled="!rules.enabled"
+          @click="pickSourceFolder"
+        >
+          选择…
+        </button>
+        <button
+          v-if="rules.sourceFolder"
+          type="button"
+          class="rule-button"
+          @click="update({ sourceFolder: '', template: 'manual' })"
+        >
+          清除
+        </button>
       </div>
     </SettingsRow>
     <div class="sep" />
@@ -166,7 +198,12 @@ async function pickSourceFolder() {
           :value="rules.maxSizeMb"
           :disabled="!rules.enabled"
           aria-label="单个文件上限（MB）"
-          @change="update({ maxSizeMb: Number(($event.target as HTMLInputElement).value), template: 'manual' })"
+          @change="
+            update({
+              maxSizeMb: Number(($event.target as HTMLInputElement).value),
+              template: 'manual',
+            })
+          "
         />
         <span>MB</span>
       </div>
@@ -178,7 +215,9 @@ async function pickSourceFolder() {
         :value="rules.renamePattern"
         :disabled="!rules.enabled"
         aria-label="自动命名规则"
-        @change="update({ renamePattern: ($event.target as HTMLInputElement).value, template: 'manual' })"
+        @change="
+          update({ renamePattern: ($event.target as HTMLInputElement).value, template: 'manual' })
+        "
       />
     </SettingsRow>
     <div class="sep" />
@@ -188,7 +227,12 @@ async function pickSourceFolder() {
         :value="rules.subfolderPattern"
         :disabled="!rules.enabled"
         aria-label="自动子目录规则"
-        @change="update({ subfolderPattern: ($event.target as HTMLInputElement).value, template: 'manual' })"
+        @change="
+          update({
+            subfolderPattern: ($event.target as HTMLInputElement).value,
+            template: 'manual',
+          })
+        "
       />
     </SettingsRow>
     <div class="sep" />
@@ -197,7 +241,9 @@ async function pickSourceFolder() {
         label="拒绝内容重复文件"
         :model-value="rules.duplicatePolicy === 'reject'"
         :disabled="!rules.enabled"
-        @update:model-value="(value) => update({ duplicatePolicy: value ? 'reject' : 'allow', template: 'manual' })"
+        @update:model-value="
+          (value) => update({ duplicatePolicy: value ? 'reject' : 'allow', template: 'manual' })
+        "
       />
     </SettingsRow>
     <div class="sep" />
@@ -220,7 +266,12 @@ async function pickSourceFolder() {
           :value="rules.expireDays"
           :disabled="!rules.enabled"
           aria-label="到期提醒天数"
-          @change="update({ expireDays: Number(($event.target as HTMLInputElement).value), template: 'manual' })"
+          @change="
+            update({
+              expireDays: Number(($event.target as HTMLInputElement).value),
+              template: 'manual',
+            })
+          "
         />
         <span>天</span>
       </div>
@@ -308,7 +359,9 @@ async function pickSourceFolder() {
   font-weight: 550;
   font-family: inherit;
   cursor: pointer;
-  transition: background 150ms var(--ease-out), border-color 150ms var(--ease-out);
+  transition:
+    background 150ms var(--ease-out),
+    border-color 150ms var(--ease-out);
 }
 .rule-button:hover {
   background: var(--surface-hover);

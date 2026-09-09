@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 use serde::Serialize;
@@ -18,7 +18,7 @@ use crate::settings;
 use crate::staging;
 use crate::state::AppState;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HandoffFile {
     pub relative_path: String,
@@ -28,7 +28,7 @@ pub struct HandoffFile {
     pub cleaned: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HandoffResult {
     pub directory: String,
@@ -37,7 +37,7 @@ pub struct HandoffResult {
     pub warnings: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct VerifyIssue {
     pub path: String,
@@ -45,7 +45,7 @@ pub struct VerifyIssue {
     pub actual: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct VerifyResult {
     pub checked: usize,
@@ -260,6 +260,7 @@ pub fn create(
     clean_metadata: bool,
 ) -> Result<HandoffResult, String> {
     let state = app.state::<AppState>();
+    let _permit = state.tasks.enter()?;
     let _operation = state.file_ops.lock().unwrap();
     let (current, items) = {
         let connection = state.db.lock().unwrap();
@@ -322,7 +323,7 @@ pub fn create(
             warnings,
         })
     })();
-    let result = match build {
+    let mut result = match build {
         Ok(result) => result,
         Err(error) => {
             let _ = file_ops::remove_path(&directory);
@@ -349,7 +350,7 @@ pub fn create(
             expected_signature: operations::signature(&directory).ok(),
         }),
     };
-    let _ = operations::record(
+    if let Err(error) = operations::record(
         &state.db.lock().unwrap(),
         OperationDraft::completed(
             "handoff",
@@ -358,7 +359,14 @@ pub fn create(
             serde_json::json!({}),
             vec![operation_item],
         ),
-    );
+    ) {
+        crate::logging::write(&format!(
+            "[handoff] 交接包已生成，但操作记录写入失败: {error}"
+        ));
+        result.warnings.push(format!(
+            "交接包已生成，但无法建立操作记录与撤销入口: {error}"
+        ));
+    }
     Ok(result)
 }
 
@@ -367,18 +375,43 @@ pub fn verify(directory: String) -> Result<VerifyResult, String> {
     if !directory.is_absolute() || !directory.is_dir() {
         return Err("请选择有效的交接包目录".into());
     }
-    let sums = fs::read_to_string(directory.join("SHA256SUMS.txt"))
+    let manifest = manifest_path(&directory, "SHA256SUMS.txt")?;
+    let mut sums = String::new();
+    fs::File::open(manifest)
+        .map_err(|error| format!("无法读取 SHA256SUMS.txt: {error}"))?
+        .take(8 * 1024 * 1024 + 1)
+        .read_to_string(&mut sums)
         .map_err(|error| format!("无法读取 SHA256SUMS.txt: {error}"))?;
+    if sums.len() > 8 * 1024 * 1024 {
+        return Err("校验清单超过 8 MiB，未完成验证".into());
+    }
     let mut result = VerifyResult {
         checked: 0,
         valid: 0,
         issues: Vec::new(),
     };
+    let mut seen = HashSet::new();
     for line in sums.lines().filter(|line| !line.trim().is_empty()) {
+        result.checked += 1;
         let Some((expected, relative)) = line.split_once("  ") else {
+            result.issues.push(VerifyIssue {
+                path: format!("清单第 {} 个非空行格式无效", result.checked),
+                expected: line.into(),
+                actual: None,
+            });
             continue;
         };
-        result.checked += 1;
+        if expected.len() != 64
+            || !expected.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || !seen.insert(relative.replace('\\', "/").to_lowercase())
+        {
+            result.issues.push(VerifyIssue {
+                path: relative.into(),
+                expected: expected.into(),
+                actual: None,
+            });
+            continue;
+        }
         let path = match manifest_path(&directory, relative) {
             Ok(path) => path,
             Err(_) => {
@@ -404,6 +437,9 @@ pub fn verify(directory: String) -> Result<VerifyResult, String> {
             }),
         }
     }
+    if result.checked == 0 {
+        return Err("校验清单为空，未验证任何文件".into());
+    }
     Ok(result)
 }
 
@@ -418,6 +454,9 @@ fn manifest_path(directory: &Path, relative: &str) -> Result<PathBuf, String> {
         let Component::Normal(name) = component else {
             return Err("校验清单路径越出交接包".into());
         };
+        if name.to_string_lossy().contains(':') {
+            return Err("校验清单不允许 NTFS 备用数据流".into());
+        }
         path.push(name);
         match fs::symlink_metadata(&path) {
             Ok(metadata) if file_ops::is_reparse_or_symlink(&metadata) => {
@@ -462,9 +501,28 @@ mod tests {
         assert!(manifest_path(temporary.path(), "../outside.txt").is_err());
         assert!(manifest_path(temporary.path(), r"C:\\outside.txt").is_err());
         assert!(manifest_path(temporary.path(), "/outside.txt").is_err());
+        assert!(manifest_path(temporary.path(), "file.txt:secret").is_err());
         assert_eq!(
             manifest_path(temporary.path(), "folder/file.txt").unwrap(),
             temporary.path().join("folder").join("file.txt")
         );
+    }
+
+    #[test]
+    fn malformed_and_duplicate_manifest_lines_never_disappear_from_verification() {
+        let temporary = tempfile::tempdir().unwrap();
+        fs::write(temporary.path().join("a.txt"), b"abc").unwrap();
+        let valid = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  a.txt";
+        fs::write(
+            temporary.path().join("SHA256SUMS.txt"),
+            format!("invalid line\n{valid}\n{valid}\n"),
+        )
+        .unwrap();
+        let result = verify(temporary.path().to_string_lossy().into()).unwrap();
+        assert_eq!(result.checked, 3);
+        assert_eq!(result.valid, 1);
+        assert_eq!(result.issues.len(), 2);
+        fs::write(temporary.path().join("SHA256SUMS.txt"), "\n").unwrap();
+        assert!(verify(temporary.path().to_string_lossy().into()).is_err());
     }
 }

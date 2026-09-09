@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { resolveTheme } from "@/domain/settings";
+import { AsyncQueue } from "@/domain/asyncQueue";
 import type { MonitorInfo, Pod, Settings, ThemeMode } from "@/domain/types";
 import { ipc } from "@/ipc/client";
 import { Events, listen } from "@/ipc/events";
@@ -8,6 +9,16 @@ import { Events, listen } from "@/ipc/events";
 let changesListening = false;
 let changesListenPromise: Promise<void> | null = null;
 let systemThemeWatching = false;
+const saveQueues = new WeakMap<object, AsyncQueue<string>>();
+function queueFor(owner: object) {
+  let queue = saveQueues.get(owner);
+  if (!queue) {
+    queue = new AsyncQueue<string>();
+    saveQueues.set(owner, queue);
+  }
+  return queue;
+}
+export type SettingsPatchSource = Partial<Settings> | (() => Partial<Settings>);
 
 function applyDocumentTheme(theme: "light" | "dark") {
   const root = document.documentElement;
@@ -76,11 +87,29 @@ export const useSettingsStore = defineStore("settings", {
       this.apply(boot.settings);
     },
 
-    async save(patch: Partial<Settings>) {
-      const request = ++this.bootstrapSeq;
-      const next = await ipc.saveSettings(patch);
-      if (request === this.bootstrapSeq) this.apply(next);
-      return next;
+    async save(source: SettingsPatchSource) {
+      return queueFor(this).enqueue("settings", async () => {
+        const request = ++this.bootstrapSeq;
+        const patch = typeof source === "function" ? source() : source;
+        const next = await ipc.saveSettings(patch);
+        if (request === this.bootstrapSeq) this.apply(next);
+        return next;
+      });
+    },
+
+    async updatePod(id: number, patch: Partial<Pod>) {
+      return queueFor(this).enqueue(`pod:${id}`, async () => {
+        try {
+          const updated = await ipc.updatePod(id, patch);
+          await this.refreshPods();
+          return updated;
+        } catch (error) {
+          await this.refreshPods().catch((refreshError) =>
+            console.error("pod reconciliation failed", refreshError),
+          );
+          throw error;
+        }
+      });
     },
 
     pod(id: number): Pod | undefined {
@@ -125,11 +154,11 @@ export const useSettingsStore = defineStore("settings", {
       if (changesListenPromise) return changesListenPromise;
       changesListenPromise = (async () => {
         const registrations = await Promise.allSettled([
-          listen<Settings>(Events.SettingsChanged, (settings) => {
+          listen(Events.SettingsChanged, (settings) => {
             this.bootstrapSeq += 1;
             this.apply(settings);
           }),
-          listen<void>(Events.PodsChanged, () => {
+          listen(Events.PodsChanged, () => {
             void this.refreshPods().catch((err) => console.error("pod refresh failed", err));
           }),
         ]);

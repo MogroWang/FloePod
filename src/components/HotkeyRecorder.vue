@@ -76,7 +76,9 @@ function onKeydown(e: KeyboardEvent) {
   cursor: pointer;
   min-width: 150px;
   text-align: center;
-  transition: border-color 140ms ease, background 140ms ease;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease;
 }
 .hk.recording {
   border-color: var(--accent);

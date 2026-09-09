@@ -97,7 +97,8 @@ fn hdrop_buffer(paths: &[&Path]) -> Result<Vec<u8>, String> {
         fWide: 1,
     };
     let mut bytes = vec![0u8; size_of::<DROPFILES>()];
-    unsafe { std::ptr::write(bytes.as_mut_ptr().cast::<DROPFILES>(), header) };
+    // Vec<u8> only promises byte alignment, not DROPFILES alignment.
+    unsafe { std::ptr::write_unaligned(bytes.as_mut_ptr().cast::<DROPFILES>(), header) };
     bytes.extend_from_slice(unsafe {
         std::slice::from_raw_parts(wide.as_ptr().cast::<u8>(), wide.len() * 2)
     });

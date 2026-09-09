@@ -1,0 +1,836 @@
+.settings-root {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  color: var(--ink);
+}
+.settings-root .load-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--ink-2);
+  font-size: 13px;
+  text-align: center;
+  padding: 32px;
+}
+.settings-root .load-state p {
+  margin: 0;
+}
+.settings-root .load-state.error-state {
+  color: var(--danger);
+}
+
+.settings-root .titlebar {
+  flex-shrink: 0;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-left: 14px;
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--line);
+  user-select: none;
+}
+.settings-root .titlebar-title {
+  font-size: 12px;
+  color: var(--ink-2);
+  letter-spacing: 0.02em;
+}
+.settings-root .titlebar-controls {
+  display: flex;
+  height: 100%;
+}
+.settings-root .tb-btn {
+  width: 42px;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-2);
+  cursor: pointer;
+  font-family: inherit;
+  transition:
+    background 150ms var(--ease-out),
+    color 150ms var(--ease-out);
+}
+.settings-root .tb-btn:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+.settings-root .tb-btn.close:hover {
+  background: var(--danger);
+  color: var(--on-danger);
+}
+
+.settings-root .oobe {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+  overflow: auto;
+}
+.settings-root .oobe-card {
+  width: 380px;
+  max-width: calc(100% - 48px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  text-align: center;
+  background: var(--surface-raised);
+  border-radius: 18px;
+  box-shadow:
+    var(--shadow-panel),
+    0 0 0 1px var(--line);
+  padding: 34px 30px;
+}
+.settings-root .oobe-brand {
+  color: var(--accent);
+}
+.settings-root .oobe-title {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 680;
+  letter-spacing: -0.015em;
+}
+.settings-root .oobe-step-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 650;
+}
+.settings-root .oobe-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.75;
+  color: var(--ink-2);
+}
+.settings-root .oobe-text.dim {
+  color: var(--ink-3);
+  font-size: 12.5px;
+}
+.settings-root .oobe-form {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  text-align: left;
+}
+.settings-root .field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--ink-2);
+}
+.settings-root .oobe-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 6px;
+}
+
+.settings-root .settings-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.settings-root .nav {
+  width: 172px;
+  flex-shrink: 0;
+  background: var(--surface-raised);
+  display: flex;
+  flex-direction: column;
+  padding: 18px 10px 14px;
+  border-right: 1px solid var(--line);
+}
+.settings-root .nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  padding: 0 10px 18px;
+  border-radius: 8px;
+  cursor: default;
+  transition:
+    transform 160ms var(--ease-out),
+    filter 160ms var(--ease-out);
+}
+/* Logo 反馈：悬停轻微放大提亮，按下回缩 */
+.settings-root .nav-brand:hover {
+  transform: scale(1.06);
+  filter: brightness(1.12);
+}
+.settings-root .nav-brand:active {
+  transform: scale(0.94);
+  filter: brightness(0.96);
+  transition-duration: 80ms;
+}
+.settings-root .brand-icon {
+  color: var(--accent);
+}
+.settings-root .nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-root .nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--ink-2);
+  cursor: pointer;
+  font-family: inherit;
+  transition:
+    background 160ms var(--ease-out),
+    color 160ms var(--ease-out);
+}
+.settings-root .nav-ico {
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+.settings-root .nav-item:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+.settings-root .nav-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.settings-root .nav-item.active .nav-ico {
+  opacity: 1;
+}
+.settings-root .nav-foot {
+  margin-top: auto;
+  padding: 0 10px;
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+.settings-root .content {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 26px 30px 34px;
+}
+.settings-root .page-title {
+  font-size: 19px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  margin: 0 0 4px;
+}
+.settings-root .page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+/* 标题旁的操作按钮不参与伸缩，避免被长描述挤变形 */
+.settings-root .page-head .btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.settings-root .page-desc {
+  font-size: 12.5px;
+  color: var(--ink-3);
+  line-height: 1.6;
+  margin: 0 0 14px;
+}
+.settings-root .page-head .page-desc {
+  margin-bottom: 18px;
+}
+.settings-root .sep {
+  height: 1px;
+  background: var(--line);
+  margin: 0 16px;
+}
+.settings-root .settings-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-raised);
+  overflow: hidden;
+}
+.settings-root .settings-card .row {
+  padding: 14px 16px;
+}
+.settings-root .safety-settings {
+  margin-bottom: 20px;
+}
+.settings-root .compact-select {
+  width: 116px;
+}
+.settings-root .section-title {
+  margin: 0 0 10px;
+  font-size: 14px;
+  font-weight: 700;
+}
+.settings-root .search-section-title {
+  margin-top: 24px;
+}
+
+.settings-root .page-enter-active,
+.settings-root .page-leave-active {
+  transition:
+    opacity 170ms ease,
+    transform 240ms var(--ease-out);
+}
+.settings-root .page-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.settings-root .page-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+.settings-root .btn {
+  border: 1px solid var(--line-strong);
+  background: var(--surface-raised);
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 6px 13px;
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+  font-family: inherit;
+  transition:
+    background 150ms var(--ease-out),
+    border-color 150ms var(--ease-out),
+    transform 100ms var(--ease-out);
+}
+.settings-root .btn:active {
+  transform: scale(0.97);
+}
+.settings-root .btn:hover {
+  background: var(--surface-hover);
+}
+.settings-root .btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+.settings-root .btn.primary:hover {
+  background: var(--accent-hover);
+}
+/* 退出等破坏性动作：常态即带红色描边，悬停整块填充 */
+.settings-root .btn.danger {
+  color: var(--danger);
+  border-color: color-mix(in oklab, var(--danger) 45%, transparent);
+}
+.settings-root .btn.danger:hover {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: var(--on-danger);
+}
+.settings-root .btn.ghost {
+  border-color: transparent;
+  color: var(--ink-2);
+}
+.settings-root .btn.ghost:hover {
+  border-color: var(--line-strong);
+}
+.settings-root .btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
+.settings-root .input {
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12.5px;
+  background: var(--surface-raised);
+  color: var(--ink);
+  outline: none;
+  font-family: inherit;
+}
+.settings-root .input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.settings-root .input.mono {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--ink-2);
+}
+.settings-root select.input {
+  cursor: pointer;
+}
+.settings-root .input.sel {
+  min-width: 140px;
+}
+.settings-root .slider-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.settings-root .folder-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+.settings-root .error {
+  font-size: 12px;
+  color: var(--danger);
+  margin: 10px 0 0;
+}
+.settings-root .reset-line {
+  margin-top: 18px;
+}
+/* 关于页的版本按钮与居中的 about-hero / about-meta 对齐 */
+.settings-root .about-update-line {
+  display: flex;
+  justify-content: center;
+}
+
+.settings-root .pod-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.settings-root .pod-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-raised);
+  color: var(--ink-2);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+  font-family: inherit;
+  transition:
+    background 150ms var(--ease-out),
+    color 150ms var(--ease-out),
+    border-color 150ms var(--ease-out);
+}
+.settings-root .pod-chip:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+.settings-root .pod-chip.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.settings-root .pod-chip.off {
+  opacity: 0.55;
+}
+.settings-root .chip-badge {
+  font-size: 10px;
+  color: var(--ink-3);
+}
+.settings-root .pod-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-raised);
+  padding: 16px 18px;
+  box-shadow: 0 8px 24px -22px rgb(0 0 0 / 0.55);
+}
+.settings-root .pod-card.off {
+  opacity: 0.6;
+}
+.settings-root .pod-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 12px;
+}
+.settings-root .pod-name-text {
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+  padding: 2px 4px;
+}
+.settings-root .pod-name-input {
+  border: 0;
+  background: transparent;
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--ink);
+  outline: none;
+  font-family: inherit;
+  padding: 2px 4px;
+  border-radius: 6px;
+}
+.settings-root .pod-name-input:focus {
+  background: var(--surface-hover);
+}
+.settings-root .pod-head-ops {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.settings-root .op-btn {
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-family: inherit;
+  transition:
+    background 150ms var(--ease-out),
+    color 150ms var(--ease-out);
+}
+.settings-root .op-btn:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+.settings-root .op-btn:disabled {
+  cursor: wait;
+  opacity: 0.5;
+}
+.settings-root .op-btn.danger:hover {
+  background: color-mix(in oklab, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
+/* 分组字段：标签左对齐，控件右对齐，分区标题建立扫视结构 */
+.settings-root .pod-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-root .group-title {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  color: var(--ink-3);
+  margin: 10px 0 2px;
+}
+.settings-root .pod-group:first-child .group-title,
+.settings-root .adv-pod-head + .pod-group .group-title {
+  margin-top: 0;
+}
+.settings-root .group-hint {
+  margin: 0 0 8px;
+  color: var(--ink-3);
+  font-size: 11.5px;
+}
+/* 高级设置页:按匣展示规则匣与敏感匣（两张独立卡片） */
+.settings-root .adv-pod-section {
+  margin-top: 26px;
+}
+.settings-root .adv-pod-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 12px;
+}
+.settings-root .adv-pod-off {
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+.settings-root .frow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 5px 0;
+}
+.settings-root .flabel {
+  font-size: 13px;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.settings-root .fctrl {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.settings-root .fval {
+  min-width: 40px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.settings-root .folder-row .folder-line {
+  max-width: 460px;
+}
+
+/* 新建匣弹窗 */
+.settings-root .modal-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: oklch(0 0 0 / 0.35);
+}
+.settings-root .modal-card {
+  width: 380px;
+  max-width: calc(100% - 48px);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: var(--surface-raised);
+  border-radius: 14px;
+  box-shadow:
+    var(--shadow-panel),
+    0 0 0 1px var(--line);
+  padding: 20px 22px 18px;
+}
+.settings-root .modal-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+}
+.settings-root .modal-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+.settings-root .modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 2px;
+}
+.settings-root .modal-actions.column {
+  flex-direction: column;
+  align-items: stretch;
+}
+.settings-root .modal-actions.column .btn {
+  text-align: center;
+}
+.settings-root .modal-enter-active,
+.settings-root .modal-leave-active {
+  transition: opacity 160ms ease;
+}
+.settings-root .modal-enter-active .modal-card,
+.settings-root .modal-leave-active .modal-card {
+  transition:
+    transform 200ms var(--ease-out),
+    opacity 160ms ease;
+}
+.settings-root .modal-enter-from,
+.settings-root .modal-leave-to {
+  opacity: 0;
+}
+.settings-root .modal-enter-from .modal-card,
+.settings-root .modal-leave-to .modal-card {
+  transform: translateY(10px) scale(0.98);
+  opacity: 0;
+}
+
+.settings-root .color-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.settings-root .color-input {
+  width: 32px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  cursor: pointer;
+}
+.settings-root .color-input::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+.settings-root .color-input::-webkit-color-swatch {
+  border: none;
+  border-radius: 3px;
+}
+.settings-root .color-text {
+  font-size: 12px;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 自动屏蔽 */
+.settings-root .block-apps {
+  padding: 14px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.settings-root .block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.settings-root .block-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.settings-root .block-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.settings-root .block-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 8px 7px 12px;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.settings-root .block-item + .block-item {
+  border-top: 1px solid var(--line);
+}
+.settings-root .block-item:hover {
+  background: var(--surface-hover);
+}
+.settings-root .block-name {
+  font-family: ui-monospace, Consolas, monospace;
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-root .block-empty {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--ink-3);
+  background: var(--surface-hover);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.settings-root .block-add {
+  display: flex;
+  gap: 8px;
+}
+.settings-root .block-add .input {
+  flex: 1;
+  min-width: 0;
+}
+.settings-root .block-tip {
+  margin-top: 12px;
+  margin-bottom: 0;
+}
+
+.settings-root .about-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 22px 0 8px;
+}
+.settings-root .about-brand {
+  color: var(--accent);
+}
+.settings-root .about-name {
+  font-size: 18px;
+  font-weight: 680;
+  letter-spacing: -0.015em;
+}
+.settings-root .about-ver {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.settings-root .about-text {
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--ink-2);
+  max-width: 430px;
+  margin: 6px auto 20px;
+  text-align: center;
+}
+.settings-root .about-meta {
+  max-width: 430px;
+  margin: 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-raised);
+  overflow: hidden;
+}
+.settings-root .about-row {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  padding: 10px 14px;
+  font-size: 12.5px;
+}
+.settings-root .about-row + .about-row {
+  border-top: 1px solid var(--line);
+}
+.settings-root .about-key {
+  flex-shrink: 0;
+  color: var(--ink-2);
+  font-weight: 550;
+  width: 64px;
+}
+.settings-root .about-val {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.settings-root .toast {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--ink);
+  color: var(--surface);
+  font-size: 12px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  box-shadow: var(--shadow-pop);
+}
+.settings-root .toast-enter-active,
+.settings-root .toast-leave-active {
+  transition:
+    opacity 180ms ease,
+    transform 240ms var(--ease-out);
+}
+.settings-root .toast-enter-from,
+.settings-root .toast-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(8px);
+}

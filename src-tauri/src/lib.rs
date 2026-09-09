@@ -7,14 +7,18 @@ mod db;
 mod drag_out;
 mod events;
 mod export;
+mod file_fingerprint;
 mod file_ops;
+mod file_paths;
 mod handoff;
 mod hotkeys;
+mod lifecycle;
 mod lnk;
 mod logging;
 mod manager;
 mod menu;
 mod operations;
+mod parser_worker;
 mod paths;
 mod pods;
 mod policy;
@@ -24,6 +28,7 @@ mod search;
 mod security;
 mod settings;
 mod shell_integration;
+mod shutdown;
 mod staging;
 mod state;
 mod thumbnail;
@@ -36,6 +41,9 @@ use tauri::Manager;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub fn run() {
+    if parser_worker::run_if_requested() {
+        return;
+    }
     // 数据目录与数据库在窗口创建前准备好并注册，避免前端过早调用命令时 state 未就绪
     let data_dir = paths::resolve();
     let conn = match db::open(&data_dir) {
@@ -65,14 +73,10 @@ pub fn run() {
                 match settings::load(&conn, &state.data_dir.to_string_lossy(), VERSION) {
                     Ok(settings) => settings,
                     Err(error) => {
-                        // 损坏的设置不能让应用无法启动：留痕原始值并回退默认设置
+                        // 损坏的设置不能让应用无法启动：保留数据库原始值并回退默认设置
                         //（表现为重新走首次引导），运行中的读取路径仍保持严格报错。
-                        let raw = db::kv_get(&conn, settings::KEY)
-                            .ok()
-                            .flatten()
-                            .unwrap_or_default();
                         crate::logging::write(&format!(
-                            "[settings] 启动读取设置失败，已回退默认设置: {error}；原始值: {raw}"
+                            "[settings] 启动读取设置失败，已回退默认设置: {error}"
                         ));
                         settings::Settings::default()
                     }
@@ -82,8 +86,7 @@ pub fn run() {
             security::ensure_configured(&settings);
             // 先恢复被中断的跨盘移动并执行保留策略，再启动 watcher，避免对账抢先。
             staging::recover_pending_moves(app.handle());
-            operations::purge_expired(app.handle());
-            security::purge_retention(app.handle());
+            security::retention::start(app.handle())?;
             tray::init(app.handle())?;
             watcher::spawn(app.handle().clone());
 
@@ -151,74 +154,12 @@ pub fn run() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![
-            commands::get_bootstrap,
-            commands::get_modifier_state,
-            commands::get_hotkey_defaults,
-            commands::create_pod,
-            commands::update_pod,
-            commands::delete_pod,
-            commands::save_settings,
-            commands::stage_paths,
-            commands::stage_text,
-            commands::list_pod_items,
-            commands::remove_items,
-            commands::list_operations,
-            commands::undo_operation,
-            commands::retry_operation,
-            commands::preview_remove_items,
-            commands::preview_export_items,
-            commands::scan_privacy,
-            commands::safe_export_items,
-            commands::create_handoff,
-            commands::verify_handoff,
-            commands::rebuild_search_index,
-            commands::search_items,
-            commands::update_item_annotation,
-            commands::get_item_annotation,
-            commands::get_pod_security_status,
-            commands::unlock_sensitive_pod,
-            commands::lock_sensitive_pod,
-            commands::lock_all_sensitive_pods,
-            commands::get_organization_policy,
-            commands::export_audit_log,
-            commands::export_diagnostic_bundle,
-            commands::export_settings_file,
-            commands::import_settings_file,
-            commands::prepare_drag_cut,
-            commands::finalize_drag_cut,
-            commands::cancel_drag_cut,
-            commands::export_items,
-            commands::read_thumbnail,
-            commands::show_panel,
-            commands::toggle_panel,
-            commands::hide_panel,
-            manager::get_panel_state,
-            commands::set_panel_mode,
-            commands::hold_pending_drop,
-            commands::report_presence,
-            commands::set_panel_pinned,
-            commands::set_dragging_out,
-            commands::set_pod_accept,
-            commands::set_panel_size,
-            commands::move_pod_bar,
-            commands::open_settings,
-            commands::open_staged_item,
-            commands::open_pod_folder,
-            commands::copy_staged_to_clipboard,
-            commands::reveal_staged_items,
-            commands::write_clipboard_text,
-            commands::read_clipboard_files,
-            commands::context_menu_ready,
-            commands::open_context_menu,
-            commands::resize_context_menu,
-            commands::context_menu_choice,
-            commands::hide_context_menu,
-            commands::dismiss_context_menu,
-            commands::log_frontend,
-            commands::app_log,
-            commands::quit_app,
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running FloePod");
+        .invoke_handler(include!(concat!(env!("OUT_DIR"), "/invoke-handler.rs")))
+        .build(tauri::generate_context!())
+        .expect("error while building FloePod")
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
+                shutdown::handle(app, code, api);
+            }
+        });
 }

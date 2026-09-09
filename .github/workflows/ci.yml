@@ -1,152 +1,87 @@
 name: CI
-
 on:
-  push:
-    branches: [main]
   pull_request:
-    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+    types: [checks_requested]
   schedule:
-    # Re-check newly disclosed advisories even when the lockfiles do not change.
     - cron: "23 3 * * 1"
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
+  version:
+    name: Version consistency and uniqueness
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: node scripts/version-gate.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
   dependency-audit:
     name: Audit JavaScript and Rust dependencies
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      checks: write
-
+    timeout-minutes: 20
     steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      - name: Set up pnpm and Node.js
-        uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2
+      - uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2
         with:
           runtime: node@24.19.0
           install: false
-
-      - name: Audit JavaScript dependencies
-        run: pnpm audit --audit-level high
-
-      - name: Audit Rust dependencies
-        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          working-directory: src-tauri
-
+      - name: Audit locked JavaScript dependencies
+        run: pnpm audit --audit-level high --registry https://registry.npmjs.org
+      - name: Install pinned Rust audit tool
+        run: cargo install cargo-audit --version 0.22.2 --locked
+      - name: Audit locked Rust dependencies (warnings remain visible)
+        run: cargo audit --file src-tauri/Cargo.lock
   build-windows:
     name: Validate and package Windows x64
     if: github.event_name != 'schedule'
     runs-on: windows-latest
-    timeout-minutes: 60
-
+    timeout-minutes: 90
     steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      - name: Set up pnpm and Node.js
-        uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2
+      - uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2
         with:
           runtime: node@24.19.0
           cache: true
           install: false
-
-      - name: Set up Rust
-        # rust-toolchain.toml 钉住 1.97.1；这里显式传同一版本，避免额外安装 stable
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: "1.97.1"
           components: clippy, rustfmt
-
-      - name: Cache Rust dependencies and build outputs
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: src-tauri -> target
-
-      - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Run frontend contract tests
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm version:check
+      - name: Frontend behavior and release safety regression tests
         run: pnpm test
-
-      - name: Check Rust formatting
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
-
-      - name: Run Rust tests
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+      - name: Native file safety, lifecycle, privacy and migration regressions
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked
-
-      - name: Run Rust lints
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
-
-      - name: Build Tauri application, NSIS, and MSI installers
+      - name: Generated IPC schema and TypeScript bindings must match Rust
+        run: pnpm ipc:check
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+      - name: Production Windows build, frontend typecheck, NSIS and MSI
         run: pnpm tauri build --ci
-
-      - name: Build portable package
-        run: node scripts/package-portable.mjs
-
-      - name: Build unsigned MSIX package
-        shell: pwsh
-        run: ./scripts/package-msix.ps1
-
-      - name: Collect Windows artifacts
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $artifactDir = Join-Path $env:GITHUB_WORKSPACE "dist/github-artifacts"
-          New-Item -ItemType Directory -Path $artifactDir -Force | Out-Null
-
-          $binary = Get-Item "src-tauri/target/release/FloePod.exe"
-          $installers = @(Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "*.exe" -File)
-          $msiPackages = @(Get-ChildItem "src-tauri/target/release/bundle/msi" -Filter "*.msi" -File)
-          $portablePackages = @(Get-ChildItem "dist" -Filter "FloePod-*-win-x64-portable.zip" -File)
-          $msixPackages = @(Get-ChildItem "dist" -Filter "FloePod-*-win-x64.msix" -File)
-
-          if ($installers.Count -eq 0) {
-            throw "Tauri did not produce an NSIS installer."
-          }
-          if ($portablePackages.Count -ne 1) {
-            throw "Expected exactly one portable package, found $($portablePackages.Count)."
-          }
-          if ($msiPackages.Count -ne 1) {
-            throw "Expected exactly one MSI package, found $($msiPackages.Count)."
-          }
-          if ($msixPackages.Count -ne 1) {
-            throw "Expected exactly one MSIX package, found $($msixPackages.Count)."
-          }
-
-          Copy-Item -LiteralPath $binary.FullName -Destination $artifactDir
-          $installers | ForEach-Object {
-            Copy-Item -LiteralPath $_.FullName -Destination $artifactDir
-          }
-          Copy-Item -LiteralPath $msiPackages[0].FullName -Destination $artifactDir
-          Copy-Item -LiteralPath $portablePackages[0].FullName -Destination $artifactDir
-          Copy-Item -LiteralPath $msixPackages[0].FullName -Destination $artifactDir
-
-          $checksums = Get-ChildItem $artifactDir -File |
-            Sort-Object Name |
-            ForEach-Object {
-              $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-              "$hash  $($_.Name)"
-            }
-          $checksums | Set-Content -LiteralPath (Join-Path $artifactDir "SHA256SUMS.txt") -Encoding utf8NoBOM
-
-      - name: Upload Windows build
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - run: node scripts/package-portable.mjs
+      - run: ./scripts/package-msix.ps1
+      - name: Validate packaged versions, embedded binaries and checksums
+        run: ./scripts/collect-windows-artifacts.ps1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: FloePod-windows-x64-${{ github.run_number }}-${{ github.sha }}
           path: dist/github-artifacts/

@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
 
-use crate::settings::{self, Pod};
+use crate::settings::Pod;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleTarget {
@@ -136,9 +136,9 @@ pub fn validate_source(pod: &Pod, source: &Path, metadata: &fs::Metadata) -> Res
         ));
     }
     if !pod.rules.source_folder.trim().is_empty() {
-        let allowed = settings::resolve_path(Path::new(&pod.rules.source_folder))?;
-        let source = settings::resolve_path(source)?;
-        if !settings::path_is_within(&source, &allowed) {
+        let allowed = crate::file_paths::resolve_path(Path::new(&pod.rules.source_folder))?;
+        let source = crate::file_paths::resolve_path(source)?;
+        if !crate::file_paths::path_is_within(&source, &allowed) {
             return Err(format!("规则拒绝「{name}」：文件不在指定来源文件夹中"));
         }
     }

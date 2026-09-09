@@ -2,7 +2,7 @@
 
 use tauri::menu::{Menu, MenuBuilder, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 
 use crate::events;
 use crate::manager;
@@ -85,10 +85,10 @@ fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         }
         "collect_clipboard" => {
             if let Some(id) = crate::hotkeys::collect_into_first_pod(app) {
-                let _ = app.emit_to(
+                let _ = events::COLLECT_CLIPBOARD.emit_to(
+                    app,
                     events::pod_bar_label(id),
-                    events::COLLECT_CLIPBOARD,
-                    serde_json::json!({ "podId": id }),
+                    crate::events::PodEvent { pod_id: id },
                 );
             }
         }

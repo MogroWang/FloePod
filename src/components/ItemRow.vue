@@ -128,7 +128,13 @@ onBeforeUnmount(() => stopPointerTracking?.());
       @dblclick.stop
     >
       <svg v-if="selected" width="9" height="9" viewBox="0 0 10 10" fill="none" aria-hidden="true">
-        <path d="M8 2.5 4.2 7.5 2 5.3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+        <path
+          d="M8 2.5 4.2 7.5 2 5.3"
+          stroke="currentColor"
+          stroke-width="1.6"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
       </svg>
     </button>
     <ThumbImg :kind="item.kind" :path="item.stagingPath" :ext="item.ext" :name="item.name" />
@@ -137,14 +143,49 @@ onBeforeUnmount(() => stopPointerTracking?.());
       <div class="item-meta">{{ meta }}</div>
     </div>
     <div class="row-actions">
-      <button type="button" class="icon-btn" title="打开所在位置" aria-label="打开所在位置" @pointerdown.stop @click.stop="emit('reveal', item)">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M10 14 20 4M14 4h6v6M11 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-5" />
+      <button
+        type="button"
+        class="icon-btn"
+        title="打开所在位置"
+        aria-label="打开所在位置"
+        @pointerdown.stop
+        @click.stop="emit('reveal', item)"
+      >
+        <svg
+          width="13"
+          height="13"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path
+            d="M10 14 20 4M14 4h6v6M11 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-5"
+          />
         </svg>
       </button>
-      <button type="button" class="icon-btn danger" title="移出暂存" aria-label="移出暂存" @pointerdown.stop @click.stop="emit('remove', item)">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-          <path d="M5 7h14M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m3 0-1 13a1.5 1.5 0 0 1-1.5 1.4h-7A1.5 1.5 0 0 1 6.5 20L5.5 7" />
+      <button
+        type="button"
+        class="icon-btn danger"
+        title="移出暂存"
+        aria-label="移出暂存"
+        @pointerdown.stop
+        @click.stop="emit('remove', item)"
+      >
+        <svg
+          width="13"
+          height="13"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+        >
+          <path
+            d="M5 7h14M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m3 0-1 13a1.5 1.5 0 0 1-1.5 1.4h-7A1.5 1.5 0 0 1 6.5 20L5.5 7"
+          />
         </svg>
       </button>
     </div>
@@ -248,7 +289,9 @@ onBeforeUnmount(() => stopPointerTracking?.());
   justify-content: center;
   color: var(--ink-2);
   cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
 }
 .icon-btn:hover {
   background: var(--surface-3);

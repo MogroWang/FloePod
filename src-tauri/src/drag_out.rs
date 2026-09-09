@@ -24,7 +24,6 @@ fn basic_identity(metadata: &fs::Metadata) -> DragCutFileIdentity {
     {
         use std::os::windows::fs::MetadataExt;
         DragCutFileIdentity {
-            // 稳定版 Rust 尚未提供全部句柄标识，预留字段便于以后补充而不改变令牌语义。
             volume_serial_number: None,
             file_index: None,
             creation_time: metadata.creation_time(),
@@ -33,6 +32,7 @@ fn basic_identity(metadata: &fs::Metadata) -> DragCutFileIdentity {
             is_file: metadata.file_type().is_file(),
             is_dir: metadata.file_type().is_dir(),
             tree_fingerprint: None,
+            content_signature: None,
         }
     }
 
@@ -54,6 +54,7 @@ fn basic_identity(metadata: &fs::Metadata) -> DragCutFileIdentity {
             is_file: metadata.file_type().is_file(),
             is_dir: metadata.file_type().is_dir(),
             tree_fingerprint: None,
+            content_signature: None,
         }
     }
 }
@@ -106,7 +107,7 @@ fn fingerprint_directory(
         .map_err(|error| format!("无法读取目录树 {}: {error}", directory.display()))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| format!("无法读取目录树 {}: {error}", directory.display()))?;
-    entries.sort_by_key(|entry| settings::path_key(&entry.path()));
+    entries.sort_by_key(|entry| crate::file_paths::path_key(&entry.path()));
     for entry in entries {
         *count += 1;
         if *count > MAX_TREE_ENTRIES {
@@ -138,6 +139,32 @@ fn fingerprint_directory(
 
 fn identity(path: &Path, metadata: &fs::Metadata) -> Result<DragCutFileIdentity, String> {
     let mut identity = basic_identity(metadata);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS,
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+        };
+        let file = fs::OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+            .map_err(|error| format!("无法打开剪切源身份句柄: {error}"))?;
+        let mut information: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) } == 0 {
+            return Err(format!(
+                "无法读取剪切源文件 ID: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        identity.volume_serial_number = Some(information.dwVolumeSerialNumber);
+        identity.file_index = Some(
+            (u64::from(information.nFileIndexHigh) << 32) | u64::from(information.nFileIndexLow),
+        );
+    }
+    identity.content_signature = Some(crate::file_fingerprint::content(path)?);
     if metadata.is_dir() {
         let mut hash = FNV64_OFFSET;
         let mut count = 0;
@@ -197,13 +224,14 @@ pub fn prepare(app: AppHandle, pod_id: u64, paths: Vec<String>) -> Result<String
         return Err("没有可剪切拖出的项目".into());
     }
     let state = app.state::<AppState>();
+    let _permit = state.tasks.enter()?;
     let _operation = state.file_ops.lock().unwrap();
     let (current, items) = {
         let connection = state.db.lock().unwrap();
         let mut seen = HashSet::new();
         let mut found = Vec::new();
         for path in &paths {
-            let key = settings::path_key(Path::new(path));
+            let key = crate::file_paths::path_key(Path::new(path));
             if !seen.insert(key) {
                 return Err(format!("剪切列表包含重复路径: {path}"));
             }
@@ -241,6 +269,7 @@ pub fn prepare(app: AppHandle, pod_id: u64, paths: Vec<String>) -> Result<String
 
 pub fn finalize(app: AppHandle, token: String) -> Result<(), String> {
     let state = app.state::<AppState>();
+    let _permit = state.tasks.enter()?;
     let _operation = state.file_ops.lock().unwrap();
     // 先消费令牌；后续校验或回收站操作失败也不能让它再次使用。
     let snapshot = take_snapshot(&state, &token)?;
@@ -280,7 +309,7 @@ pub fn finalize(app: AppHandle, token: String) -> Result<(), String> {
                 continue;
             }
         };
-        if !settings::paths_equal(&path, &entry.path) {
+        if !crate::file_paths::paths_equal(&path, &entry.path) {
             failed.push(format!("{}: 暂存路径已改变，拒绝删除", entry.name));
             continue;
         }
@@ -348,6 +377,24 @@ pub fn cancel(app: &AppHandle, token: &str) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn same_length_edits_with_restored_time_cannot_pass_cut_identity() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("edited.txt");
+        std::fs::write(&path, b"before").unwrap();
+        let metadata = std::fs::metadata(&path).unwrap();
+        let before = super::identity(&path, &metadata).unwrap();
+        std::fs::write(&path, b"after!").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(metadata.modified().unwrap())
+            .unwrap();
+        let after = super::identity(&path, &std::fs::metadata(&path).unwrap()).unwrap();
+        assert!(!before.matches(&after));
+        assert!(before.file_index.is_some());
+    }
     use super::*;
 
     #[test]

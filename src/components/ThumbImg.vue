@@ -68,7 +68,10 @@ onMounted(() => {
   );
   if (boxEl.value) observer.observe(boxEl.value);
 });
-watch(() => [props.path, props.ext], () => void load());
+watch(
+  () => [props.path, props.ext],
+  () => void load(),
+);
 onBeforeUnmount(() => {
   visible = false;
   observer?.disconnect();

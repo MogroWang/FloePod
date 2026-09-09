@@ -10,18 +10,23 @@ const busyId = ref<number | null>(null);
 const loading = ref(false);
 const verifyBusy = ref(false);
 const message = ref("");
+let refreshRevision = 0;
 
 const latestUndoable = computed(() => operations.value.find((operation) => operation.undoable));
 
 function operationLabel(kind: string): string {
-  return ({
-    stage: "暂存文件",
-    stage_text: "暂存文字",
-    export: "导出文件",
-    remove: "移出暂存",
-    handoff: "可信交接",
-    privacy_export: "安全导出",
-  } as Record<string, string>)[kind] ?? kind;
+  return (
+    (
+      {
+        stage: "暂存文件",
+        stage_text: "暂存文字",
+        export: "导出文件",
+        remove: "移出暂存",
+        handoff: "可信交接",
+        privacy_export: "安全导出",
+      } as Record<string, string>
+    )[kind] ?? kind
+  );
 }
 
 function formatTime(value: number): string {
@@ -35,23 +40,29 @@ function formatTime(value: number): string {
 }
 
 function statusLabel(value: string): string {
-  return ({
-    completed: "已完成",
-    partial: "部分完成",
-    failed: "失败",
-    undone: "已撤销",
-    undo_failed: "撤销未完全成功",
-  } as Record<string, string>)[value] ?? value;
+  return (
+    (
+      {
+        completed: "已完成",
+        partial: "部分完成",
+        failed: "失败",
+        undone: "已撤销",
+        undo_failed: "撤销未完全成功",
+      } as Record<string, string>
+    )[value] ?? value
+  );
 }
 
 async function refresh() {
+  const revision = ++refreshRevision;
   loading.value = true;
   try {
-    operations.value = await ipc.listOperations(hours.value, 200);
+    const result = await ipc.listOperations(hours.value, 200);
+    if (revision === refreshRevision) operations.value = result;
   } catch (error) {
-    message.value = `读取操作记录失败：${String(error)}`;
+    if (revision === refreshRevision) message.value = `读取操作记录失败：${String(error)}`;
   } finally {
-    loading.value = false;
+    if (revision === refreshRevision) loading.value = false;
   }
 }
 
@@ -62,9 +73,10 @@ async function confirmUndo(operation: OperationEntry): Promise<boolean> {
 }
 
 async function undo(operation: OperationEntry) {
-  if (busyId.value !== null || !(await confirmUndo(operation))) return;
+  if (busyId.value !== null) return;
   busyId.value = operation.id;
   try {
+    if (!(await confirmUndo(operation))) return;
     const result = await ipc.undoOperation(operation.id);
     message.value = result.failed.length
       ? `已恢复 ${result.restored} 项；${result.failed.length} 项需要人工检查。`
@@ -248,7 +260,9 @@ onMounted(refresh);
   font-weight: 550;
   font-family: inherit;
   cursor: pointer;
-  transition: background 150ms var(--ease-out), border-color 150ms var(--ease-out);
+  transition:
+    background 150ms var(--ease-out),
+    border-color 150ms var(--ease-out);
 }
 .secondary-button:hover {
   background: var(--surface-hover);

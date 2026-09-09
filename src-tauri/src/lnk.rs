@@ -12,29 +12,34 @@ pub fn create_shortcuts(pairs: &[(std::path::PathBuf, std::path::PathBuf)]) -> R
     // 每个快捷方式单独执行，既避免超长命令行，也便于在中途失败时回滚已创建文件。
     let mut created = Vec::new();
     for (target, out) in pairs {
-        let t = ps_quote(&target.to_string_lossy());
-        let o = ps_quote(&out.to_string_lossy());
-        let script = format!(
-            "$ErrorActionPreference = 'Stop'; \
+        let result = (|| {
+            let parent = out.parent().ok_or("快捷方式目标没有父目录")?;
+            let workspace = tempfile::Builder::new()
+                .prefix(".floepod-inflight-")
+                .tempdir_in(parent)
+                .map_err(|error| format!("无法创建快捷方式临时目录: {error}"))?;
+            let temporary = workspace.path().join("shortcut.lnk");
+            let t = ps_quote(&target.to_string_lossy());
+            let o = ps_quote(&temporary.to_string_lossy());
+            let script = format!(
+                "$ErrorActionPreference = 'Stop'; \
              $ws = New-Object -ComObject WScript.Shell; \
              $s = $ws.CreateShortcut({o}); \
              $s.TargetPath = {t}; \
              $s.Save()"
-        );
-        let result = run_powershell(&script);
+            );
+            run_powershell(&script)?;
+            if !temporary.is_file() {
+                return Err(format!("快捷方式创建后未找到输出文件：{}", out.display()));
+            }
+            crate::file_ops::rename_new(&temporary, out)
+                .map_err(|error| format!("无法发布快捷方式: {error}"))
+        })();
         if let Err(error) = result {
             for path in created.iter().rev() {
                 let _ = std::fs::remove_file(path);
             }
-            // CreateShortcut/Save 可能在报错前已经生成目标，也一并清理。
-            let _ = std::fs::remove_file(out);
             return Err(error);
-        }
-        if !out.is_file() {
-            for path in created.iter().rev() {
-                let _ = std::fs::remove_file(path);
-            }
-            return Err(format!("快捷方式创建后未找到输出文件：{}", out.display()));
         }
         created.push(out.clone());
     }

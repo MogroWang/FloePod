@@ -1,22 +1,20 @@
-//! 应用级右键菜单窗口：全局唯一的透明置顶窗口，由所有匣浮动面板复用。
-//!
-//! 流程：浮动面板 invoke `open_context_menu`（携带菜单项）→ 本模块发出定向事件
-//! → 菜单窗口渲染并回传内容尺寸 → `resize_and_show` 把窗口定位到光标旁并
-//! 显示。动作选择通过 `context_menu_choice` 回传给来源浮动面板执行，菜单窗口
-//! 自身不直接触碰条目数据。seq 序号消解新旧菜单竞态：旧菜单的 blur / 关闭
-//! 请求不会影响刚打开的新菜单。
+use crate::events::{MENU_CHOICE, MENU_CLOSED, MENU_SHOW};
+// 应用级右键菜单窗口：全局唯一的透明置顶窗口，由所有匣浮动面板复用。
+//
+// 流程：浮动面板 invoke `open_context_menu`（携带菜单项）→ 本模块发出定向事件
+// → 菜单窗口渲染并回传内容尺寸 → `resize_and_show` 把窗口定位到光标旁并
+// 显示。动作选择通过 `context_menu_choice` 回传给来源浮动面板执行，菜单窗口
+// 自身不直接触碰条目数据。seq 序号消解新旧菜单竞态：旧菜单的 blur / 关闭
+// 请求不会影响刚打开的新菜单。
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize};
+use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize};
 
 use crate::{events, manager, win};
 
 pub const LABEL: &str = "context_menu";
-pub const MENU_SHOW: &str = "floepod://context-menu-show";
-pub const MENU_CHOICE: &str = "floepod://context-menu-choice";
-pub const MENU_CLOSED: &str = "floepod://context-menu-closed";
 
 /// 菜单卡片的 CSS 圆角（逻辑像素），与 ContextMenu.vue 的 .menu-card 保持一致。
 /// 窗口按此圆角裁剪后，卡片圆角外的透明角落不再吞掉本应落在下层的点击。
@@ -59,7 +57,7 @@ fn source_material(app: &AppHandle, pod_id: u64) -> &'static str {
 }
 
 /// 菜单项描述：浮动面板组装、菜单窗口渲染、选择后原样回传浮动面板执行。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MenuItemSpec {
     pub id: String,
@@ -106,24 +104,27 @@ pub fn open(app: &AppHandle, pod_id: u64, items: &[MenuItemSpec]) -> Result<(), 
     // 旧菜单的 blur 关闭请求会因 seq 校验被忽略（不能误杀新菜单），
     // 这里对被取代的旧归属匣补发 CLOSED，保证其保活状态总能被解除。
     if previous_pod != 0 && previous_pod != pod_id && MENU_OPEN.load(Ordering::Relaxed) {
-        let _ = app.emit_to(
+        let _ = MENU_CLOSED.emit_to(
+            app,
             events::pod_panel_label(previous_pod),
-            MENU_CLOSED,
-            serde_json::json!({ "podId": previous_pod }),
+            crate::events::PodEvent {
+                pod_id: previous_pod,
+            },
         );
     }
     MENU_OPEN.store(true, Ordering::Relaxed);
-    app.emit_to(
-        LABEL,
-        MENU_SHOW,
-        serde_json::json!({
-            "seq": seq,
-            "podId": pod_id,
-            "items": items,
-            "material": material,
-        }),
-    )
-    .map_err(|error| format!("菜单窗口事件发送失败: {error}"))
+    MENU_SHOW
+        .emit_to(
+            app,
+            LABEL,
+            crate::events::MenuShow {
+                seq,
+                pod_id,
+                items: items.to_vec(),
+                material: material.to_string(),
+            },
+        )
+        .map_err(|error| format!("菜单窗口事件发送失败: {error}"))
 }
 
 pub fn resize_and_show(app: &AppHandle, seq: u64, width: f64, height: f64) {
@@ -179,10 +180,13 @@ pub fn choose(app: &AppHandle, seq: u64, pod_id: u64, action: &MenuItemSpec) {
     if seq != MENU_SEQ.load(Ordering::Relaxed) {
         return;
     }
-    let _ = app.emit_to(
+    let _ = MENU_CHOICE.emit_to(
+        app,
         events::pod_panel_label(pod_id),
-        MENU_CHOICE,
-        serde_json::json!({ "podId": pod_id, "action": action }),
+        crate::events::MenuChoice {
+            pod_id,
+            action: action.clone(),
+        },
     );
 }
 
@@ -215,10 +219,10 @@ fn hide_current(app: &AppHandle, pod_id: u64) {
         // 会让透明窗口残留（与浮动面板隐藏同一条约束）。
         win::hide_window(hwnd.0 as isize);
     }
-    let _ = app.emit_to(
+    let _ = MENU_CLOSED.emit_to(
+        app,
         events::pod_panel_label(pod_id),
-        MENU_CLOSED,
-        serde_json::json!({ "podId": pod_id }),
+        crate::events::PodEvent { pod_id },
     );
 }
 
