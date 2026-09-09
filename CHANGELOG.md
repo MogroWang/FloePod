@@ -6,6 +6,7 @@
 
 ### 修复
 
+- **发布 provenance ref 字段校验被拒**：官方 `workflow/v1` buildType 下服务端会按该 buildType 的格式校验 predicate，`externalParameters.workflow.ref`、`resolvedDependencies[0].uri` 与 `builder.id` 等 ref 类字段必须等于本次 run 的 git ref（`refs/heads/main`），commit SHA 只允许出现在 `digest.gitCommit`；此前把执行 workflow 的定义 SHA 填入 ref 类字段，上传被以 values do not match 拒绝。现在 ref 类字段改用 `GITHUB_REF`，定义 SHA 移入官方不校验的 `internalParameters`，实际构建源仍由 predicate 的 source 与 resolvedDependencies 如实记录。
 - **发布 provenance 上传被拒**：SLSA v1 predicate 的 `buildType` 必须使用 attestation 服务为该 predicate 类型唯一放行的官方 `https://actions.github.io/buildtypes/workflow/v1`，自造的 `https://github.com/MogroWang/FloePod/build/windows/v1` 会在上传时被以 unsupported build type 拒绝（[actions/attest#195](https://github.com/actions/attest/issues/195)）；实际构建源仍由 predicate 的 source 与 resolvedDependencies 如实记录。
 - **浮动条标题栏残影**：在 UI 线程为浮动条安装常驻窗口消息处理，阻止窗口库重新写入标题栏和非客户区边框样式，禁止默认非客户区绘制与背景擦除，同时保留激活/焦点事件传递。移除显示浮动条时的 1px 缩放和线程等待；浮动面板的系统阴影处理保持独立。
 - **首次引导和新建匣失败**：两个创建入口不再提交过时的 380px 面板宽度及重复默认配置，仅发送表单中的用户选择，其余由后端统一补齐，默认面板宽度为 440px；保留对显式非法值的严格校验。
