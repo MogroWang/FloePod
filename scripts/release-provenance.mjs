@@ -19,7 +19,12 @@ writeFileSync(
   JSON.stringify(
     {
       buildDefinition: {
-        buildType: "https://github.com/MogroWang/FloePod/build/windows/v1",
+        // The attestation service only accepts the official GitHub Actions
+        // buildType for SLSA v1 provenance predicates (actions/attest#195);
+        // custom build types are rejected with "unsupported build type".
+        // The verified merged source stays recorded in externalParameters
+        // .source and resolvedDependencies.
+        buildType: "https://actions.github.io/buildtypes/workflow/v1",
         externalParameters: {
           source: { uri: `git+https://github.com/${repository}`, digest: { gitCommit: sha } },
           workflow: {
