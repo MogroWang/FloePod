@@ -6,6 +6,7 @@
 
 ### 修复
 
+- **发布 provenance 上传被拒**：SLSA v1 predicate 的 `buildType` 必须使用 attestation 服务为该 predicate 类型唯一放行的官方 `https://actions.github.io/buildtypes/workflow/v1`，自造的 `https://github.com/MogroWang/FloePod/build/windows/v1` 会在上传时被以 unsupported build type 拒绝（[actions/attest#195](https://github.com/actions/attest/issues/195)）；实际构建源仍由 predicate 的 source 与 resolvedDependencies 如实记录。
 - **浮动条标题栏残影**：在 UI 线程为浮动条安装常驻窗口消息处理，阻止窗口库重新写入标题栏和非客户区边框样式，禁止默认非客户区绘制与背景擦除，同时保留激活/焦点事件传递。移除显示浮动条时的 1px 缩放和线程等待；浮动面板的系统阴影处理保持独立。
 - **首次引导和新建匣失败**：两个创建入口不再提交过时的 380px 面板宽度及重复默认配置，仅发送表单中的用户选择，其余由后端统一补齐，默认面板宽度为 440px；保留对显式非法值的严格校验。
 
