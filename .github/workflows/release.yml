@@ -189,7 +189,10 @@ jobs:
           $checksums | Set-Content -LiteralPath (Join-Path $releaseDir "SHA256SUMS.txt") -Encoding utf8NoBOM
 
       - name: Attest release build provenance
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        # 用官方 provenance action 生成 SLSA v1 出处（buildType 固定为 GitHub Actions
+        # workflow/v1）。attestation 服务仅接受该 buildType，actions/attest 的
+        # Custom attestation 会被拒绝（unsupported build type）。
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/release/*
 
