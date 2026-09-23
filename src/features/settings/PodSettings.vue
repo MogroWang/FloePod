@@ -102,6 +102,18 @@ async function commitPodMonitor(pod: Pod, event: Event) {
   }
 }
 
+/** 浮动条图标：留空回退品牌图标；提交前去掉空白并按后端上限截断。 */
+async function commitPodEmoji(pod: Pod, event: Event) {
+  const input = event.target as HTMLInputElement;
+  const value = input.value.trim().slice(0, 8);
+  const saved = await savePod(pod.id, { barEmoji: value });
+  if (!saved) {
+    input.value = settingsStore.pod(pod.id)?.barEmoji ?? pod.barEmoji;
+  } else {
+    input.value = value;
+  }
+}
+
 /** 新建匣弹窗：先询问名称与文件夹位置，确认后才创建。 */
 const addDialogOpen = ref(false);
 const addPodCreating = ref(false);
@@ -355,6 +367,31 @@ async function removePodWithFolder() {
 
         <div class="pod-group">
           <div class="group-title">边缘浮动条</div>
+          <div class="frow">
+            <span class="flabel">浮动条图标</span>
+            <div class="fctrl">
+              <input
+                class="input emoji-input"
+                type="text"
+                maxlength="8"
+                placeholder="emoji"
+                aria-label="浮动条图标"
+                :value="pod.barEmoji"
+                @change="commitPodEmoji(pod, $event)"
+              />
+              <span class="fval">{{ pod.barEmoji ? "自定义图标" : "品牌图标" }}</span>
+            </div>
+          </div>
+          <div class="frow">
+            <span class="flabel">显示暂存数量</span>
+            <div class="fctrl">
+              <ToggleSwitch
+                :label="`在浮动条上显示 ${pod.name} 的暂存数量`"
+                :model-value="pod.showCount"
+                @update:model-value="(v) => savePod(pod.id, { showCount: v })"
+              />
+            </div>
+          </div>
           <div class="frow">
             <span class="flabel">浮动条宽度</span>
             <div class="fctrl">

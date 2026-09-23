@@ -4,6 +4,7 @@ import type { MenuItemSpec } from "@/domain/menu";
 import type {
   Bootstrap,
   ConflictStrategy,
+  DragCutOutcome,
   DragCutToken,
   DropAction,
   ExportMode,
@@ -217,7 +218,7 @@ export const ipc = {
 
   prepareDragCut: (podId: number, paths: string[]): Promise<DragCutToken> =>
     invoke(Commands.PrepareDragCut, { podId, paths }),
-  finalizeDragCut: (token: DragCutToken): Promise<void> =>
+  finalizeDragCut: (token: DragCutToken): Promise<DragCutOutcome> =>
     invoke(Commands.FinalizeDragCut, { token }),
   cancelDragCut: (token: DragCutToken): Promise<void> => invoke(Commands.CancelDragCut, { token }),
 };

@@ -38,6 +38,22 @@ const view =
           ? ContextMenuWindow
           : null;
 const viewProps = target && "podId" in target ? { podId: target.podId } : {};
+
+/* 浏览器标签页标题：命名与 Tauri 窗口标题保持一致。 */
+const WINDOW_TITLES = {
+  settings: "浮匣 FloePod 设置界面",
+  podBar: "浮匣 FloePod 边缘浮动条",
+  podPanel: "浮匣 FloePod 浮动面板",
+  contextMenu: "浮匣 FloePod 右键菜单",
+} as const;
+document.title = target ? WINDOW_TITLES[target.kind] : "浮匣 FloePod";
+
+/* 浏览器预览铺底：真实窗口透明，桌面从窗口圆角外透出，后端也按卡片圆角
+   裁剪原生窗口；浏览器里没有桌面，深色画布会从面板圆角外露出来，看起来
+   像填充没满。用主题表面色铺底模拟桌面，Tauri 里保持透明。 */
+if (!("__TAURI_INTERNALS__" in window)) {
+  document.documentElement.style.background = "var(--surface)";
+}
 </script>
 
 <template>

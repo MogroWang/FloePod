@@ -14,6 +14,7 @@ import { Events, listenCurrent } from "@/ipc/events";
 import { clampOpacity } from "@/lib/format";
 import { useSettingsStore } from "@/stores/settings";
 import { useStagingStore } from "@/stores/staging";
+import BrandMark from "@/components/BrandMark.vue";
 import ItemRow from "@/components/ItemRow.vue";
 import ActionChooser from "@/components/ActionChooser.vue";
 import ConflictDialog from "@/components/ConflictDialog.vue";
@@ -128,6 +129,93 @@ const {
 const { rootEl, bindHead, bindList, bindContent, bindFoot, scheduleResize, observeContent } =
   usePanelLayout(context, mode, textOpen);
 
+/* 多选模式：头部按钮切换。开启后条目勾选常显、点按即切换选中，
+   并支持从列表空白处拖拽框选，矩形碰到的条目全部选中。 */
+const multiSelect = ref(false);
+const listViewEl = ref<HTMLElement | null>(null);
+/* Vue 3 的 :style 绑定数字不会自动补 px，直接存带单位的字符串。 */
+const marqueeRect = ref<null | { left: string; top: string; width: string; height: string }>(null);
+let stopMarquee: (() => void) | null = null;
+
+function exitMultiSelect() {
+  if (!multiSelect.value) return;
+  multiSelect.value = false;
+  stopMarquee?.();
+  clearSelection();
+}
+
+function toggleMultiSelect() {
+  if (multiSelect.value) exitMultiSelect();
+  else multiSelect.value = true;
+}
+
+/* 视图模式：列表（默认）与图标平铺，仅影响列表内容区的排布。 */
+const viewMode = ref<"list" | "grid">("list");
+function toggleViewMode() {
+  viewMode.value = viewMode.value === "grid" ? "list" : "grid";
+}
+
+function onListPointerDown(e: PointerEvent) {
+  // 绑定在整个内容区：列表下方的大片空白也在框选范围内。
+  if (!multiSelect.value || e.button !== 0 || anyBusy.value) return;
+  if (!listViewEl.value) return; // 文字暂存 / 对话框视图没有列表
+  // 条目与行内按钮有自己的点选 / 拖出交互；框选只从空白处发起。
+  if ((e.target as HTMLElement).closest(".item-row, button")) return;
+  e.preventDefault();
+  const startX = e.clientX;
+  const startY = e.clientY;
+  const pointerId = e.pointerId;
+  let moved = false;
+
+  const applyMarquee = (ev: PointerEvent) => {
+    const left = Math.min(startX, ev.clientX);
+    const top = Math.min(startY, ev.clientY);
+    const right = Math.max(startX, ev.clientX);
+    const bottom = Math.max(startY, ev.clientY);
+    marqueeRect.value = {
+      left: `${left}px`,
+      top: `${top}px`,
+      width: `${right - left}px`,
+      height: `${bottom - top}px`,
+    };
+    const hits = new Set<number>();
+    listViewEl.value?.querySelectorAll<HTMLElement>(".item-row").forEach((el) => {
+      const r = el.getBoundingClientRect();
+      if (r.left < right && r.right > left && r.top < bottom && r.bottom > top) {
+        const id = Number(el.dataset.id);
+        if (Number.isSafeInteger(id)) hits.add(id);
+      }
+    });
+    staging.selectedIds = hits;
+  };
+
+  const move = (ev: PointerEvent) => {
+    if (ev.pointerId !== pointerId) return;
+    if (!moved && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 4) return;
+    moved = true;
+    applyMarquee(ev);
+  };
+  const up = (ev: PointerEvent) => {
+    // 原地点击空白：清除选择；拖拽框选则保留矩形扫过的结果。
+    if (ev.pointerId === pointerId && !moved) clearSelection();
+    cleanup();
+  };
+  const cleanup = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    window.removeEventListener("pointercancel", cleanup);
+    window.removeEventListener("blur", cleanup);
+    marqueeRect.value = null;
+    stopMarquee = null;
+  };
+  stopMarquee?.();
+  stopMarquee = cleanup;
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", cleanup);
+  window.addEventListener("blur", cleanup);
+}
+
 function playFadeIn() {
   const el = rootEl.value;
   if (!el) return;
@@ -184,7 +272,10 @@ function applyPanelMode(nextMode: PanelMode, paths: string[] = []) {
   mode.value = nextMode;
   pendingPaths.value = nextMode === "ask" ? [...paths] : [];
   if (nextMode !== "conflict") conflict.value = null;
-  if (nextMode !== "list") textOpen.value = false;
+  if (nextMode !== "list") {
+    textOpen.value = false;
+    exitMultiSelect();
+  }
 }
 
 function applyPanelState(state: PanelState) {
@@ -362,6 +453,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   disposeUnlisteners();
   disposeToast();
+  stopMarquee?.();
   window.removeEventListener("keydown", onKeydown);
   window.removeEventListener("pointerdown", onGlobalPointerDown, true);
   window.clearInterval(securityTimer);
@@ -400,8 +492,9 @@ async function openSettings() {
   >
     <header :ref="bindHead" class="panel-head">
       <div class="pod-title">
+        <BrandMark mark="icon" :size="16" class="pod-logo" />
         <div class="pod-name" :title="pod?.name">{{ pod?.name ?? "匣" }}</div>
-        <span v-if="items.length" class="item-count">{{ items.length }}</span>
+        <span v-if="items.length" class="item-count">{{ items.length }} 个文件</span>
       </div>
       <div class="head-right">
         <span
@@ -437,48 +530,6 @@ async function openSettings() {
           v-if="mode === 'list' && !textOpen"
           type="button"
           class="head-btn"
-          title="选择文件暂存"
-          aria-label="选择文件暂存，不需要拖拽"
-          @click="pickPaths(false)"
-        >
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.7"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path d="M12 5v14M5 12h14" />
-          </svg>
-        </button>
-        <button
-          v-if="mode === 'list' && !textOpen"
-          type="button"
-          class="head-btn"
-          title="选择文件夹暂存"
-          aria-label="选择文件夹暂存，不需要拖拽"
-          @click="pickPaths(true)"
-        >
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.7"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path d="M3 7h6l2 2h10v10H3z" />
-          </svg>
-        </button>
-        <button
-          v-if="mode === 'list' && !textOpen"
-          type="button"
-          class="head-btn"
           title="暂存一段文字"
           aria-label="暂存一段文字"
           @click="textOpen = true"
@@ -491,8 +542,72 @@ async function openSettings() {
             stroke="currentColor"
             stroke-width="1.7"
             stroke-linecap="round"
+            stroke-linejoin="round"
           >
-            <path d="M4 7h16M4 12h10M4 17h7" />
+            <path d="M4 7V4h16v3M9 20h6M12 4v16" />
+          </svg>
+        </button>
+        <button
+          v-if="mode === 'list' && !textOpen"
+          type="button"
+          class="head-btn"
+          :class="{ on: multiSelect }"
+          :aria-pressed="multiSelect"
+          :title="multiSelect ? '退出多选模式' : '多选模式：点选或框选文件'"
+          aria-label="多选模式"
+          @click="toggleMultiSelect"
+        >
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <rect x="3.5" y="3.5" width="17" height="17" rx="3.5" stroke-dasharray="3.2 3.2" />
+            <path d="m8.5 12.3 2.5 2.5 4.9-5.4" />
+          </svg>
+        </button>
+        <button
+          v-if="mode === 'list' && !textOpen"
+          type="button"
+          class="head-btn"
+          :aria-pressed="viewMode === 'grid'"
+          :title="viewMode === 'grid' ? '切换为列表视图' : '切换为平铺视图'"
+          :aria-label="viewMode === 'grid' ? '切换为列表视图' : '切换为平铺视图'"
+          @click="toggleViewMode"
+        >
+          <svg
+            v-if="viewMode === 'grid'"
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+          <svg
+            v-else
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <rect x="3.5" y="3.5" width="7" height="7" rx="1.5" />
+            <rect x="13.5" y="3.5" width="7" height="7" rx="1.5" />
+            <rect x="3.5" y="13.5" width="7" height="7" rx="1.5" />
+            <rect x="13.5" y="13.5" width="7" height="7" rx="1.5" />
           </svg>
         </button>
         <button
@@ -542,7 +657,7 @@ async function openSettings() {
       </div>
     </header>
 
-    <div :ref="bindList" class="panel-body">
+    <div :ref="bindList" class="panel-body" @pointerdown="onListPointerDown">
       <div :ref="bindContent" class="panel-content">
         <section v-if="sensitiveLocked" class="locked-panel" aria-labelledby="locked-title">
           <svg
@@ -611,7 +726,7 @@ async function openSettings() {
                   @keydown.enter.prevent
                 />
               </label>
-              <div class="text-field">
+              <div class="text-field text-field-body">
                 <div class="text-field-head">
                   <label class="text-field-label" for="stash-text-body">正文</label>
                   <button
@@ -663,7 +778,7 @@ async function openSettings() {
               </div>
             </div>
 
-            <div v-else key="list-view" class="list-view">
+            <div v-else key="list-view" ref="listViewEl" class="list-view">
               <div v-if="items.length === 0" class="empty">
                 <div class="empty-title">「{{ pod?.name ?? "匣" }}」是空的</div>
                 <div class="empty-hint">
@@ -675,6 +790,7 @@ async function openSettings() {
                 name="list"
                 tag="div"
                 class="items"
+                :class="{ grid: viewMode === 'grid' }"
                 role="listbox"
                 aria-label="暂存项目"
                 aria-multiselectable="true"
@@ -682,7 +798,9 @@ async function openSettings() {
                 <ItemRow
                   v-for="item in items"
                   :key="item.id"
+                  :data-id="item.id"
                   :item="item"
+                  :multi-select="multiSelect"
                   :selected="staging.selectedIds.has(item.id)"
                   :get-drag-paths="() => selectedOrSingle(item)"
                   @select="onSelect"
@@ -743,15 +861,18 @@ async function openSettings() {
           />
         </div>
         <div v-if="items.length > 0" class="foot-right">
-          <button type="button" class="foot-btn ghost" :disabled="anyBusy" @click="selectAll">
-            全选
-          </button>
           <button type="button" class="foot-btn ghost danger" :disabled="anyBusy" @click="clearAll">
             {{ confirmClear ? "确认清空？" : "清空" }}
+          </button>
+          <button type="button" class="foot-btn ghost" :disabled="anyBusy" @click="selectAll">
+            全选
           </button>
         </div>
       </template>
     </footer>
+
+    <!-- 多选框选矩形：视口坐标定位，pointer-events 关闭不挡条目交互 -->
+    <div v-if="marqueeRect" class="marquee" :style="marqueeRect"></div>
 
     <Transition name="toast">
       <div v-if="toast" class="toast" role="status" aria-live="polite">{{ toast }}</div>
@@ -759,11 +880,13 @@ async function openSettings() {
 
     <!-- 菜单窗口不可用时的内嵌降级菜单（浏览器预览 / 就绪前） -->
     <Teleport to="body">
-      <div v-if="inlineMenu" class="inline-menu-layer" @pointerdown.self="closeInlineMenu">
-        <div class="inline-menu-pos" :style="inlineMenuStyle">
-          <ContextMenu :items="inlineMenu.items" @execute="executeInlineMenu" />
+      <Transition name="menu-fade">
+        <div v-if="inlineMenu" class="inline-menu-layer" @pointerdown.self="closeInlineMenu">
+          <div class="inline-menu-pos" :style="inlineMenuStyle">
+            <ContextMenu :items="inlineMenu.items" @execute="executeInlineMenu" />
+          </div>
         </div>
-      </div>
+      </Transition>
     </Teleport>
   </div>
 </template>
@@ -823,6 +946,9 @@ async function openSettings() {
   align-items: center;
   min-width: 0;
   gap: 7px;
+}
+.pod-logo {
+  flex-shrink: 0;
 }
 .pod-name {
   font-size: 13px;
@@ -888,6 +1014,25 @@ async function openSettings() {
   cursor: wait;
   opacity: 0.58;
 }
+.marquee {
+  position: fixed;
+  z-index: 30;
+  pointer-events: none;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+/* 内嵌降级菜单（浏览器预览 / 菜单窗口就绪前）收起时同样淡出 */
+.menu-fade-enter-active {
+  transition: opacity 120ms var(--ease-out);
+}
+.menu-fade-leave-active {
+  transition: opacity 130ms var(--ease-out);
+}
+.menu-fade-enter-from,
+.menu-fade-leave-to {
+  opacity: 0;
+}
 
 .panel-body {
   flex: 1;
@@ -897,6 +1042,10 @@ async function openSettings() {
 }
 .panel-content {
   min-width: 0;
+  /* 撑满内容区高度，让文字暂存的正文域能吃掉剩余空间 */
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 .locked-panel {
   display: grid;
@@ -945,6 +1094,44 @@ async function openSettings() {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+/* 平铺视图：条目变成图标网格卡片；复用行组件的交互，仅重排布局 */
+.items.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 8px;
+  align-content: start;
+}
+.items.grid .item-row {
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 6px 10px;
+  text-align: center;
+}
+.items.grid .item-row :deep(.check) {
+  position: absolute;
+  top: 5px;
+  left: 5px;
+}
+.items.grid .item-row :deep(.item-body) {
+  width: 100%;
+  min-width: 0;
+}
+.items.grid .item-row :deep(.item-name) {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  word-break: break-all;
+}
+.items.grid .item-row :deep(.item-meta) {
+  display: none;
+}
+.items.grid .item-row :deep(.row-actions) {
+  position: absolute;
+  top: 4px;
+  right: 4px;
 }
 .list-enter-active {
   transition:
@@ -1046,6 +1233,9 @@ async function openSettings() {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  /* 占满内容区：标题行与操作行保持自然高度，正文域吃掉中间剩余 */
+  flex: 1;
+  min-height: 0;
 }
 .list-view {
   min-width: 0;
@@ -1131,6 +1321,15 @@ async function openSettings() {
 .text-field textarea {
   resize: none;
   padding: 10px 12px;
+}
+/* 正文域：随面板高度伸展，正好填满标题行与操作行之间的空余 */
+.text-field-body {
+  flex: 1;
+  min-height: 0;
+}
+.text-field-body textarea {
+  flex: 1;
+  min-height: 0;
 }
 .text-field input:focus,
 .text-field textarea:focus {

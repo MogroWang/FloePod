@@ -3,6 +3,7 @@
  * 条目行：缩略图 + 名称 + 元信息；悬停显示操作；
  * 拖拽（移动超过阈值）发起 OS 拖出；点选 / Ctrl 点选 / Shift 范围选；
  * 勾选小按钮独立切换选中；双击打开。
+ * 多选模式（multiSelect）下勾选常显，普通点按即切换选中。
  */
 import { computed, onBeforeUnmount, ref } from "vue";
 import type { StagedItem } from "@/domain/types";
@@ -12,6 +13,7 @@ import ThumbImg from "./ThumbImg.vue";
 const props = defineProps<{
   item: StagedItem;
   selected: boolean;
+  multiSelect?: boolean;
   getDragPaths: () => string[];
 }>();
 
@@ -80,7 +82,7 @@ function onClick(e: MouseEvent) {
     dragArmed.value = false;
     return;
   }
-  const mode = e.shiftKey ? "range" : e.ctrlKey ? "toggle" : "set";
+  const mode = e.shiftKey ? "range" : e.ctrlKey || props.multiSelect ? "toggle" : "set";
   emit("select", props.item.id, mode);
 }
 
@@ -105,7 +107,7 @@ onBeforeUnmount(() => stopPointerTracking?.());
 <template>
   <div
     class="item-row"
-    :class="{ selected }"
+    :class="{ selected, multi: multiSelect }"
     role="option"
     tabindex="0"
     :aria-selected="selected"
@@ -231,7 +233,8 @@ onBeforeUnmount(() => stopPointerTracking?.());
 }
 .item-row:hover .check,
 .item-row:focus-within .check,
-.item-row.selected .check {
+.item-row.selected .check,
+.item-row.multi .check {
   opacity: 1;
 }
 .check.on {

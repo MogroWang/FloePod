@@ -409,7 +409,10 @@ pub async fn prepare_drag_cut(
 }
 
 #[tauri::command]
-pub async fn finalize_drag_cut(app: AppHandle, token: String) -> Result<(), String> {
+pub async fn finalize_drag_cut(
+    app: AppHandle,
+    token: String,
+) -> Result<drag_out::DragCutOutcome, String> {
     blocking(app.clone(), "剪切源清理", move || {
         drag_out::finalize(app, token)
     })

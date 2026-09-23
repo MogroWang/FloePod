@@ -202,6 +202,10 @@ pub struct Pod {
     pub bar_length: u32,
     /// 边缘浮动条填充色（#RGB/#RRGGBB/#RRGGBBAA）；空串 = 跟随主题表面色。
     pub bar_color: String,
+    /// 边缘浮动条图标：一个 emoji（或 1-2 个字符）；空串 = 使用 FloePod 品牌图标。
+    pub bar_emoji: String,
+    /// 是否在边缘浮动条上显示暂存数量徽标。
+    pub show_count: bool,
     /// 边缘浮动条外角圆角半径；0 为直角，CSS 会自动把超过半宽的值收敛。
     pub corner_radius: u32,
     /// 边缘浮动条边框颜色（#RGB/#RRGGBB/#RRGGBBAA）；空串 = 跟随主题。
@@ -240,6 +244,8 @@ impl Default for Pod {
             bar_width: 44,
             bar_length: 190,
             bar_color: String::new(),
+            bar_emoji: String::new(),
+            show_count: true,
             corner_radius: 22,
             border_color: String::new(),
             border_opacity: 1.0,

@@ -5,6 +5,7 @@ mod clipboard;
 mod commands;
 mod db;
 mod drag_out;
+mod drop_guard;
 mod events;
 mod export;
 mod file_fingerprint;
@@ -125,6 +126,10 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            // 应用内窗口收到文件拖放：记录落点，供剪切清理判断是否“拖回自身”。
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                drop_guard::record_drop(window.app_handle(), window.label(), paths);
+            }
             // 焦点变化时幂等重放浮动面板材质（亚克力恒定全量下发，不随焦点
             // 降级）；边缘浮动条无材质，仅顺带清理非客户区样式。非匣窗口的
             // 材质为空，refresh_window_material 内部会直接返回。

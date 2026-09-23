@@ -5,6 +5,7 @@ export type PodSecurity = Wire.PodSecurity;
 export type ExportIssue = Wire.ExportIssue;
 export type StageWarning = Wire.StageWarning;
 export type StagePathsResult = Wire.StagePathsResult;
+export type DragCutOutcome = Wire.DragCutOutcome;
 export type OperationItem = Wire.OperationItemEntry;
 export type OperationEntry = Wire.OperationEntry;
 export type UndoResult = Wire.UndoResult;

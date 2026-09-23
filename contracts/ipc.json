@@ -365,6 +365,11 @@
               "description": "边缘浮动条填充色（#RGB/#RRGGBB/#RRGGBBAA）；空串 = 跟随主题表面色。",
               "type": "string"
             },
+            "barEmoji": {
+              "default": "",
+              "description": "边缘浮动条图标：一个 emoji（或 1-2 个字符）；空串 = 使用 FloePod 品牌图标。",
+              "type": "string"
+            },
             "barLength": {
               "anyOf": [
                 {
@@ -571,6 +576,11 @@
                 "suppressThumbnails": true
               }
             },
+            "showCount": {
+              "default": true,
+              "description": "是否在边缘浮动条上显示暂存数量徽标。",
+              "type": "boolean"
+            },
             "stagingFolder": {
               "default": "",
               "type": "string"
@@ -757,6 +767,11 @@
             "description": "边缘浮动条填充色（#RGB/#RRGGBB/#RRGGBBAA）；空串 = 跟随主题表面色。",
             "type": "string"
           },
+          "barEmoji": {
+            "default": "",
+            "description": "边缘浮动条图标：一个 emoji（或 1-2 个字符）；空串 = 使用 FloePod 品牌图标。",
+            "type": "string"
+          },
           "barLength": {
             "default": 190,
             "description": "边缘浮动条长度，即沿屏幕边缘方向的长边（CSS 逻辑像素）。",
@@ -915,6 +930,11 @@
               "suppressThumbnails": true
             }
           },
+          "showCount": {
+            "default": true,
+            "description": "是否在边缘浮动条上显示暂存数量徽标。",
+            "type": "boolean"
+          },
           "stagingFolder": {
             "default": "",
             "type": "string"
@@ -956,11 +976,13 @@
           "barWidth",
           "barLength",
           "barColor",
+          "barEmoji",
           "cornerRadius",
           "borderColor",
           "borderOpacity",
           "rules",
-          "security"
+          "security",
+          "showCount"
         ],
         "title": "Pod",
         "type": "object"
@@ -1205,8 +1227,24 @@
       "optionalArgs": [],
       "result": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "null",
-        "type": "null"
+        "properties": {
+          "deleted": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "refused": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "deleted",
+          "refused"
+        ],
+        "title": "DragCutOutcome",
+        "type": "object"
       }
     },
     "get_bootstrap": {
@@ -1373,6 +1411,11 @@
                 "description": "边缘浮动条填充色（#RGB/#RRGGBB/#RRGGBBAA）；空串 = 跟随主题表面色。",
                 "type": "string"
               },
+              "barEmoji": {
+                "default": "",
+                "description": "边缘浮动条图标：一个 emoji（或 1-2 个字符）；空串 = 使用 FloePod 品牌图标。",
+                "type": "string"
+              },
               "barLength": {
                 "default": 190,
                 "description": "边缘浮动条长度，即沿屏幕边缘方向的长边（CSS 逻辑像素）。",
@@ -1531,6 +1574,11 @@
                   "suppressThumbnails": true
                 }
               },
+              "showCount": {
+                "default": true,
+                "description": "是否在边缘浮动条上显示暂存数量徽标。",
+                "type": "boolean"
+              },
               "stagingFolder": {
                 "default": "",
                 "type": "string"
@@ -1572,11 +1620,13 @@
               "barWidth",
               "barLength",
               "barColor",
+              "barEmoji",
               "cornerRadius",
               "borderColor",
               "borderOpacity",
               "rules",
-              "security"
+              "security",
+              "showCount"
             ],
             "type": "object"
           },
@@ -2043,6 +2093,11 @@
                 "description": "边缘浮动条填充色（#RGB/#RRGGBB/#RRGGBBAA）；空串 = 跟随主题表面色。",
                 "type": "string"
               },
+              "barEmoji": {
+                "default": "",
+                "description": "边缘浮动条图标：一个 emoji（或 1-2 个字符）；空串 = 使用 FloePod 品牌图标。",
+                "type": "string"
+              },
               "barLength": {
                 "default": 190,
                 "description": "边缘浮动条长度，即沿屏幕边缘方向的长边（CSS 逻辑像素）。",
@@ -2201,6 +2256,11 @@
                   "suppressThumbnails": true
                 }
               },
+              "showCount": {
+                "default": true,
+                "description": "是否在边缘浮动条上显示暂存数量徽标。",
+                "type": "boolean"
+              },
               "stagingFolder": {
                 "default": "",
                 "type": "string"
@@ -2242,11 +2302,13 @@
               "barWidth",
               "barLength",
               "barColor",
+              "barEmoji",
               "cornerRadius",
               "borderColor",
               "borderOpacity",
               "rules",
-              "security"
+              "security",
+              "showCount"
             ],
             "type": "object"
           },
@@ -2688,6 +2750,11 @@
                 "description": "边缘浮动条填充色（#RGB/#RRGGBB/#RRGGBBAA）；空串 = 跟随主题表面色。",
                 "type": "string"
               },
+              "barEmoji": {
+                "default": "",
+                "description": "边缘浮动条图标：一个 emoji（或 1-2 个字符）；空串 = 使用 FloePod 品牌图标。",
+                "type": "string"
+              },
               "barLength": {
                 "default": 190,
                 "description": "边缘浮动条长度，即沿屏幕边缘方向的长边（CSS 逻辑像素）。",
@@ -2846,6 +2913,11 @@
                   "suppressThumbnails": true
                 }
               },
+              "showCount": {
+                "default": true,
+                "description": "是否在边缘浮动条上显示暂存数量徽标。",
+                "type": "boolean"
+              },
               "stagingFolder": {
                 "default": "",
                 "type": "string"
@@ -2887,11 +2959,13 @@
               "barWidth",
               "barLength",
               "barColor",
+              "barEmoji",
               "cornerRadius",
               "borderColor",
               "borderOpacity",
               "rules",
-              "security"
+              "security",
+              "showCount"
             ],
             "type": "object"
           },
@@ -4065,6 +4139,11 @@
                   "description": "边缘浮动条填充色（#RGB/#RRGGBB/#RRGGBBAA）；空串 = 跟随主题表面色。",
                   "type": "string"
                 },
+                "barEmoji": {
+                  "default": "",
+                  "description": "边缘浮动条图标：一个 emoji（或 1-2 个字符）；空串 = 使用 FloePod 品牌图标。",
+                  "type": "string"
+                },
                 "barLength": {
                   "default": 190,
                   "description": "边缘浮动条长度，即沿屏幕边缘方向的长边（CSS 逻辑像素）。",
@@ -4222,6 +4301,11 @@
                     "suppressIndex": true,
                     "suppressThumbnails": true
                   }
+                },
+                "showCount": {
+                  "default": true,
+                  "description": "是否在边缘浮动条上显示暂存数量徽标。",
+                  "type": "boolean"
                 },
                 "stagingFolder": {
                   "default": "",
@@ -4521,6 +4605,11 @@
                 "description": "边缘浮动条填充色（#RGB/#RRGGBB/#RRGGBBAA）；空串 = 跟随主题表面色。",
                 "type": "string"
               },
+              "barEmoji": {
+                "default": "",
+                "description": "边缘浮动条图标：一个 emoji（或 1-2 个字符）；空串 = 使用 FloePod 品牌图标。",
+                "type": "string"
+              },
               "barLength": {
                 "default": 190,
                 "description": "边缘浮动条长度，即沿屏幕边缘方向的长边（CSS 逻辑像素）。",
@@ -4679,6 +4768,11 @@
                   "suppressThumbnails": true
                 }
               },
+              "showCount": {
+                "default": true,
+                "description": "是否在边缘浮动条上显示暂存数量徽标。",
+                "type": "boolean"
+              },
               "stagingFolder": {
                 "default": "",
                 "type": "string"
@@ -4720,11 +4814,13 @@
               "barWidth",
               "barLength",
               "barColor",
+              "barEmoji",
               "cornerRadius",
               "borderColor",
               "borderOpacity",
               "rules",
-              "security"
+              "security",
+              "showCount"
             ],
             "type": "object"
           },
@@ -5806,6 +5902,11 @@
               "description": "边缘浮动条填充色（#RGB/#RRGGBB/#RRGGBBAA）；空串 = 跟随主题表面色。",
               "type": "string"
             },
+            "barEmoji": {
+              "default": "",
+              "description": "边缘浮动条图标：一个 emoji（或 1-2 个字符）；空串 = 使用 FloePod 品牌图标。",
+              "type": "string"
+            },
             "barLength": {
               "anyOf": [
                 {
@@ -6012,6 +6113,11 @@
                 "suppressThumbnails": true
               }
             },
+            "showCount": {
+              "default": true,
+              "description": "是否在边缘浮动条上显示暂存数量徽标。",
+              "type": "boolean"
+            },
             "stagingFolder": {
               "default": "",
               "type": "string"
@@ -6200,6 +6306,11 @@
             "description": "边缘浮动条填充色（#RGB/#RRGGBB/#RRGGBBAA）；空串 = 跟随主题表面色。",
             "type": "string"
           },
+          "barEmoji": {
+            "default": "",
+            "description": "边缘浮动条图标：一个 emoji（或 1-2 个字符）；空串 = 使用 FloePod 品牌图标。",
+            "type": "string"
+          },
           "barLength": {
             "default": 190,
             "description": "边缘浮动条长度，即沿屏幕边缘方向的长边（CSS 逻辑像素）。",
@@ -6358,6 +6469,11 @@
               "suppressThumbnails": true
             }
           },
+          "showCount": {
+            "default": true,
+            "description": "是否在边缘浮动条上显示暂存数量徽标。",
+            "type": "boolean"
+          },
           "stagingFolder": {
             "default": "",
             "type": "string"
@@ -6399,11 +6515,13 @@
           "barWidth",
           "barLength",
           "barColor",
+          "barEmoji",
           "cornerRadius",
           "borderColor",
           "borderOpacity",
           "rules",
-          "security"
+          "security",
+          "showCount"
         ],
         "title": "Pod",
         "type": "object"
@@ -6597,6 +6715,11 @@
       ],
       "title": "PodEvent",
       "type": "object"
+    },
+    "floepod://context-menu-hide": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "null",
+      "type": "null"
     },
     "floepod://context-menu-show": {
       "$defs": {
@@ -6936,6 +7059,11 @@
               "description": "边缘浮动条填充色（#RGB/#RRGGBB/#RRGGBBAA）；空串 = 跟随主题表面色。",
               "type": "string"
             },
+            "barEmoji": {
+              "default": "",
+              "description": "边缘浮动条图标：一个 emoji（或 1-2 个字符）；空串 = 使用 FloePod 品牌图标。",
+              "type": "string"
+            },
             "barLength": {
               "default": 190,
               "description": "边缘浮动条长度，即沿屏幕边缘方向的长边（CSS 逻辑像素）。",
@@ -7094,6 +7222,11 @@
                 "suppressThumbnails": true
               }
             },
+            "showCount": {
+              "default": true,
+              "description": "是否在边缘浮动条上显示暂存数量徽标。",
+              "type": "boolean"
+            },
             "stagingFolder": {
               "default": "",
               "type": "string"
@@ -7135,11 +7268,13 @@
             "barWidth",
             "barLength",
             "barColor",
+            "barEmoji",
             "cornerRadius",
             "borderColor",
             "borderOpacity",
             "rules",
-            "security"
+            "security",
+            "showCount"
           ],
           "type": "object"
         },

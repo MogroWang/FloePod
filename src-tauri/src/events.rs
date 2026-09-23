@@ -96,6 +96,7 @@ declare_events! {
     MENU_SHOW: MenuShow = "floepod://context-menu-show",
     MENU_CHOICE: MenuChoice = "floepod://context-menu-choice",
     MENU_CLOSED: PodEvent = "floepod://context-menu-closed",
+    MENU_HIDE: () = "floepod://context-menu-hide",
 }
 
 pub fn pod_bar_label(pod_id: u64) -> String {
