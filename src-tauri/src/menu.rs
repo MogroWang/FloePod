@@ -220,8 +220,8 @@ pub fn dismiss(app: &AppHandle) {
 fn hide_current(app: &AppHandle, pod_id: u64) {
     MENU_OPEN.store(false, Ordering::Relaxed);
     /* 先让菜单窗口播放淡出，原生窗口交给看门狗延迟隐藏：立刻 SW_HIDE 会让
-       动画完全看不到（与浮动面板的「先淡出、后隐藏」同一条约束）。
-       保活解除事件仍然立即发出，来源浮动面板不必等动画。 */
+    动画完全看不到（与浮动面板的「先淡出、后隐藏」同一条约束）。
+    保活解除事件仍然立即发出，来源浮动面板不必等动画。 */
     let _ = MENU_HIDE.emit_to(app, LABEL, ());
     *MENU_HIDE_AT.lock().unwrap() = Some(Instant::now() + Duration::from_millis(MENU_FADE_OUT_MS));
     let _ = MENU_CLOSED.emit_to(

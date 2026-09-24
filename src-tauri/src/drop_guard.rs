@@ -89,7 +89,7 @@ pub fn in_app_drop_target(state: &AppState, path: &Path) -> Option<InAppDropTarg
         .iter()
         .rev()
         .filter(|record| now.duration_since(record.at) < RECORD_TTL)
-        .find(|record| record.paths.iter().any(|candidate| *candidate == key))
+        .find(|record| record.paths.contains(&key))
         .map(|record| match record.pod_id {
             Some(pod_id) => InAppDropTarget::Pod(pod_id),
             None => InAppDropTarget::OtherWindow,
@@ -101,7 +101,7 @@ pub fn restaged_into_other_pod(state: &AppState, path: &Path, own_pod: u64) -> b
     let key = crate::file_paths::path_key(path);
     let now = Instant::now();
     let restages = state.recent_restages.lock().unwrap();
-    restages
-        .get(&key)
-        .is_some_and(|record| record.pod_id != own_pod && now.duration_since(record.at) < RECORD_TTL)
+    restages.get(&key).is_some_and(|record| {
+        record.pod_id != own_pod && now.duration_since(record.at) < RECORD_TTL
+    })
 }

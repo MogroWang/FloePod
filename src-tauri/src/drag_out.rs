@@ -332,8 +332,8 @@ pub fn finalize(app: AppHandle, token: String) -> Result<DragCutOutcome, String>
     let mut changed_pods = HashSet::new();
     for (entry, path) in candidates {
         /* 落点在本应用窗口内（拖回自身、或落进没有接收文件的窗口）时保留源文件。
-           拖拽插件只回报“已投递”，照常清理会让用户刚拖出的文件凭空消失。
-           例外：文件确实被另一个匣收下（该匣暂存成功）时按移动处理。 */
+        拖拽插件只回报“已投递”，照常清理会让用户刚拖出的文件凭空消失。
+        例外：文件确实被另一个匣收下（该匣暂存成功）时按移动处理。 */
         match drop_guard::in_app_drop_target(&state, &path) {
             Some(drop_guard::InAppDropTarget::Pod(target_pod))
                 if target_pod != entry.pod_id as u64

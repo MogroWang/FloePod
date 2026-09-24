@@ -68,7 +68,7 @@ pub fn stage_paths(
         fs::symlink_metadata(&source)
             .map_err(|error| format!("无法读取源路径 {}: {error}", source.display()))?;
         /* 来自本匣暂存目录的文件一律不再暂存：拖回自身不应产生重名副本，
-           也不应触发剪切清理（剪切模式下的自我投递曾让文件被错误删除）。 */
+        也不应触发剪切清理（剪切模式下的自我投递曾让文件被错误删除）。 */
         let resolved = crate::file_paths::resolve_path(&source)?;
         if crate::file_paths::path_is_within(&resolved, &resolved_directory) {
             ignored_own.push(source);
@@ -80,7 +80,10 @@ pub fn stage_paths(
         // 全部来自本匣自身：按“无事发生”返回，前端据此提示已忽略。
         return Ok(StagePathsResult {
             items: Vec::new(),
-            warnings: ignored_own.iter().map(|source| own_source_warning(source)).collect(),
+            warnings: ignored_own
+                .iter()
+                .map(|source| own_source_warning(source))
+                .collect(),
         });
     }
 
