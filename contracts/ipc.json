@@ -977,12 +977,12 @@
           "barLength",
           "barColor",
           "barEmoji",
+          "showCount",
           "cornerRadius",
           "borderColor",
           "borderOpacity",
           "rules",
-          "security",
-          "showCount"
+          "security"
         ],
         "title": "Pod",
         "type": "object"
@@ -1227,13 +1227,16 @@
       "optionalArgs": [],
       "result": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "剪切清理结果：被拒绝的条目是“拖回了应用自己”，不是失败。",
         "properties": {
           "deleted": {
+            "description": "真正清理掉的源文件数。",
             "format": "uint",
             "minimum": 0,
             "type": "integer"
           },
           "refused": {
+            "description": "因落点在本应用内（同一个匣或其他自有窗口）而保留的数量。",
             "format": "uint",
             "minimum": 0,
             "type": "integer"
@@ -1621,12 +1624,12 @@
               "barLength",
               "barColor",
               "barEmoji",
+              "showCount",
               "cornerRadius",
               "borderColor",
               "borderOpacity",
               "rules",
-              "security",
-              "showCount"
+              "security"
             ],
             "type": "object"
           },
@@ -2303,12 +2306,12 @@
               "barLength",
               "barColor",
               "barEmoji",
+              "showCount",
               "cornerRadius",
               "borderColor",
               "borderOpacity",
               "rules",
-              "security",
-              "showCount"
+              "security"
             ],
             "type": "object"
           },
@@ -2960,12 +2963,12 @@
               "barLength",
               "barColor",
               "barEmoji",
+              "showCount",
               "cornerRadius",
               "borderColor",
               "borderOpacity",
               "rules",
-              "security",
-              "showCount"
+              "security"
             ],
             "type": "object"
           },
@@ -4815,12 +4818,12 @@
               "barLength",
               "barColor",
               "barEmoji",
+              "showCount",
               "cornerRadius",
               "borderColor",
               "borderOpacity",
               "rules",
-              "security",
-              "showCount"
+              "security"
             ],
             "type": "object"
           },
@@ -6516,12 +6519,12 @@
           "barLength",
           "barColor",
           "barEmoji",
+          "showCount",
           "cornerRadius",
           "borderColor",
           "borderOpacity",
           "rules",
-          "security",
-          "showCount"
+          "security"
         ],
         "title": "Pod",
         "type": "object"
@@ -7269,12 +7272,12 @@
             "barLength",
             "barColor",
             "barEmoji",
+            "showCount",
             "cornerRadius",
             "borderColor",
             "borderOpacity",
             "rules",
-            "security",
-            "showCount"
+            "security"
           ],
           "type": "object"
         },

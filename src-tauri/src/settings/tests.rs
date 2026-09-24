@@ -247,6 +247,8 @@ fn existing_v040_settings_round_trip_without_losing_fields() {
     assert_eq!(stored["pods"][0]["hoverOpen"], true);
     assert_eq!(stored["pods"][0]["barLength"], 190);
     assert_eq!(stored["pods"][0]["barColor"], "");
+    assert_eq!(stored["pods"][0]["barEmoji"], "");
+    assert_eq!(stored["pods"][0]["showCount"], true);
     assert_eq!(stored["pods"][0]["rules"]["enabled"], false);
     let mut legacy_view = stored;
     legacy_view.as_object_mut().unwrap().remove("accessibility");
@@ -258,6 +260,8 @@ fn existing_v040_settings_round_trip_without_losing_fields() {
         pod.as_object_mut().unwrap().remove("hoverOpen");
         pod.as_object_mut().unwrap().remove("barLength");
         pod.as_object_mut().unwrap().remove("barColor");
+        pod.as_object_mut().unwrap().remove("barEmoji");
+        pod.as_object_mut().unwrap().remove("showCount");
         pod.as_object_mut().unwrap().remove("rules");
         pod.as_object_mut().unwrap().remove("security");
     }
