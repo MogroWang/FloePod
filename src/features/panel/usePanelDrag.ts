@@ -23,7 +23,10 @@ export function usePanelDrag(context: PanelContext, clearSelection: () => void) 
         cancel: (token) => ipc.cancelDragCut(token),
         cleanupFailed: (error) => console.error("drag cleanup failed", error),
       });
-      if (result === "source-cleanup-failed") {
+      if (result === "ignored") {
+        // 落点是本应用自己（拖回同一个匣）：源文件保持原样，明确告知已忽略。
+        showToast("已忽略：不能把文件拖回同一个匣");
+      } else if (result === "source-cleanup-failed") {
         await staging
           .refresh(context.podId())
           .catch((error) => console.error("post-drag refresh failed", error));

@@ -89,6 +89,7 @@ pub fn spawn_watchdog(app: AppHandle) {
             let _operation = state.panel_ops.lock().unwrap();
             let now = Instant::now();
             finish_delayed_hides(&app, now);
+            crate::menu::finish_delayed_hide(&app, now);
             if !state.bars_visible.load(Ordering::Relaxed) {
                 return Ok(());
             }

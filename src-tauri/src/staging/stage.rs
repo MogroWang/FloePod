@@ -5,6 +5,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
 use crate::db::{self, StagedItem};
+use crate::drop_guard;
 use crate::events;
 use crate::file_ops::{self, StagedMove};
 use crate::lnk;
@@ -58,6 +59,7 @@ pub fn stage_paths(
     }
 
     let mut sources = Vec::with_capacity(paths.len());
+    let mut ignored_own: Vec<PathBuf> = Vec::new();
     for path in paths {
         let source = PathBuf::from(path);
         if !source.is_absolute() {
@@ -65,7 +67,24 @@ pub fn stage_paths(
         }
         fs::symlink_metadata(&source)
             .map_err(|error| format!("无法读取源路径 {}: {error}", source.display()))?;
+        /* 来自本匣暂存目录的文件一律不再暂存：拖回自身不应产生重名副本，
+        也不应触发剪切清理（剪切模式下的自我投递曾让文件被错误删除）。 */
+        let resolved = crate::file_paths::resolve_path(&source)?;
+        if crate::file_paths::path_is_within(&resolved, &resolved_directory) {
+            ignored_own.push(source);
+            continue;
+        }
         sources.push(source);
+    }
+    if sources.is_empty() {
+        // 全部来自本匣自身：按“无事发生”返回，前端据此提示已忽略。
+        return Ok(StagePathsResult {
+            items: Vec::new(),
+            warnings: ignored_own
+                .iter()
+                .map(|source| own_source_warning(source))
+                .collect(),
+        });
     }
 
     let prepared = prepare_files(
@@ -77,7 +96,23 @@ pub fn stage_paths(
         &resolved_directory,
     )?;
     let items = commit_or_rollback(&state, &pod, &action, &resolved_directory, &prepared)?;
-    finish_committed(&app, &state, &pod, &action, items, prepared.moves)
+    drop_guard::record_restages(&state, pod_id, &sources);
+    let mut result = finish_committed(&app, &state, &pod, &action, items, prepared.moves)?;
+    result
+        .warnings
+        .extend(ignored_own.iter().map(|source| own_source_warning(source)));
+    Ok(result)
+}
+
+/// 拖入路径来自本匣暂存目录时的提醒条目。
+fn own_source_warning(source: &Path) -> StageWarning {
+    StageWarning {
+        name: source
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| source.display().to_string()),
+        error: "文件来自这个匣本身，已忽略".into(),
+    }
 }
 
 struct PreparedBatch {

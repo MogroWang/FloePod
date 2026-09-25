@@ -4,6 +4,7 @@ export const Events = {
   CollectClipboard: "floepod://collect-clipboard",
   ContextMenuChoice: "floepod://context-menu-choice",
   ContextMenuClosed: "floepod://context-menu-closed",
+  ContextMenuHide: "floepod://context-menu-hide",
   ContextMenuShow: "floepod://context-menu-show",
   ItemsChanged: "floepod://items-changed",
   PanelHidden: "floepod://panel-hidden",

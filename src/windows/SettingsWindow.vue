@@ -97,7 +97,10 @@ const PAGES = [
 <template>
   <div class="settings-root">
     <div class="titlebar" data-tauri-drag-region>
-      <div class="titlebar-title" data-tauri-drag-region>浮匣 FloePod 设置界面</div>
+      <div class="titlebar-title" data-tauri-drag-region>
+        <BrandMark mark="icon" :size="14" />
+        <span>浮匣 FloePod 设置界面</span>
+      </div>
       <div class="titlebar-controls">
         <button type="button" class="tb-btn" title="最小化" @click="winMinimize">
           <svg

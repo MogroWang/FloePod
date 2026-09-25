@@ -7,6 +7,7 @@
  * 点击卡片外任意位置都会让菜单失焦而关闭。
  */
 import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import BrandMark from "@/components/BrandMark.vue";
 import ContextMenu from "@/components/ContextMenu.vue";
 import type { MenuItemSpec } from "@/domain/menu";
 import type { Material } from "@/domain/types";
@@ -22,6 +23,7 @@ const material = ref<Material>("plain");
 const visible = ref(false);
 const anchorEl = ref<HTMLElement | null>(null);
 let disposeShow: (() => void) | null = null;
+let disposeHide: (() => void) | null = null;
 let closing = false;
 
 async function measureAndShow() {
@@ -87,10 +89,16 @@ onMounted(async () => {
   });
   window.addEventListener("blur", onWindowBlur);
   window.addEventListener("keydown", onKeydown);
+  /* 后端（含浮动面板主动收起）开始隐藏原生窗口：同步收起卡片播放淡出，
+     原生窗口本身在淡出结束后才真正隐藏。 */
+  disposeHide = await listenCurrent(Events.ContextMenuHide, () => {
+    visible.value = false;
+  });
 });
 
 onBeforeUnmount(() => {
   disposeShow?.();
+  disposeHide?.();
   window.removeEventListener("blur", onWindowBlur);
   window.removeEventListener("keydown", onKeydown);
 });
@@ -98,9 +106,16 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="menu-window" :data-material="material">
-    <div v-if="visible" ref="anchorEl" class="menu-anchor">
-      <ContextMenu :items="items" @execute="onExecute" />
+    <!-- 浏览器预览占位：菜单内容只在后端 SHOW 事件到达后渲染。 -->
+    <div v-if="!ipc.inTauri && !visible" class="menu-dev-hint">
+      <BrandMark mark="icon" :size="28" />
+      <p>右键菜单在浮动面板条目上触发，浏览器预览时保持空白</p>
     </div>
+    <Transition name="menu-fade">
+      <div v-if="visible" ref="anchorEl" class="menu-anchor">
+        <ContextMenu :items="items" @execute="onExecute" />
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -123,5 +138,32 @@ onBeforeUnmount(() => {
   position: fixed;
   left: 0;
   top: 0;
+}
+/* 收起时淡出：原生窗口由后端延迟隐藏（menu.rs 的 MENU_FADE_OUT_MS），
+   卡片在这段时间里完成淡出，不再是瞬间消失。 */
+.menu-fade-enter-active {
+  transition: opacity 120ms var(--ease-out);
+}
+.menu-fade-leave-active {
+  transition: opacity 130ms var(--ease-out);
+}
+.menu-fade-enter-from,
+.menu-fade-leave-to {
+  opacity: 0;
+}
+.menu-dev-hint {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--ink-3);
+  font-size: 12px;
+  user-select: none;
+}
+.menu-dev-hint p {
+  margin: 0;
 }
 </style>

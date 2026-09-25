@@ -234,6 +234,10 @@ pub struct AppState {
     pub watcher_dirty: AtomicBool,
     /// pod_id -> 暂存文件夹监听器
     pub watcher: Mutex<HashMap<u64, RecommendedWatcher>>,
+    /// 应用自己窗口收到的最近文件拖放（识别“拖回自身”）。
+    pub recent_drops: Mutex<Vec<crate::drop_guard::DropRecord>>,
+    /// 最近成功暂存的来源路径 -> 接收匣（判断落点是否真的收下了文件）。
+    pub recent_restages: Mutex<HashMap<String, crate::drop_guard::RestageRecord>>,
 }
 
 impl AppState {
@@ -263,6 +267,8 @@ impl AppState {
             last_stage: Mutex::new(None),
             watcher_dirty: AtomicBool::new(false),
             watcher: Mutex::new(HashMap::new()),
+            recent_drops: Mutex::new(Vec::new()),
+            recent_restages: Mutex::new(HashMap::new()),
         }
     }
 

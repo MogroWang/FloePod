@@ -1,4 +1,4 @@
-use crate::events::{MENU_CHOICE, MENU_CLOSED, MENU_SHOW};
+use crate::events::{MENU_CHOICE, MENU_CLOSED, MENU_HIDE, MENU_SHOW};
 // 应用级右键菜单窗口：全局唯一的透明置顶窗口，由所有匣浮动面板复用。
 //
 // 流程：浮动面板 invoke `open_context_menu`（携带菜单项）→ 本模块发出定向事件
@@ -8,6 +8,8 @@ use crate::events::{MENU_CHOICE, MENU_CLOSED, MENU_SHOW};
 // 请求不会影响刚打开的新菜单。
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize};
@@ -30,6 +32,10 @@ static MENU_OPEN: AtomicBool = AtomicBool::new(false);
 /// 当前菜单的原生材质：0=plain、1=acrylic。
 /// 与 MENU_POD 同一代 open 写入，保证前端半透明底色和原生窗口材质一致。
 static MENU_MATERIAL: AtomicU8 = AtomicU8::new(0);
+/// 菜单窗口开始淡出后，原生窗口的隐藏截止时间；由看门狗 tick 兑现。
+static MENU_HIDE_AT: Mutex<Option<Instant>> = Mutex::new(None);
+/// 菜单淡出时长（毫秒），与 ContextMenuWindow 的淡出动画对齐。
+const MENU_FADE_OUT_MS: u64 = 140;
 
 fn material_code(material: &str) -> u8 {
     match material {
@@ -113,6 +119,8 @@ pub fn open(app: &AppHandle, pod_id: u64, items: &[MenuItemSpec]) -> Result<(), 
         );
     }
     MENU_OPEN.store(true, Ordering::Relaxed);
+    // 上一个菜单可能正处在淡出窗口里：取消它的延迟隐藏，避免新菜单被藏掉。
+    *MENU_HIDE_AT.lock().unwrap() = None;
     MENU_SHOW
         .emit_to(
             app,
@@ -211,6 +219,33 @@ pub fn dismiss(app: &AppHandle) {
 
 fn hide_current(app: &AppHandle, pod_id: u64) {
     MENU_OPEN.store(false, Ordering::Relaxed);
+    /* 先让菜单窗口播放淡出，原生窗口交给看门狗延迟隐藏：立刻 SW_HIDE 会让
+    动画完全看不到（与浮动面板的「先淡出、后隐藏」同一条约束）。
+    保活解除事件仍然立即发出，来源浮动面板不必等动画。 */
+    let _ = MENU_HIDE.emit_to(app, LABEL, ());
+    *MENU_HIDE_AT.lock().unwrap() = Some(Instant::now() + Duration::from_millis(MENU_FADE_OUT_MS));
+    let _ = MENU_CLOSED.emit_to(
+        app,
+        events::pod_panel_label(pod_id),
+        crate::events::PodEvent { pod_id },
+    );
+}
+
+/// 由看门狗 tick 调用：淡出到期后真正隐藏菜单窗口。
+pub fn finish_delayed_hide(app: &AppHandle, now: Instant) {
+    let due = {
+        let mut deadline = MENU_HIDE_AT.lock().unwrap();
+        if deadline.is_some_and(|at| at <= now) {
+            *deadline = None;
+            true
+        } else {
+            false
+        }
+    };
+    if !due || MENU_OPEN.load(Ordering::Relaxed) {
+        // 淡出期间又打开了新菜单：open() 已清掉截止时间，这里再兜一层。
+        return;
+    }
     let Some(window) = app.get_webview_window(LABEL) else {
         return;
     };
@@ -219,11 +254,6 @@ fn hide_current(app: &AppHandle, pod_id: u64) {
         // 会让透明窗口残留（与浮动面板隐藏同一条约束）。
         win::hide_window(hwnd.0 as isize);
     }
-    let _ = MENU_CLOSED.emit_to(
-        app,
-        events::pod_panel_label(pod_id),
-        crate::events::PodEvent { pod_id },
-    );
 }
 
 fn cursor_position() -> (i32, i32) {

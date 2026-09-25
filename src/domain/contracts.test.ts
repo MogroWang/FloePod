@@ -234,6 +234,7 @@ test("IPC 命令和事件名保持稳定且不重复", () => {
       "floepod://context-menu-show",
       "floepod://context-menu-choice",
       "floepod://context-menu-closed",
+      "floepod://context-menu-hide",
     ].sort(),
   );
 });

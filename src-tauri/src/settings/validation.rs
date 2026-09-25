@@ -142,6 +142,10 @@ fn validate_impl(s: &Settings, data_dir: &str, allow_missing_roots: bool) -> Res
         if !pod.bar_color.is_empty() && !valid_hex_color(&pod.bar_color) {
             return Err(format!("匣「{}」的浮动条填充色无效", pod.name));
         }
+        // 图标是单个 emoji 或 1-2 个字符；过长的字符串会把浮动条撑变形。
+        if pod.bar_emoji.chars().count() > 8 || pod.bar_emoji.chars().any(|c| c.is_control()) {
+            return Err(format!("匣「{}」的浮动条图标无效", pod.name));
+        }
         if pod.corner_radius > 64 {
             return Err(format!("匣「{}」的圆角无效", pod.name));
         }

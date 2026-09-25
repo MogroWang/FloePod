@@ -18,6 +18,7 @@ import { clampOpacity } from "@/lib/format";
 import { springValue, type SpringHandle } from "@/lib/spring";
 import { useSettingsStore } from "@/stores/settings";
 import { useStagingStore } from "@/stores/staging";
+import BrandMark from "@/components/BrandMark.vue";
 
 const props = defineProps<{ podId: number }>();
 const settingsStore = useSettingsStore();
@@ -48,6 +49,11 @@ let dragStartOffset = 0;
 let dragStartScreenLength = 1080; // 拖动开始时的屏幕尺寸
 
 const count = computed(() => staging.activeItems.length);
+
+/** 自定义浮动条图标（emoji）；未设置时回退品牌图标。 */
+const barEmoji = computed(() => pod.value?.barEmoji?.trim() ?? "");
+/** 是否显示暂存数量徽标；默认显示。 */
+const showCount = computed(() => pod.value?.showCount !== false);
 
 /* 隐匿模式：Rust 看门狗综合「无交互超时、指针是否靠近、浮动面板是否打开」
    后下发 BarStealth；边缘浮动条只负责用透明度淡入淡出，窗口保持可交互，
@@ -259,6 +265,12 @@ async function handleDrop(paths: string[], sampled: Promise<ModifierState> | nul
   accepting.value = false;
   setAccept(false);
   if (!pod.value || paths.length === 0) return;
+  /* 拖回自身：路径就来自本匣的暂存目录，不能再暂存一遍（会产生重名副本），
+     更不能让剪切清理把文件删掉。后端同样会拦截，这里提前短路省掉无谓的
+     IPC 与询问流程。 */
+  if (paths.every((path) => staging.items.some((item) => item.stagingPath === path))) {
+    return;
+  }
   const action = pod.value.dropAction ?? "ask";
   // 使用原生拖拽仍位于匣上时的最后一次采样，避免松手后读取不到修饰键。
   const mods = sampled ? await sampled : (modifierSnapshot ?? NO_MODIFIERS);
@@ -435,8 +447,11 @@ onBeforeUnmount(() => {
           </div>
         </Transition>
         <template v-if="!accepting">
-          <div v-if="count > 0" class="count-badge">{{ count > 99 ? "99+" : count }}</div>
-          <div v-else class="idle-mark" />
+          <span v-if="barEmoji" class="bar-emoji" :title="pod?.name">{{ barEmoji }}</span>
+          <BrandMark v-else mark="icon" :size="16" class="bar-logo" />
+          <div v-if="showCount && count > 0" class="count-badge">
+            {{ count > 99 ? "99+" : count }}
+          </div>
         </template>
       </div>
     </div>
@@ -539,6 +554,21 @@ onBeforeUnmount(() => {
   justify-content: center;
   gap: 10px;
 }
+/* 横向边缘（上/下）的条短边是高度：改横排，logo 与徽标并排，避免超出 44px 短边 */
+.edge-top .capsule-inner,
+.edge-bottom .capsule-inner {
+  flex-direction: row;
+  gap: 8px;
+}
+.bar-logo {
+  opacity: 0.9;
+}
+/* 自定义 emoji 图标：与品牌图标同高，不参与选中 */
+.bar-emoji {
+  font-size: 16px;
+  line-height: 1;
+  user-select: none;
+}
 .count-badge {
   min-width: 24px;
   height: 24px;
@@ -552,12 +582,6 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   box-shadow: 0 2px 8px rgb(0 0 0 / 0.25);
-}
-.idle-mark {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--ink-3);
 }
 .drop-hint {
   writing-mode: vertical-rl;

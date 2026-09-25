@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 
 use crate::db::{self, StagedItem};
+use crate::drop_guard;
 use crate::events;
 use crate::file_ops;
 use crate::settings;
@@ -267,7 +268,17 @@ pub fn prepare(app: AppHandle, pod_id: u64, paths: Vec<String>) -> Result<String
     Ok(store_snapshot(&state, entries))
 }
 
-pub fn finalize(app: AppHandle, token: String) -> Result<(), String> {
+/// 剪切清理结果：被拒绝的条目是“拖回了应用自己”，不是失败。
+#[derive(Debug, Default, serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DragCutOutcome {
+    /// 真正清理掉的源文件数。
+    deleted: usize,
+    /// 因落点在本应用内（同一个匣或其他自有窗口）而保留的数量。
+    refused: usize,
+}
+
+pub fn finalize(app: AppHandle, token: String) -> Result<DragCutOutcome, String> {
     let state = app.state::<AppState>();
     let _permit = state.tasks.enter()?;
     let _operation = state.file_ops.lock().unwrap();
@@ -317,8 +328,22 @@ pub fn finalize(app: AppHandle, token: String) -> Result<(), String> {
     }
 
     let mut removed_ids = Vec::new();
+    let mut refused = 0usize;
     let mut changed_pods = HashSet::new();
     for (entry, path) in candidates {
+        /* 落点在本应用窗口内（拖回自身、或落进没有接收文件的窗口）时保留源文件。
+        拖拽插件只回报“已投递”，照常清理会让用户刚拖出的文件凭空消失。
+        例外：文件确实被另一个匣收下（该匣暂存成功）时按移动处理。 */
+        match drop_guard::in_app_drop_target(&state, &path) {
+            Some(drop_guard::InAppDropTarget::Pod(target_pod))
+                if target_pod != entry.pod_id as u64
+                    && drop_guard::restaged_into_other_pod(&state, &path, entry.pod_id as u64) => {}
+            Some(_) => {
+                refused += 1;
+                continue;
+            }
+            None => {}
+        }
         match fs::symlink_metadata(&path) {
             Ok(metadata) if file_ops::is_reparse_or_symlink(&metadata) => failed.push(format!(
                 "{}: 拖拽期间已被替换为链接或重解析点，拒绝删除",
@@ -348,6 +373,10 @@ pub fn finalize(app: AppHandle, token: String) -> Result<(), String> {
             Err(error) => failed.push(format!("{}: {error}", entry.name)),
         }
     }
+    let outcome = DragCutOutcome {
+        deleted: removed_ids.len(),
+        refused,
+    };
     if !removed_ids.is_empty() {
         let mut connection = state.db.lock().unwrap();
         let transaction = connection
@@ -361,7 +390,7 @@ pub fn finalize(app: AppHandle, token: String) -> Result<(), String> {
         events::emit_items_changed(&app, pod_id as u64);
     }
     if failed.is_empty() {
-        Ok(())
+        Ok(outcome)
     } else {
         Err(format!("部分剪切源无法清理：{}", failed.join("；")))
     }

@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { dragOut } from "./dragOut.ts";
 
-function scenario(dropped: boolean, failure?: "prepare" | "drag" | "finalize" | "cancel") {
+function scenario(
+  dropped: boolean,
+  failure?: "prepare" | "drag" | "finalize" | "cancel",
+  cut?: { deleted: number; refused: number },
+) {
   const calls: string[] = [];
   const step = async (name: string) => {
     calls.push(name);
@@ -26,6 +30,7 @@ function scenario(dropped: boolean, failure?: "prepare" | "drag" | "finalize" | 
       finalize: async (token: string) => {
         assert.equal(token, "single-use-token");
         await step("finalize");
+        return cut;
       },
       cancel: async (token: string) => {
         assert.equal(token, "single-use-token");
@@ -74,4 +79,13 @@ test("failed token cancellation still restores panel activity", async () => {
   const s = scenario(false, "cancel");
   assert.equal(await dragOut("move", s.effects), "cancelled");
   assert.deepEqual(s.calls.slice(-3), ["cancel", "cleanup-failed", "false"]);
+});
+test("a cut refused because it landed back inside the app is reported as ignored", async () => {
+  const s = scenario(true, undefined, { deleted: 0, refused: 1 });
+  assert.equal(await dragOut("move", s.effects), "ignored");
+  assert.deepEqual(s.calls, ["true", "prepare", "move", "drag", "finalize", "false"]);
+});
+test("a cut that deleted at least one source is still reported as moved", async () => {
+  const s = scenario(true, undefined, { deleted: 1, refused: 0 });
+  assert.equal(await dragOut("move", s.effects), "moved");
 });
