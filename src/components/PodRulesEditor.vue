@@ -117,7 +117,7 @@ async function pickSourceFolder() {
 
 <template>
   <div class="rules-editor">
-    <SettingsRow label="启用规则" hint="只运行下方可见规则，不执行脚本或联网动作">
+    <SettingsRow label="启用规则" hint="无脚本、无联网动作">
       <ToggleSwitch
         label="启用规则"
         :model-value="rules.enabled"
@@ -125,7 +125,7 @@ async function pickSourceFolder() {
       />
     </SettingsRow>
     <div class="sep" />
-    <SettingsRow label="工作流模板" hint="选择后仍可继续修改每一项">
+    <SettingsRow label="工作流模板">
       <select
         class="rule-input compact"
         :value="rules.template"
@@ -188,7 +188,7 @@ async function pickSourceFolder() {
       </div>
     </SettingsRow>
     <div class="sep" />
-    <SettingsRow label="单个文件上限" hint="0 表示不限制，最大 102400 MB">
+    <SettingsRow label="单个文件上限" hint="0 为不限制">
       <div class="number-control">
         <input
           class="rule-input number"
@@ -209,7 +209,7 @@ async function pickSourceFolder() {
       </div>
     </SettingsRow>
     <div class="sep" />
-    <SettingsRow label="自动命名" hint="令牌：{name} {stem} {ext} {date} {year} {month} {day}">
+    <SettingsRow label="自动命名" hint="可用：{name} {stem} {ext} {date} {year} {month} {day}">
       <input
         class="rule-input mono"
         :value="rules.renamePattern"
@@ -221,7 +221,7 @@ async function pickSourceFolder() {
       />
     </SettingsRow>
     <div class="sep" />
-    <SettingsRow label="自动放入子目录" hint="例如 {year}/{month}；留空直接放入匣目录">
+    <SettingsRow label="自动放入子目录" hint="如 {year}/{month}；留空不分子目录">
       <input
         class="rule-input mono"
         :value="rules.subfolderPattern"
@@ -236,7 +236,7 @@ async function pickSourceFolder() {
       />
     </SettingsRow>
     <div class="sep" />
-    <SettingsRow label="拒绝内容重复文件" hint="比较大小和 SHA-256，不只比较名称">
+    <SettingsRow label="拒绝内容重复文件" hint="按文件内容比对，与文件名无关">
       <ToggleSwitch
         label="拒绝内容重复文件"
         :model-value="rules.duplicatePolicy === 'reject'"
@@ -247,7 +247,7 @@ async function pickSourceFolder() {
       />
     </SettingsRow>
     <div class="sep" />
-    <SettingsRow label="生成 SHA-256 校验文件" hint="文件暂存后在旁边生成 .sha256">
+    <SettingsRow label="生成 SHA-256 校验文件" hint="暂存后在文件旁生成 .sha256">
       <ToggleSwitch
         label="生成 SHA-256 校验文件"
         :model-value="rules.checksumSidecar"
@@ -256,7 +256,7 @@ async function pickSourceFolder() {
       />
     </SettingsRow>
     <div class="sep" />
-    <SettingsRow label="到期提醒" hint="0 表示不提醒；到期清理由敏感匣设置单独控制">
+    <SettingsRow label="到期提醒" hint="0 为不提醒">
       <div class="number-control">
         <input
           class="rule-input number"
@@ -277,7 +277,7 @@ async function pickSourceFolder() {
       </div>
     </SettingsRow>
     <div class="sep" />
-    <SettingsRow label="导出后移出暂存" hint="成功交付后自动移入 24 小时可撤销区">
+    <SettingsRow label="导出后移出暂存" hint="导出成功后移出，24 小时内可撤销">
       <ToggleSwitch
         label="导出后移出暂存"
         :model-value="rules.removeAfterExport"
@@ -289,19 +289,13 @@ async function pickSourceFolder() {
 </template>
 
 <style scoped>
-/* 卡片规格与设置窗口 .settings-card 保持一致：同圆角、同行距、同分隔线 */
-.rules-editor {
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--surface-raised);
-}
+/* 无自身外壳：直接铺在所属匣卡片内，行距与分隔线对齐设置卡片规格 */
 .rules-editor :deep(.row) {
-  padding: 14px 16px;
+  padding: 14px 0;
 }
 .sep {
   height: 1px;
-  margin: 0 16px;
+  margin: 0;
   background: var(--line);
 }
 .rule-input {

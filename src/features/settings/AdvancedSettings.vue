@@ -10,12 +10,11 @@ const { selectedPod, selectedPodList, selectPod } = useSelectedPod();
 <template>
   <div>
     <h2 class="page-title">高级设置</h2>
-    <p class="page-desc">自动屏蔽，以及每个匣的规则匣、敏感匣等进阶能力。</p>
+    <p class="page-desc">自动屏蔽与每个匣的规则匣、敏感匣。</p>
 
     <AutoBlockSettings />
     <h3 class="section-title adv-pod-section">规则匣与敏感匣</h3>
-    <p class="page-desc">按匣生效，两个能力相互独立；在「匣」页可以新建、重命名或删除匣。</p>
-    <div v-if="s.pods.length > 1" class="pod-picker" role="tablist" aria-label="选择要设置的匣">
+    <div class="pod-picker" role="tablist" aria-label="选择要设置的匣">
       <button
         v-for="pod in s.pods"
         :key="pod.id"
@@ -32,33 +31,19 @@ const { selectedPod, selectedPodList, selectPod } = useSelectedPod();
     </div>
     <div
       v-for="pod in selectedPodList"
-      :key="`rules-${pod.id}`"
+      :key="pod.id"
       class="pod-card"
       :class="{ off: !pod.enabled }"
     >
-      <div class="adv-pod-head">
-        <span class="pod-name-text" :title="pod.name">{{ pod.name }}</span>
-        <span v-if="!pod.enabled" class="adv-pod-off">已停用，启用后以下设置才会生效</span>
-      </div>
       <div class="pod-group">
         <div class="group-title">规则匣</div>
-        <p class="group-hint">按文件类型、名称、来源和大小过滤，并自动命名、归档或生成校验值。</p>
+        <p class="group-hint">暂存时按类型、名称、来源、大小过滤，可自动命名与归档。</p>
         <PodRulesEditor :rules="pod.rules" @update="(rules) => savePod(pod.id, { rules })" />
       </div>
-    </div>
-    <div
-      v-for="pod in selectedPodList"
-      :key="`security-${pod.id}`"
-      class="pod-card"
-      :class="{ off: !pod.enabled }"
-    >
-      <div class="adv-pod-head">
-        <span class="pod-name-text" :title="pod.name">{{ pod.name }}</span>
-        <span v-if="!pod.enabled" class="adv-pod-off">已停用，启用后以下设置才会生效</span>
-      </div>
+      <div class="sep" />
       <div class="pod-group">
-        <div class="group-title">敏感匣、自动锁定与保留期限</div>
-        <p class="group-hint">使用 Windows EFS 与 Windows Hello；不上传内容，也不保存自制密码。</p>
+        <div class="group-title">敏感匣</div>
+        <p class="group-hint">加密与解锁交给 Windows（EFS + Hello），应用不保存密码。</p>
         <PodSecurityEditor
           :pod-id="pod.id"
           :folder="pod.stagingFolder"

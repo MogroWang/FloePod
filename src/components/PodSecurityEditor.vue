@@ -23,9 +23,9 @@ async function refreshStatus() {
   try {
     status.value = await ipc.getPodSecurityStatus(props.podId);
     message.value = status.value.efsEncrypted
-      ? "Windows EFS 已保护此匣目录。"
+      ? "已由 Windows EFS 保护。"
       : props.security.enabled
-        ? "尚未确认 EFS 加密，请检查该目录是否位于支持 EFS 的 NTFS 卷。"
+        ? "尚未确认 EFS 加密；暂存目录需位于支持 EFS 的 NTFS 卷。"
         : "敏感匣未启用。";
   } catch (error) {
     message.value = String(error);
@@ -52,14 +52,7 @@ onMounted(refreshStatus);
 
 <template>
   <div class="security-editor">
-    <div class="security-note">
-      <strong>不自制加密算法</strong>
-      <p>
-        文件静态加密交给 Windows EFS，应用解锁交给 Windows
-        Hello/PIN。启用失败时不会保存成“假加密”状态。
-      </p>
-    </div>
-    <SettingsRow label="启用敏感匣" hint="要求暂存目录位于支持 EFS 的 NTFS 卷">
+    <SettingsRow label="启用敏感匣" hint="暂存目录需位于支持 EFS 的 NTFS 卷">
       <ToggleSwitch
         label="启用敏感匣"
         :model-value="security.enabled"
@@ -68,7 +61,7 @@ onMounted(refreshStatus);
       />
     </SettingsRow>
     <div class="sep" />
-    <SettingsRow label="使用 Windows Hello 解锁" hint="不在 FloePod 中保存密码或恢复密钥">
+    <SettingsRow label="使用 Windows Hello 解锁" hint="密码与恢复密钥不经过 FloePod">
       <ToggleSwitch
         label="使用 Windows Hello 解锁"
         :model-value="security.requireWindowsHello"
@@ -77,7 +70,7 @@ onMounted(refreshStatus);
       />
     </SettingsRow>
     <div class="sep" />
-    <SettingsRow label="自动锁定" hint="0 表示仅在退出或手动锁定时重新锁定">
+    <SettingsRow label="自动锁定" hint="0 表示仅退出或手动锁定时">
       <div class="number-control">
         <input
           type="number"
@@ -92,7 +85,7 @@ onMounted(refreshStatus);
       </div>
     </SettingsRow>
     <div class="sep" />
-    <SettingsRow label="保留期限" hint="0 表示不自动清理；到期文件移入系统回收站">
+    <SettingsRow label="保留期限" hint="0 为不清理；到期文件移入回收站">
       <div class="number-control">
         <input
           type="number"
@@ -107,7 +100,7 @@ onMounted(refreshStatus);
       </div>
     </SettingsRow>
     <div class="sep" />
-    <SettingsRow label="导出后清理暂存副本" hint="成功导出后移出匣，操作仍进入时间线">
+    <SettingsRow label="导出后清理暂存副本" hint="导出成功后移出，可在时间线撤销">
       <ToggleSwitch
         label="导出后清理暂存副本"
         :model-value="security.cleanupAfterExport"
@@ -116,7 +109,7 @@ onMounted(refreshStatus);
       />
     </SettingsRow>
     <div class="sep" />
-    <SettingsRow label="禁止缩略图" hint="避免敏感图片预览进入 WebView 内存">
+    <SettingsRow label="禁止缩略图" hint="不生成缩略图预览">
       <ToggleSwitch
         label="禁止缩略图"
         :model-value="security.suppressThumbnails"
@@ -125,7 +118,7 @@ onMounted(refreshStatus);
       />
     </SettingsRow>
     <div class="sep" />
-    <SettingsRow label="禁止全文索引" hint="文件名仍保留在匣中，正文和 OCR 不写入索引">
+    <SettingsRow label="禁止全文索引" hint="正文与 OCR 不进索引，文件名不受影响">
       <ToggleSwitch
         label="禁止全文索引"
         :model-value="security.suppressIndex"
@@ -142,44 +135,31 @@ onMounted(refreshStatus);
         <button v-else type="button" @click="lockNow">立即锁定</button>
       </div>
     </div>
-    <p class="disable-note">
-      关闭敏感匣只停止应用内锁定，不会擅自解密磁盘上已有文件；如需解密请使用 Windows 文件属性。
-    </p>
+    <p class="disable-note">关闭敏感匣不解密已有文件；解密请用 Windows 文件属性。</p>
   </div>
 </template>
 
 <style scoped>
-/* 卡片规格与设置窗口 .settings-card 保持一致：同圆角、同行距、同分隔线 */
-.security-editor {
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--surface-raised);
-}
+/* 无自身外壳：直接铺在所属匣卡片内，行距与分隔线对齐设置卡片规格 */
 .security-editor :deep(.row) {
-  padding: 14px 16px;
+  padding: 14px 0;
 }
-.security-note,
 .security-status {
   display: grid;
   gap: 4px;
-  margin: 14px 16px;
+  margin: 14px 0 0;
   padding: 10px 12px;
   border-radius: 9px;
   background: var(--accent-soft);
 }
-.security-note p,
 .disable-note {
-  margin: 0;
+  margin: 10px 0 0;
   color: var(--ink-2);
   font-size: 11.5px;
 }
-.disable-note {
-  padding: 0 16px 14px;
-}
 .sep {
   height: 1px;
-  margin: 0 16px;
+  margin: 0;
   background: var(--line);
 }
 .number-control,

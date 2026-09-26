@@ -547,8 +547,7 @@
   color: var(--ink-3);
   margin: 10px 0 2px;
 }
-.settings-root .pod-group:first-child .group-title,
-.settings-root .adv-pod-head + .pod-group .group-title {
+.settings-root .pod-group:first-child .group-title {
   margin-top: 0;
 }
 .settings-root .group-hint {
@@ -556,21 +555,12 @@
   color: var(--ink-3);
   font-size: 11.5px;
 }
-/* 高级设置页:按匣展示规则匣与敏感匣（两张独立卡片） */
+/* 高级设置页:按匣展示规则匣与敏感匣（一张卡片,两个分组） */
 .settings-root .adv-pod-section {
   margin-top: 26px;
 }
-.settings-root .adv-pod-head {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--line);
-  margin-bottom: 12px;
-}
-.settings-root .adv-pod-off {
-  font-size: 11.5px;
-  color: var(--ink-3);
+.settings-root .pod-card .sep {
+  margin: 8px 0;
 }
 .settings-root .frow {
   display: flex;
