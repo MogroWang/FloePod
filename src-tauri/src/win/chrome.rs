@@ -475,7 +475,7 @@ mod tests {
         message: u32,
         wparam: usize,
         lparam: isize,
-        subclass_id: usize,
+        _subclass_id: usize,
         _data: usize,
     ) -> isize {
         use windows_sys::Win32::UI::Shell::DefSubclassProc;
