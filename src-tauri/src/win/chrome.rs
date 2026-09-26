@@ -132,7 +132,7 @@ unsafe extern "system" fn panel_chrome_proc(
     match message {
         WM_NCCALCSIZE if wparam != 0 => {
             let result = DefSubclassProc(hwnd, message, wparam, lparam);
-            if !IsZoomed(hwnd) {
+            if IsZoomed(hwnd) == 0 {
                 // tao 顶部内缩：build >= 22000 时 round(dpi/96)，更早的系统为 0。
                 let dpi = GetDpiForWindow(hwnd);
                 let inset = if dpi == 0 {
@@ -142,7 +142,7 @@ unsafe extern "system" fn panel_chrome_proc(
                 };
                 if inset > 0 {
                     let params = &mut *(lparam as *mut NCCALCSIZE_PARAMS);
-                    let mut window_rect = RECT::default();
+                    let mut window_rect: RECT = std::mem::zeroed();
                     if GetWindowRect(hwnd, &mut window_rect) != 0 {
                         let restored = params.rgrc[0].top - inset;
                         if restored >= window_rect.top {
@@ -514,16 +514,24 @@ mod tests {
 
     #[test]
     fn panel_guard_restores_tao_top_inset_and_keeps_plain_windows_untouched() {
+        use core::ffi::c_void;
         use windows_sys::Win32::UI::Shell::SetWindowSubclass;
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            CreateWindowExW, DestroyWindow, SetWindowPos, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-            SWP_NOZORDER, WS_POPUP,
+            CreateWindowExW, SetWindowPos, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, WS_POPUP,
         };
+
+        struct PanelTestWindow(*mut c_void);
+        impl Drop for PanelTestWindow {
+            fn drop(&mut self) {
+                use windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow;
+                unsafe { DestroyWindow(self.0) };
+            }
+        }
 
         unsafe {
             let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
             let make_window = || {
-                let window = TestWindow(CreateWindowExW(
+                let window = PanelTestWindow(CreateWindowExW(
                     0,
                     class.as_ptr(),
                     std::ptr::null(),
