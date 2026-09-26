@@ -217,6 +217,22 @@ pub(super) fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
             win::prefer_rounded_corners(hwnd.0 as isize);
             win::suppress_panel_frame(hwnd.0 as isize);
         }
+        // 顶部客户区恢复：tao 的 NCCALCSIZE 顶部内缩留下一条 CSS 够不到的
+        // 空缝（DWM 强调色边框下呈蓝色细线），消息处理把它减回去。子类
+        // 必须在窗口所属线程安装，且早于首次显示。
+        let handle = app.clone();
+        let id = pod.id;
+        if let Err(error) = panel.run_on_main_thread(move || {
+            if let Some(panel) = pod_panel(&handle, id) {
+                if let Ok(hwnd) = panel.hwnd() {
+                    if !win::install_panel_chrome_guard(hwnd.0 as isize) {
+                        crate::logging::write("[window] 安装面板顶部客户区恢复处理失败");
+                    }
+                }
+            }
+        }) {
+            crate::logging::write(&format!("[window] 分派面板初始化失败: {error}"));
+        }
     }
     place_pod_bar(app, pod, false);
 }

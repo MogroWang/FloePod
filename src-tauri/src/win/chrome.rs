@@ -21,6 +21,7 @@ fn strip_non_client_styles(style: u32, ex_style: u32) -> (u32, u32) {
 }
 
 const BAR_CHROME_SUBCLASS_ID: usize = 0x4650_4241;
+const PANEL_CHROME_SUBCLASS_ID: usize = 0x4650_4242;
 
 /// 在窗口所属 UI 线程安装浮动条的无边框消息处理，早于首次显示。
 /// tao 会从内部 WindowFlags 重新生成 WS_CAPTION 等样式；只在焦点事件
@@ -80,6 +81,82 @@ unsafe extern "system" fn bar_chrome_proc(
         WM_NCDESTROY => {
             RemoveWindowSubclass(hwnd, Some(bar_chrome_proc), subclass_id);
             DefSubclassProc(hwnd, message, wparam, lparam)
+        }
+        _ => DefSubclassProc(hwnd, message, wparam, lparam),
+    }
+}
+
+/// 浮动面板窗口的顶部客户区恢复处理。
+///
+/// tao 对「无边框 + 系统阴影」窗口在 WM_NCCALCSIZE 里把客户区四周内缩一圈
+/// （calculate_insets_for_dpi：左右下为 frame 厚度，顶部在 Win11 上按 DPI
+/// 约为 1-2px）。左右下的内缩由 DWM 绘制阴影，视觉上是玻璃内容外的透明环；
+/// 顶部的 1-2px 却是一条 CSS 永远够不到的非客户区空缝——DWM 不填它时呈现
+/// 为顶部「空缺的边框」，系统开启强调色窗口边框时又被画成一条蓝色细线，
+/// 且 DWMWA_CAPTION_COLOR / DWMWA_BORDER_COLOR 都压不住这圈区域本身的存在。
+///
+/// 本子类在 tao 处理之后把客户区顶边减回 tao 加上的内缩量（同 DPI 公式复算），
+/// 让 WebView 铺满窗口顶部：空缝消失，系统阴影（样式位常驻）、DWM 圆角与
+/// 外描边压制（suppress_panel_frame）全部不受影响。`top` 不得越过窗口矩形
+/// ——tao 未内缩时（Win10 顶部内缩为 0、异常窗口）保持原值不动。
+pub fn install_panel_chrome_guard(hwnd: isize) -> bool {
+    use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+    use windows_sys::Win32::UI::Shell::SetWindowSubclass;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+    unsafe {
+        let handle = hwnd as *mut c_void;
+        if GetWindowThreadProcessId(handle, std::ptr::null_mut()) != GetCurrentThreadId() {
+            return false;
+        }
+        if SetWindowSubclass(handle, Some(panel_chrome_proc), PANEL_CHROME_SUBCLASS_ID, 0) == 0 {
+            return false;
+        }
+    }
+    true
+}
+
+unsafe extern "system" fn panel_chrome_proc(
+    hwnd: *mut c_void,
+    message: u32,
+    wparam: usize,
+    lparam: isize,
+    subclass_id: usize,
+    _data: usize,
+) -> isize {
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
+    use windows_sys::Win32::UI::Shell::DefSubclassProc;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowRect, IsZoomed, NCCALCSIZE_PARAMS, WM_NCCALCSIZE, WM_NCDESTROY,
+    };
+    match message {
+        WM_NCCALCSIZE if wparam != 0 => {
+            let result = DefSubclassProc(hwnd, message, wparam, lparam);
+            if IsZoomed(hwnd) == 0 {
+                // tao 顶部内缩：build >= 22000 时 round(dpi/96)，更早的系统为 0。
+                let dpi = GetDpiForWindow(hwnd);
+                let inset = if dpi == 0 {
+                    0
+                } else {
+                    (dpi as f32 / 96.0).round() as i32
+                };
+                if inset > 0 {
+                    let params = &mut *(lparam as *mut NCCALCSIZE_PARAMS);
+                    let mut window_rect: RECT = std::mem::zeroed();
+                    if GetWindowRect(hwnd, &mut window_rect) != 0 {
+                        let restored = params.rgrc[0].top - inset;
+                        if restored >= window_rect.top {
+                            params.rgrc[0].top = restored;
+                        }
+                    }
+                }
+            }
+            result
+        }
+        WM_NCDESTROY => {
+            use windows_sys::Win32::UI::Shell::{DefSubclassProc as Def, RemoveWindowSubclass};
+            RemoveWindowSubclass(hwnd, Some(panel_chrome_proc), subclass_id);
+            Def(hwnd, message, wparam, lparam)
         }
         _ => DefSubclassProc(hwnd, message, wparam, lparam),
     }
@@ -389,5 +466,158 @@ mod tests {
 
         assert_eq!(cleaned_style, preserved_style);
         assert_eq!(cleaned_ex_style, preserved_ex_style);
+    }
+
+    /// 模拟 tao 的 WM_NCCALCSIZE 顶部内缩（Win11 100% DPI = 1px），供测试
+    /// 验证面板子类把客户区顶边恢复回窗口顶边。
+    unsafe extern "system" fn mock_tao_inset_proc(
+        hwnd: *mut c_void,
+        message: u32,
+        wparam: usize,
+        lparam: isize,
+        _subclass_id: usize,
+        _data: usize,
+    ) -> isize {
+        use windows_sys::Win32::UI::Shell::DefSubclassProc;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{NCCALCSIZE_PARAMS, WM_NCCALCSIZE};
+        match message {
+            WM_NCCALCSIZE if wparam != 0 => {
+                let result = DefSubclassProc(hwnd, message, wparam, lparam);
+                if result == 0 {
+                    let params = &mut *(lparam as *mut NCCALCSIZE_PARAMS);
+                    params.rgrc[0].top += 1;
+                }
+                result
+            }
+            _ => DefSubclassProc(hwnd, message, wparam, lparam),
+        }
+    }
+
+    fn assert_client_covers_window(hwnd: *mut c_void) {
+        use windows_sys::Win32::Foundation::{POINT, RECT};
+        use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetClientRect, GetWindowRect};
+        unsafe {
+            let mut client: RECT = std::mem::zeroed();
+            let mut outer: RECT = std::mem::zeroed();
+            let mut origin = POINT { x: 0, y: 0 };
+            assert_ne!(GetClientRect(hwnd, &mut client), 0);
+            assert_ne!(GetWindowRect(hwnd, &mut outer), 0);
+            assert_ne!(ClientToScreen(hwnd, &mut origin), 0);
+            let report = format!(
+                "outer=({},{},{},{}) client=({},{},{},{}) origin=({},{})",
+                outer.left,
+                outer.top,
+                outer.right,
+                outer.bottom,
+                client.left,
+                client.top,
+                client.right,
+                client.bottom,
+                origin.x,
+                origin.y
+            );
+            assert_eq!(origin.x, outer.left, "client-left mismatch: {report}");
+            assert_eq!(origin.y, outer.top, "client-top mismatch: {report}");
+            // 顶部内缩恢复后客户区在竖直方向覆盖整个窗口。
+            assert_eq!(client.top, 0, "client rect must start at 0: {report}");
+            assert_eq!(
+                client.bottom,
+                outer.bottom - outer.top,
+                "client height mismatch: {report}"
+            );
+        }
+    }
+
+    #[test]
+    fn panel_guard_restores_tao_top_inset_and_keeps_plain_windows_untouched() {
+        use core::ffi::c_void;
+        use windows_sys::Win32::UI::Shell::SetWindowSubclass;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, SetWindowPos, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+            SWP_NOSIZE, SWP_NOZORDER, WS_POPUP,
+        };
+
+        struct PanelTestWindow(*mut c_void);
+        impl Drop for PanelTestWindow {
+            fn drop(&mut self) {
+                use windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow;
+                unsafe { DestroyWindow(self.0) };
+            }
+        }
+
+        unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let make_window = || {
+                let window = PanelTestWindow(CreateWindowExW(
+                    0,
+                    class.as_ptr(),
+                    std::ptr::null(),
+                    WS_POPUP,
+                    10,
+                    10,
+                    380,
+                    240,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                ));
+                assert!(!window.0.is_null());
+                window
+            };
+
+            // 场景一：模拟 tao 顶部内缩——子类必须把客户区顶边恢复到窗口顶边。
+            // 安装顺序决定调用顺序：panel 子类先收到消息，经 DefSubclassProc
+            // 链到模拟器（top += 1），再减回去。
+            {
+                let window = make_window();
+                assert_ne!(
+                    SetWindowSubclass(
+                        window.0,
+                        Some(mock_tao_inset_proc),
+                        PANEL_CHROME_SUBCLASS_ID + 1,
+                        0
+                    ),
+                    0
+                );
+                assert!(install_panel_chrome_guard(window.0 as isize));
+                assert!(install_panel_chrome_guard(window.0 as isize));
+                assert_ne!(
+                    SetWindowPos(
+                        window.0,
+                        std::ptr::null_mut(),
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE,
+                    ),
+                    0
+                );
+                assert_client_covers_window(window.0);
+                drop(window);
+            }
+
+            // 场景二：无 tao 内缩的普通窗口——恢复逻辑必须是安全的空操作。
+            {
+                let window = make_window();
+                assert!(install_panel_chrome_guard(window.0 as isize));
+                assert_ne!(
+                    SetWindowPos(
+                        window.0,
+                        std::ptr::null_mut(),
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE,
+                    ),
+                    0
+                );
+                assert_client_covers_window(window.0);
+                drop(window);
+            }
+        }
     }
 }
