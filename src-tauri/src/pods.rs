@@ -89,6 +89,12 @@ fn apply_patch(pod: &mut Pod, patch: &serde_json::Value) -> Result<(), String> {
                     .map_err(|_| format!("字段 {field} 超出有效范围"))?;
             }
             "barColor" => pod.bar_color = string(value, field)?,
+            "barEmoji" => pod.bar_emoji = string(value, field)?,
+            "showCount" => {
+                pod.show_count = value
+                    .as_bool()
+                    .ok_or_else(|| format!("字段 {field} 必须是布尔值"))?;
+            }
             "cornerRadius" => {
                 pod.corner_radius = u32::try_from(unsigned(value, field)?)
                     .map_err(|_| format!("字段 {field} 超出有效范围"))?;
@@ -399,6 +405,8 @@ mod tests {
             "barWidth": "56",
             "barLength": "220",
             "barColor": "#aabbcc",
+            "barEmoji": "📁",
+            "showCount": false,
             "cornerRadius": "12",
             "borderColor": "#80ffaa",
             "borderOpacity": "0.4",
@@ -413,6 +421,8 @@ mod tests {
         assert_eq!(pod.bar_width, 56);
         assert_eq!(pod.bar_length, 220);
         assert_eq!(pod.bar_color, "#aabbcc");
+        assert_eq!(pod.bar_emoji, "📁");
+        assert!(!pod.show_count);
         assert_eq!(pod.corner_radius, 12);
         assert_eq!(pod.border_color, "#80ffaa");
         assert_eq!(pod.border_opacity, 0.4);
@@ -424,6 +434,7 @@ mod tests {
         let mut pod = Pod::default();
         assert!(apply_patch(&mut pod, &serde_json::json!({ "enabled": "yes" })).is_err());
         assert!(apply_patch(&mut pod, &serde_json::json!({ "autoHide": "yes" })).is_err());
+        assert!(apply_patch(&mut pod, &serde_json::json!({ "showCount": "yes" })).is_err());
         assert!(apply_patch(&mut pod, &serde_json::json!({ "panelWidth": -1 })).is_err());
         assert!(apply_patch(&mut pod, &serde_json::json!({ "barWidth": -1 })).is_err());
         assert!(apply_patch(&mut pod, &serde_json::json!({ "cornerRadius": -1 })).is_err());
