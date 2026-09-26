@@ -67,10 +67,11 @@ pub fn stage_paths(
         }
         fs::symlink_metadata(&source)
             .map_err(|error| format!("无法读取源路径 {}: {error}", source.display()))?;
-        /* 来自本匣暂存目录的文件一律不再暂存：拖回自身不应产生重名副本，
-        也不应触发剪切清理（剪切模式下的自我投递曾让文件被错误删除）。 */
+        /* 来自本匣暂存目录的文件：复制拖回按用户要求创建后缀副本
+        （unique_target 命名），剪切 / 快捷方式拖回维持忽略——移动会
+        原地改名，留下指向旧路径的悬空条目。 */
         let resolved = crate::file_paths::resolve_path(&source)?;
-        if crate::file_paths::path_is_within(&resolved, &resolved_directory) {
+        if crate::file_paths::path_is_within(&resolved, &resolved_directory) && action != "copy" {
             ignored_own.push(source);
             continue;
         }
@@ -202,8 +203,20 @@ fn prepare_files(
                             source.display()
                         ));
                     }
+                    let resolved_source = crate::file_paths::resolve_path(source)?;
                     rules::validate_source(pod, source, &metadata)?;
                     if pod.rules.enabled && pod.rules.duplicate_policy == "reject" {
+                        /* 内容重复比较排除自身路径：复制拖回自身的源就是匣内
+                        既有条目，与自身比较必然内容相同，会误判为重复。 */
+                        let duplicate_candidates = duplicate_candidates
+                            .iter()
+                            .filter(|candidate| {
+                                crate::file_paths::resolve_path(candidate)
+                                    .map(|resolved| resolved != resolved_source)
+                                    .unwrap_or(true)
+                            })
+                            .cloned()
+                            .collect::<Vec<_>>();
                         if let Some(duplicate) = rules::duplicate_of(source, &duplicate_candidates)?
                         {
                             return Err(format!(
@@ -213,7 +226,6 @@ fn prepare_files(
                             ));
                         }
                     }
-                    let resolved_source = crate::file_paths::resolve_path(source)?;
                     if resolved_source.parent().is_none() {
                         return Err(format!("不能暂存文件系统根目录: {}", source.display()));
                     }

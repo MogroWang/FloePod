@@ -358,8 +358,20 @@ pub fn finalize(app: AppHandle, token: String) -> Result<DragCutOutcome, String>
                 continue;
             }
             None => {
+                /* 终保底：剪切源被外部接收（移动）后必然已离开暂存目录；
+                它此刻仍在原位，说明外部从未接走——无论落点记录是否缺失
+                或路径表示如何差异（自拖、面板记录竞态等），一律保留源文件。
+                与 record_drop 的双键匹配互为独立防线。 */
+                if fs::symlink_metadata(&path).is_ok() {
+                    refused += 1;
+                    crate::logging::write(&format!(
+                        "[drag-cut] {} 拒绝清理源文件：无落点记录，但文件仍在暂存目录内",
+                        entry.name
+                    ));
+                    continue;
+                }
                 crate::logging::write(&format!(
-                    "[drag-cut] {} 无应用内落点记录，按外部接收清理源文件",
+                    "[drag-cut] {} 无应用内落点记录，源已离开暂存目录，按外部接收清理",
                     entry.name
                 ));
             }
