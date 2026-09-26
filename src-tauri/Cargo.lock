@@ -1260,7 +1260,7 @@ dependencies = [
 
 [[package]]
 name = "floe-pod"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "image",
  "kamadak-exif",

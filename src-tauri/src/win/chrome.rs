@@ -102,9 +102,16 @@ unsafe extern "system" fn bar_chrome_proc(
 /// 过渡动画（透明 WebView2 场景下会闪出残影）。面板的标题栏伪影在
 /// 该架构下本就不可能出现：NCCALCSIZE 内缩后顶部非客户区只有 1-2px，
 /// 容不下任何标题栏。
+///
+/// Win11 的 NCCALCSIZE 顶部内缩（tao calculate_insets_for_dpi，按 DPI
+/// 约 1-2px）会把客户区顶边压到 WebView 之下，留下一条 CSS 够不到的
+/// 顶部非客户区；DWM 默认用主题 caption 色（浅色主题下是白色）填充
+/// 它，呈现为面板顶部的一条白色细线。DWMWA_CAPTION_COLOR 请求不绘制
+/// caption，让这条落回透明——它同样不触及阴影、圆角与样式位；不支持
+/// 该属性的系统（Win10 无此内缩）安全地忽略调用失败。
 pub fn suppress_panel_frame(hwnd: isize) {
     use windows_sys::Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE,
+        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_COLOR_NONE,
         DWMWA_TRANSITIONS_FORCEDISABLED,
     };
     unsafe {
@@ -116,6 +123,15 @@ pub fn suppress_panel_frame(hwnd: isize) {
             hwnd,
             DWMWA_BORDER_COLOR as u32,
             &border_color as *const u32 as *const c_void,
+            std::mem::size_of::<u32>() as u32,
+        );
+
+        // 顶部 1-2px 内缩条不绘制（见函数注释），否则浅色主题下是白线。
+        let caption_color: u32 = DWMWA_COLOR_NONE;
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_CAPTION_COLOR as u32,
+            &caption_color as *const u32 as *const c_void,
             std::mem::size_of::<u32>() as u32,
         );
 

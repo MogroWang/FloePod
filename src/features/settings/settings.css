@@ -547,8 +547,7 @@
   color: var(--ink-3);
   margin: 10px 0 2px;
 }
-.settings-root .pod-group:first-child .group-title,
-.settings-root .adv-pod-head + .pod-group .group-title {
+.settings-root .pod-group:first-child .group-title {
   margin-top: 0;
 }
 .settings-root .group-hint {
@@ -556,21 +555,84 @@
   color: var(--ink-3);
   font-size: 11.5px;
 }
-/* 高级设置页:按匣展示规则匣与敏感匣（两张独立卡片） */
+/* 高级设置页:按匣展示规则匣与敏感匣（一张卡片,两个分组） */
 .settings-root .adv-pod-section {
   margin-top: 26px;
 }
-.settings-root .adv-pod-head {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--line);
-  margin-bottom: 12px;
+.settings-root .pod-card .sep {
+  margin: 8px 0;
 }
-.settings-root .adv-pod-off {
-  font-size: 11.5px;
-  color: var(--ink-3);
+
+/* 匣编辑器（规则匣/敏感匣）共用控件，两个编辑器必须同规格 */
+.settings-root .rule-input {
+  width: 210px;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--ink);
+  font-size: 12.5px;
+  font-family: inherit;
+  outline: none;
+}
+.settings-root .rule-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.settings-root .rule-input.compact {
+  width: 150px;
+}
+.settings-root .rule-input.number {
+  width: 92px;
+}
+.settings-root .rule-input.path {
+  min-width: 0;
+  flex: 1;
+}
+.settings-root .rule-input.mono {
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 11px;
+}
+.settings-root .path-control,
+.settings-root .number-control {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.settings-root .path-control {
+  width: min(330px, 45vw);
+}
+.settings-root .number-control span {
+  color: var(--ink-2);
+  font-size: 12px;
+}
+.settings-root .rule-button {
+  flex-shrink: 0;
+  min-height: 32px;
+  padding: 6px 13px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 550;
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    background 150ms var(--ease-out),
+    border-color 150ms var(--ease-out);
+}
+.settings-root .rule-button:hover {
+  background: var(--surface-hover);
+}
+.settings-root .rule-button.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.settings-root .rule-button.primary:hover {
+  background: var(--accent-hover);
 }
 .settings-root .frow {
   display: flex;

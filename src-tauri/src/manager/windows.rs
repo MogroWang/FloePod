@@ -209,8 +209,9 @@ pub(super) fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
         }
     }
     // 浮动面板：请求系统圆角，与 CSS 的 clip-path 圆角轮廓对齐；
-    // 只压制 Win11 的 1px 外描边与焦点过渡（suppress_panel_frame），
-    // 绝不动样式位与框架——面板的系统阴影依赖它们（见该函数注释）。
+    // 只压制 Win11 的 1px 外描边、顶部内缩条的 caption 填充与焦点过渡
+    // （suppress_panel_frame），绝不动样式位与框架——面板的系统阴影
+    // 依赖它们（见该函数注释）。
     if let Some(panel) = pod_panel(app, pod.id) {
         if let Ok(hwnd) = panel.hwnd() {
             win::prefer_rounded_corners(hwnd.0 as isize);
