@@ -73,6 +73,7 @@ onMounted(refreshStatus);
     <SettingsRow label="自动锁定" hint="0 表示仅退出或手动锁定时">
       <div class="number-control">
         <input
+          class="rule-input number"
           type="number"
           min="0"
           max="1440"
@@ -88,6 +89,7 @@ onMounted(refreshStatus);
     <SettingsRow label="保留期限" hint="0 为不清理；到期文件移入回收站">
       <div class="number-control">
         <input
+          class="rule-input number"
           type="number"
           min="0"
           max="3650"
@@ -130,9 +132,11 @@ onMounted(refreshStatus);
       <span>{{ message }}</span>
       <span v-if="status?.expiresSoon">{{ status.expiresSoon }} 项已达到提醒或清理期限。</span>
       <div v-if="security.enabled" class="security-actions">
-        <button type="button" @click="refreshStatus">检查状态</button>
-        <button v-if="status?.locked" type="button" class="primary" @click="unlockNow">解锁</button>
-        <button v-else type="button" @click="lockNow">立即锁定</button>
+        <button type="button" class="rule-button" @click="refreshStatus">检查状态</button>
+        <button v-if="status?.locked" type="button" class="rule-button primary" @click="unlockNow">
+          解锁
+        </button>
+        <button v-else type="button" class="rule-button" @click="lockNow">立即锁定</button>
       </div>
     </div>
     <p class="disable-note">关闭敏感匣不解密已有文件；解密请用 Windows 文件属性。</p>
@@ -140,7 +144,8 @@ onMounted(refreshStatus);
 </template>
 
 <style scoped>
-/* 无自身外壳：直接铺在所属匣卡片内，行距与分隔线对齐设置卡片规格 */
+/* 无自身外壳：直接铺在所属匣卡片内，行距与分隔线对齐设置卡片规格。
+   输入框与按钮统一走 settings.css 的 .rule-input / .rule-button。 */
 .security-editor :deep(.row) {
   padding: 14px 0;
 }
@@ -151,6 +156,8 @@ onMounted(refreshStatus);
   padding: 10px 12px;
   border-radius: 9px;
   background: var(--accent-soft);
+  color: var(--ink-2);
+  font-size: 11.5px;
 }
 .disable-note {
   margin: 10px 0 0;
@@ -162,60 +169,10 @@ onMounted(refreshStatus);
   margin: 0;
   background: var(--line);
 }
-.number-control,
 .security-actions {
   display: flex;
   align-items: center;
   gap: 7px;
-}
-.number-control input {
-  width: 92px;
-  min-height: 32px;
-  padding: 6px 10px;
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  background: var(--surface-raised);
-  color: var(--ink);
-  font-size: 12.5px;
-  font-family: inherit;
-  outline: none;
-}
-.number-control input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-.number-control span,
-.security-status {
-  color: var(--ink-2);
-  font-size: 11.5px;
-}
-.security-actions {
   margin-top: 5px;
-}
-button {
-  min-height: 32px;
-  padding: 6px 13px;
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  background: var(--surface-raised);
-  color: var(--ink);
-  font-size: 12.5px;
-  font-weight: 550;
-  font-family: inherit;
-  cursor: pointer;
-  transition:
-    background 150ms var(--ease-out),
-    border-color 150ms var(--ease-out);
-}
-button:hover {
-  background: var(--surface-hover);
-}
-button.primary {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--on-accent);
-}
-button.primary:hover {
-  background: var(--accent-hover);
 }
 </style>

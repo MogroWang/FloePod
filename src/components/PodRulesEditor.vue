@@ -289,7 +289,8 @@ async function pickSourceFolder() {
 </template>
 
 <style scoped>
-/* 无自身外壳：直接铺在所属匣卡片内，行距与分隔线对齐设置卡片规格 */
+/* 无自身外壳：直接铺在所属匣卡片内，行距与分隔线对齐设置卡片规格。
+   输入框与按钮统一走 settings.css 的 .rule-input / .rule-button。 */
 .rules-editor :deep(.row) {
   padding: 14px 0;
 }
@@ -297,67 +298,5 @@ async function pickSourceFolder() {
   height: 1px;
   margin: 0;
   background: var(--line);
-}
-.rule-input {
-  width: 210px;
-  min-height: 32px;
-  padding: 6px 10px;
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  background: var(--surface-raised);
-  color: var(--ink);
-  font-size: 12.5px;
-  font-family: inherit;
-  outline: none;
-}
-.rule-input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-.rule-input.compact {
-  width: 150px;
-}
-.rule-input.number {
-  width: 92px;
-}
-.rule-input.path {
-  min-width: 0;
-  flex: 1;
-}
-.mono {
-  font-family: ui-monospace, "Cascadia Code", monospace;
-  font-size: 11px;
-}
-.path-control,
-.number-control {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-.path-control {
-  width: min(330px, 45vw);
-}
-.number-control span {
-  color: var(--ink-2);
-  font-size: 12px;
-}
-.rule-button {
-  flex-shrink: 0;
-  min-height: 32px;
-  padding: 6px 13px;
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  background: var(--surface-raised);
-  color: var(--ink);
-  font-size: 12.5px;
-  font-weight: 550;
-  font-family: inherit;
-  cursor: pointer;
-  transition:
-    background 150ms var(--ease-out),
-    border-color 150ms var(--ease-out);
-}
-.rule-button:hover {
-  background: var(--surface-hover);
 }
 </style>
