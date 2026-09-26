@@ -333,16 +333,36 @@ pub fn finalize(app: AppHandle, token: String) -> Result<DragCutOutcome, String>
     for (entry, path) in candidates {
         /* 落点在本应用窗口内（拖回自身、或落进没有接收文件的窗口）时保留源文件。
         拖拽插件只回报“已投递”，照常清理会让用户刚拖出的文件凭空消失。
-        例外：文件确实被另一个匣收下（该匣暂存成功）时按移动处理。 */
-        match drop_guard::in_app_drop_target(&state, &path) {
+        例外：文件确实被另一个匣收下（该匣暂存成功）时按移动处理。
+        剪切源曾因拖放事件路径与暂存路径的表示差异（符号链接目录、8.3 短名、
+        `\\?\` 前缀等）匹配不上应用内落点记录而被误清理，此处与 record_drop
+        两侧统一使用原始 + 规范化双键（见 drop_guard::equivalent_keys），
+        并把每次判定写入日志，便于复发时从 debug.log 溯源。 */
+        let verdict = drop_guard::in_app_drop_target(&state, &path);
+        match verdict {
             Some(drop_guard::InAppDropTarget::Pod(target_pod))
                 if target_pod != entry.pod_id as u64
-                    && drop_guard::restaged_into_other_pod(&state, &path, entry.pod_id as u64) => {}
-            Some(_) => {
+                    && drop_guard::restaged_into_other_pod(&state, &path, entry.pod_id as u64) =>
+            {
+                crate::logging::write(&format!(
+                    "[drag-cut] {} 按跨匣移动处理：落点匣 {target_pod}",
+                    entry.name
+                ));
+            }
+            Some(target) => {
                 refused += 1;
+                crate::logging::write(&format!(
+                    "[drag-cut] {} 拒绝清理源文件：落点在本应用内（{:?}）",
+                    entry.name, target
+                ));
                 continue;
             }
-            None => {}
+            None => {
+                crate::logging::write(&format!(
+                    "[drag-cut] {} 无应用内落点记录，按外部接收清理源文件",
+                    entry.name
+                ));
+            }
         }
         match fs::symlink_metadata(&path) {
             Ok(metadata) if file_ops::is_reparse_or_symlink(&metadata) => failed.push(format!(

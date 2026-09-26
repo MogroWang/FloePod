@@ -9,6 +9,7 @@
 //! 记录在 Rust 侧完成：窗口 Drop 事件先于拖拽插件的会话结束回调到达，判定
 //! 不依赖前端两个 WebView 之间的消息先后。
 
+use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -20,11 +21,29 @@ use crate::state::AppState;
 /// 记录有效期。拖拽会话很短，几十秒足够覆盖 prepare → drop → finalize。
 const RECORD_TTL: Duration = Duration::from_secs(90);
 
+/// 同一文件的多种路径形态统一折算成等价键：原始键 + 系统规范化键。
+///
+/// 拖放事件携带的路径来自拖拽数据对象（插件写入前做了 fs::canonicalize），
+/// 而剪切源路径由暂存配置拼接，两者可能相差符号链接目录、8.3 短名、
+/// `\\?\` 前缀等表示差异；`path_key` 的小写与斜杠归一消除不了这些差异。
+/// 双方都在文件仍存在的时刻做 `fs::canonicalize` 并把两种键都记入集合，
+/// 只要两次规范化指向同一文件，结果逐字节相同，匹配不再依赖路径表示。
+fn equivalent_keys(path: &Path) -> Vec<String> {
+    let mut keys = vec![crate::file_paths::path_key(path)];
+    if let Ok(canonical) = fs::canonicalize(path) {
+        let canonical = crate::file_paths::path_key(&canonical);
+        if !keys.contains(&canonical) {
+            keys.push(canonical);
+        }
+    }
+    keys
+}
+
 #[derive(Debug, Clone)]
 pub struct DropRecord {
     /// 落点所属匣；应用内非匣窗口（设置等）为 None。
     pub pod_id: Option<u64>,
-    /// 已规范化的路径键（`file_paths::path_key`）。
+    /// 已规范化的路径等价键（原始 + `fs::canonicalize`，见 `equivalent_keys`）。
     pub paths: Vec<String>,
     pub at: Instant,
 }
@@ -52,14 +71,19 @@ pub fn record_drop(app: &AppHandle, label: &str, paths: &[std::path::PathBuf]) {
         PodWindow::Bar(id) | PodWindow::Panel(id) => id,
     });
     let now = Instant::now();
+    let mut keys = Vec::new();
+    for path in paths {
+        for key in equivalent_keys(path) {
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
+        }
+    }
     let mut drops = state.recent_drops.lock().unwrap();
     drops.retain(|record| now.duration_since(record.at) < RECORD_TTL);
     drops.push(DropRecord {
         pod_id,
-        paths: paths
-            .iter()
-            .map(|path| crate::file_paths::path_key(path))
-            .collect(),
+        paths: keys,
         at: now,
     });
 }
@@ -82,14 +106,14 @@ pub fn record_restages(state: &AppState, pod_id: u64, sources: &[std::path::Path
 
 /// 该路径最近是否落在本应用的窗口里。
 pub fn in_app_drop_target(state: &AppState, path: &Path) -> Option<InAppDropTarget> {
-    let key = crate::file_paths::path_key(path);
+    let keys = equivalent_keys(path);
     let now = Instant::now();
     let drops = state.recent_drops.lock().unwrap();
     drops
         .iter()
         .rev()
         .filter(|record| now.duration_since(record.at) < RECORD_TTL)
-        .find(|record| record.paths.contains(&key))
+        .find(|record| keys.iter().any(|key| record.paths.contains(key)))
         .map(|record| match record.pod_id {
             Some(pod_id) => InAppDropTarget::Pod(pod_id),
             None => InAppDropTarget::OtherWindow,
@@ -98,10 +122,10 @@ pub fn in_app_drop_target(state: &AppState, path: &Path) -> Option<InAppDropTarg
 
 /// 该路径最近是否被暂存进 `own_pod` 之外的某个匣（跨匣移动）。
 pub fn restaged_into_other_pod(state: &AppState, path: &Path, own_pod: u64) -> bool {
-    let key = crate::file_paths::path_key(path);
+    let keys = equivalent_keys(path);
     let now = Instant::now();
     let restages = state.recent_restages.lock().unwrap();
-    restages.get(&key).is_some_and(|record| {
-        record.pod_id != own_pod && now.duration_since(record.at) < RECORD_TTL
+    restages.iter().any(|(key, record)| {
+        keys.contains(key) && record.pod_id != own_pod && now.duration_since(record.at) < RECORD_TTL
     })
 }
