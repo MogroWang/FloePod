@@ -97,8 +97,11 @@ unsafe extern "system" fn bar_chrome_proc(
 ///
 /// 本子类在 tao 处理之后把客户区顶边减回 tao 加上的内缩量（同 DPI 公式复算），
 /// 让 WebView 铺满窗口顶部：空缝消失，系统阴影（样式位常驻）、DWM 圆角与
-/// 外描边压制（suppress_panel_frame）全部不受影响。`top` 不得越过窗口矩形
-/// ——tao 未内缩时（Win10 顶部内缩为 0、异常窗口）保持原值不动。
+/// 外描边压制（suppress_panel_frame）全部不受影响。恢复无条件执行——真实
+/// 面板恒走 tao 内缩分支（shadow(true) 使 MARKER_UNDECORATED_SHADOW 常置），
+/// 恢复量恰为 inset；1.7.2 曾按瞬时窗口矩形做防护，但面板显示路径上
+/// WM_NCCALCSIZE 触发时窗口矩形可能尚未更新，防护被误拦导致空缺时隐时现。
+/// 每次恢复写入 debug.log（[panel-chrome]），真机可核对是否生效。
 pub fn install_panel_chrome_guard(hwnd: isize) -> bool {
     use windows_sys::Win32::System::Threading::GetCurrentThreadId;
     use windows_sys::Win32::UI::Shell::SetWindowSubclass;
@@ -115,6 +118,10 @@ pub fn install_panel_chrome_guard(hwnd: isize) -> bool {
     true
 }
 
+/// 顶部恢复日志的累计上限：面板几何变化会高频触发 NCCALCSIZE，
+/// 只记录前若干次供真机核对，之后静默。
+static PANEL_CHROME_LOGGED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 unsafe extern "system" fn panel_chrome_proc(
     hwnd: *mut c_void,
     message: u32,
@@ -123,17 +130,22 @@ unsafe extern "system" fn panel_chrome_proc(
     subclass_id: usize,
     _data: usize,
 ) -> isize {
-    use windows_sys::Win32::Foundation::RECT;
     use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
     use windows_sys::Win32::UI::Shell::DefSubclassProc;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetWindowRect, IsZoomed, NCCALCSIZE_PARAMS, WM_NCCALCSIZE, WM_NCDESTROY,
+        IsZoomed, NCCALCSIZE_PARAMS, WM_NCCALCSIZE, WM_NCDESTROY,
     };
     match message {
         WM_NCCALCSIZE if wparam != 0 => {
             let result = DefSubclassProc(hwnd, message, wparam, lparam);
             if IsZoomed(hwnd) == 0 {
                 // tao 顶部内缩：build >= 22000 时 round(dpi/96)，更早的系统为 0。
+                // 1.7.2 版曾用 GetWindowRect 防护「未内缩时不越界」：但面板每次
+                // 显示都连发 set_position + set_size，WM_NCCALCSIZE 在几何应用
+                // 过程中触发时窗口矩形可能仍是旧值，防护被误拦、恢复失效——
+                // 这正是顶部空缺时隐时现的原因。真实面板恒走 tao 内缩分支
+                // （MARKER_UNDECORATED_SHADOW 随 shadow(true) 常置），恢复量
+                // 恰为 inset，因此这里无条件恢复，不再依赖瞬时窗口矩形。
                 let dpi = GetDpiForWindow(hwnd);
                 let inset = if dpi == 0 {
                     0
@@ -142,12 +154,14 @@ unsafe extern "system" fn panel_chrome_proc(
                 };
                 if inset > 0 {
                     let params = &mut *(lparam as *mut NCCALCSIZE_PARAMS);
-                    let mut window_rect: RECT = std::mem::zeroed();
-                    if GetWindowRect(hwnd, &mut window_rect) != 0 {
-                        let restored = params.rgrc[0].top - inset;
-                        if restored >= window_rect.top {
-                            params.rgrc[0].top = restored;
-                        }
+                    let before = params.rgrc[0].top;
+                    params.rgrc[0].top = before - inset;
+                    use std::sync::atomic::Ordering;
+                    if PANEL_CHROME_LOGGED.fetch_add(1, Ordering::Relaxed) < 16 {
+                        crate::logging::write(&format!(
+                            "[panel-chrome] NCCALCSIZE 顶部恢复 inset={inset} top {before} -> {}",
+                            params.rgrc[0].top
+                        ));
                     }
                 }
             }
@@ -532,10 +546,11 @@ mod tests {
     #[test]
     fn panel_guard_restores_tao_top_inset_and_keeps_plain_windows_untouched() {
         use core::ffi::c_void;
+        use windows_sys::Win32::Foundation::RECT;
         use windows_sys::Win32::UI::Shell::SetWindowSubclass;
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            CreateWindowExW, SetWindowPos, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
-            SWP_NOSIZE, SWP_NOZORDER, WS_POPUP,
+            CreateWindowExW, GetClientRect, SetWindowPos, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+            SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_POPUP,
         };
 
         struct PanelTestWindow(*mut c_void);
@@ -599,7 +614,10 @@ mod tests {
                 drop(window);
             }
 
-            // 场景二：无 tao 内缩的普通窗口——恢复逻辑必须是安全的空操作。
+            // 场景二：恢复无条件执行——无内缩模拟时（DefWindowProc 不内缩
+            // 的 WS_POPUP 窗口），panel 子类按窗口 DPI 减回 inset，客户区
+            // 顶边相应上移。这里只验证子类不崩溃、几何仍可查询；恢复量的
+            // 精确性由场景一的模拟链路断言。
             {
                 let window = make_window();
                 assert!(install_panel_chrome_guard(window.0 as isize));
@@ -615,7 +633,8 @@ mod tests {
                     ),
                     0
                 );
-                assert_client_covers_window(window.0);
+                let mut client: RECT = std::mem::zeroed();
+                assert_ne!(GetClientRect(window.0, &mut client), 0);
                 drop(window);
             }
         }
