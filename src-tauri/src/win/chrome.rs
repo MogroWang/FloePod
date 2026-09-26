@@ -504,11 +504,28 @@ mod tests {
             assert_ne!(GetClientRect(hwnd, &mut client), 0);
             assert_ne!(GetWindowRect(hwnd, &mut outer), 0);
             assert_ne!(ClientToScreen(hwnd, &mut origin), 0);
-            assert_eq!(origin.x, outer.left);
-            assert_eq!(origin.y, outer.top);
+            let report = format!(
+                "outer=({},{},{},{}) client=({},{},{},{}) origin=({},{})",
+                outer.left,
+                outer.top,
+                outer.right,
+                outer.bottom,
+                client.left,
+                client.top,
+                client.right,
+                client.bottom,
+                origin.x,
+                origin.y
+            );
+            assert_eq!(origin.x, outer.left, "client-left mismatch: {report}");
+            assert_eq!(origin.y, outer.top, "client-top mismatch: {report}");
             // 顶部内缩恢复后客户区在竖直方向覆盖整个窗口。
-            assert_eq!(client.top, 0);
-            assert_eq!(client.bottom, outer.bottom - outer.top);
+            assert_eq!(client.top, 0, "client rect must start at 0: {report}");
+            assert_eq!(
+                client.bottom,
+                outer.bottom - outer.top,
+                "client height mismatch: {report}"
+            );
         }
     }
 
@@ -517,7 +534,8 @@ mod tests {
         use core::ffi::c_void;
         use windows_sys::Win32::UI::Shell::SetWindowSubclass;
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            CreateWindowExW, SetWindowPos, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, WS_POPUP,
+            CreateWindowExW, SetWindowPos, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+            SWP_NOSIZE, SWP_NOZORDER, WS_POPUP,
         };
 
         struct PanelTestWindow(*mut c_void);
@@ -573,7 +591,7 @@ mod tests {
                         0,
                         0,
                         0,
-                        SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER,
+                        SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE,
                     ),
                     0
                 );
@@ -593,7 +611,7 @@ mod tests {
                         0,
                         0,
                         0,
-                        SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER,
+                        SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE,
                     ),
                     0
                 );
