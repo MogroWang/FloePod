@@ -223,7 +223,7 @@ where
 pub(super) fn hide_panel_window(app: &AppHandle, id: u64) {
     if let Some(panel) = pod_panel(app, id) {
         if let Ok(hwnd) = panel.hwnd() {
-            win::hide_window(hwnd.0 as isize);
+            win::hide_panel_animated(hwnd.0 as isize);
         }
     }
 }
@@ -279,7 +279,7 @@ pub(super) fn show_panel_locked(app: &AppHandle, id: u64, pod: &Pod, pin_on_show
     // 无框架身份由常驻消息防护保证（见 ensure_pod_windows）：DWM 不把
     // 面板当有框架窗口，系统强调色边框与阴影都不会出现，显示路径无需
     // 再压制任何非客户区绘制。
-    win::show_no_activate(hwnd.0 as isize);
+    win::show_panel_no_activate(hwnd.0 as isize);
     // 显示兄弟浮动面板本身也可能触发透明 WebView 的非客户区合成回归。
     refresh_pod_bar_chrome(app, id);
 
