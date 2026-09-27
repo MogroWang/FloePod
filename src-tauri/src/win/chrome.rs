@@ -212,22 +212,37 @@ pub fn prepare_shaped_window(hwnd: isize) {
     }
 }
 
-/// 准备浮动面板窗口：清除创建时残留的非客户区样式位并压制 DWM 外描边
-/// 与焦点过渡，返回是否清理过样式位。
+/// 准备浮动面板窗口：清除创建时残留的非客户区样式位并压制 DWM 外描边，
+/// 重新启用 DWM 过渡动画（clean_frame_bits 会禁用它），返回是否清理过
+/// 样式位。
 ///
-/// 与 prepare_shaped_window 的差别只有两点：不禁用 DWM 非客户区渲染
-/// （ACCENT 亚克力模糊作用于窗口背景合成，保留策略避免误伤），也不做
-/// GDI 强制重绘（面板不设窗口区域，不存在区域触发的重算）。清理过
-/// 样式位时补一次框架重算：窗口创建时按带框架样式算好了非客户区布局
-/// （标题栏 + 边框内缩），样式位清掉后若不重算，客户区会停留在创建时
-/// 的旧布局直到下一次真实 resize——首次显示不依赖这种时序巧合。幂等。
+/// 与 prepare_shaped_window 的差别：不禁用 DWM 非客户区渲染（ACCENT
+/// 亚克力模糊作用于窗口背景合成，保留策略避免误伤），不做 GDI 强制
+/// 重绘（面板不设窗口区域），并且**保留 DWM 显示 / 隐藏过渡动画**——
+/// 它是浮动面板关闭时的原生退出动画（1.7.6 起前端不再自绘淡出）。
+/// 1.4.0 禁用过渡的原因是焦点切换时 DWM 对窗口框架的过渡会在透明
+/// WebView2 上闪出幽灵标题栏；无框架架构下 DWM 已不绘制任何框架内容，
+/// 过渡只作用于窗口内容本身，残影源头不复存在。清理过样式位时补一次
+/// 框架重算：窗口创建时按带框架样式算好了非客户区布局（标题栏 + 边框
+/// 内缩），样式位清掉后若不重算，客户区会停留在创建时的旧布局直到
+/// 下一次真实 resize——首次显示不依赖这种时序巧合。幂等。
 pub fn prepare_panel_window(hwnd: isize) -> bool {
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED,
+    };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         SetWindowPos, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
     };
     unsafe {
         let handle = hwnd as *mut c_void;
         let stripped = clean_frame_bits(handle);
+        let transitions_enabled: i32 = 0;
+        DwmSetWindowAttribute(
+            handle,
+            DWMWA_TRANSITIONS_FORCEDISABLED as u32,
+            &transitions_enabled as *const i32 as *const c_void,
+            std::mem::size_of::<i32>() as u32,
+        );
         if stripped {
             SetWindowPos(
                 handle,

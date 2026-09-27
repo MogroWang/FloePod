@@ -65,11 +65,11 @@ export function usePanelLayout(
     target.value = element as HTMLElement | null;
   };
   return {
-    rootEl,
     bindHead: bind(headEl),
     bindList: bind(listEl),
     bindContent: bind(contentEl),
     bindFoot: bind(footEl),
+    bindRoot: bind(rootEl),
     scheduleResize,
     observeContent,
   };

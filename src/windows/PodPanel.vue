@@ -65,7 +65,6 @@ const anyBusy = computed(
     askBusy.value ||
     unlocking.value,
 );
-let lastFadeIn = Number.NEGATIVE_INFINITY;
 let modeRevision = 0;
 let pinRevision = 0;
 const { toast, showToast, disposeToast } = useToast(2200, isMounted);
@@ -126,7 +125,7 @@ const {
   executeInlineMenu,
   onGlobalPointerDown,
 } = usePanelMenu(context, onSelect, removeIds);
-const { rootEl, bindHead, bindList, bindContent, bindFoot, scheduleResize, observeContent } =
+const { bindRoot, bindHead, bindList, bindContent, bindFoot, scheduleResize, observeContent } =
   usePanelLayout(context, mode, textOpen);
 
 /* 多选模式：头部按钮切换。开启后条目勾选常显、点按即切换选中，
@@ -214,19 +213,6 @@ function onListPointerDown(e: PointerEvent) {
   window.addEventListener("pointerup", up);
   window.addEventListener("pointercancel", cleanup);
   window.addEventListener("blur", cleanup);
-}
-
-function playFadeIn() {
-  const el = rootEl.value;
-  if (!el) return;
-  // 首挂载时 onMounted 与 PANEL_SHOWN 会先后触发，短窗内去重避免动画重播闪烁
-  const now = performance.now();
-  if (now - lastFadeIn < 100) return;
-  lastFadeIn = now;
-  // 清除隐藏阶段遗留的淡出态，再从头播放淡入
-  el.classList.remove("panel-fade-out", "panel-fade-in");
-  void el.offsetWidth;
-  el.classList.add("panel-fade-in");
 }
 
 async function onTogglePinned() {
@@ -381,8 +367,6 @@ onMounted(async () => {
       pinRevision += 1;
       applyPanelState(state);
     }),
-    /* 浮动面板每次出现都重播淡入动画 */
-    listenCurrent(Events.PanelShown, () => playFadeIn()),
     /* 固定状态同步 */
     listenCurrent(Events.PanelPinned, (p) => {
       pinRevision += 1;
@@ -409,14 +393,6 @@ onMounted(async () => {
     listenCurrent(Events.PodLockChanged, (p) => {
       if (p.podId !== props.podId) return;
       applyLockChanged(p.locked);
-    }),
-    /* 浮动面板开始隐藏：先播放淡出，后端延迟 220ms 再隐藏原生窗口。
-       运行态由其他定向事件同步，不能在此清空询问或冲突。 */
-    listenCurrent(Events.PanelHidden, () => {
-      const el = rootEl.value;
-      if (!el) return;
-      el.classList.remove("panel-fade-in");
-      el.classList.add("panel-fade-out");
     }),
   ]);
   for (const result of registrations) {
@@ -447,7 +423,6 @@ onMounted(async () => {
 
   await nextTick();
   scheduleResize();
-  playFadeIn();
 });
 
 onBeforeUnmount(() => {
@@ -484,7 +459,7 @@ async function openSettings() {
 
 <template>
   <div
-    ref="rootEl"
+    :ref="bindRoot"
     class="panel-root"
     :style="panelStyle"
     @pointerenter="onPointerEnter"
@@ -916,27 +891,9 @@ async function openSettings() {
   overflow: clip;
   box-sizing: border-box;
 }
-/* 显示动画：淡入 + 轻微缩放；悬停重新展开、拖入弹出与主动弹出统一 */
-.panel-root.panel-fade-in {
-  animation: panel-fade-in 260ms var(--ease-out) both;
-}
-@keyframes panel-fade-in {
-  from {
-    opacity: 0;
-    transform: scale(0.985);
-  }
-}
-/* 自动隐藏：先淡出（后端延迟 220ms 才隐藏原生窗口），之后 forwards 保持
-   透明，下次显示第一帧不闪现完整内容 */
-.panel-root.panel-fade-out {
-  animation: panel-fade-out 220ms ease both;
-}
-@keyframes panel-fade-out {
-  to {
-    opacity: 0;
-  }
-}
-
+/* 显示与关闭动画 1.7.6 起交给 DWM 原生过渡（prepare_panel_window 启用）：
+   CSS 淡出与 ACCENT 材质不同步（内容渐隐后材质矩形残留原位再硬切消失），
+   原生过渡作用于整个窗口，进出场对称。 */
 .panel-head {
   display: flex;
   align-items: center;

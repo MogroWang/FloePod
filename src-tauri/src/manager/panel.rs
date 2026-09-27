@@ -6,12 +6,9 @@ use crate::settings::{Pod, Settings};
 use crate::state::{AppState, PanelMode, PodRuntime};
 use crate::{events, win};
 use serde::Serialize;
-use std::{
-    sync::atomic::Ordering,
-    time::{Duration, Instant},
-};
+use std::sync::atomic::Ordering;
+use std::time::Instant;
 use tauri::{AppHandle, Manager};
-const PANEL_FADE_OUT_MS: u64 = 220;
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PanelSnapshot {
@@ -182,31 +179,7 @@ pub fn set_panel_size(app: &AppHandle, id: u64, height: u32) {
     }
 }
 
-/// 延迟隐藏浮动面板窗口，给前端留出淡出动画的时间窗。
-/// 调用前提：transition_to_hidden_locked 已把运行态置为隐藏。
-/// 延迟期间浮动面板可能被重新显示（指针重新悬停 / 主动弹出），
-/// 任务执行时按运行态自检，一旦 panel_visible 回到 true 就放弃隐藏，
-/// 避免「浮动面板刚淡入又被藏掉」。
-pub(super) fn schedule_delayed_panel_hide(app: &AppHandle, id: u64) {
-    if let Some(runtime) = app.state::<AppState>().pods.lock().unwrap().get_mut(&id) {
-        runtime.panel_hide_at = Some(Instant::now() + Duration::from_millis(PANEL_FADE_OUT_MS));
-    }
-}
-
-pub(super) fn finish_delayed_hides(app: &AppHandle, now: Instant) {
-    let ids: Vec<_> = app
-        .state::<AppState>()
-        .pods
-        .lock()
-        .unwrap()
-        .iter_mut()
-        .filter_map(|(id, runtime)| runtime.take_due_hide(now).then_some(*id))
-        .collect();
-    for id in ids {
-        hide_panel_window(app, id);
-    }
-}
-
+/// 统一的浮动面板隐藏转换：运行态置为隐藏并立即隐藏原生窗口。
 /// 调用方必须持有 `AppState::panel_ops`。
 pub(super) fn transition_to_hidden_locked<F>(app: &AppHandle, id: u64, predicate: F) -> bool
 where
@@ -227,9 +200,12 @@ where
         return false;
     }
 
-    // 运行态转换与原生副作用由 panel_ops 串行化；不会再出现旧 show 在新 hide 后补显。
-    // 原生窗口不立即隐藏：先让前端播放淡出动画，延迟任务自检后再 SW_HIDE。
-    schedule_delayed_panel_hide(app, id);
+    // 原生窗口立即隐藏：SW_HIDE 由 DWM 播放原生淡出过渡（1.7.6 起面板
+    // 启用 DWM 过渡，此前 CSS 淡出与 ACCENT 材质不同步——内容渐隐后
+    // 材质矩形残留原位，最后硬切消失，看起来像没有退出动画）。
+    // 运行态转换与原生副作用由 panel_ops 串行化；不会再出现旧 show 在新
+    // hide 后补显。
+    hide_panel_window(app, id);
     // 必须用 emit_to 定向发送：`emit` 是全局广播，会让其他仍可见的浮动面板
     // 也收到 PANEL_HIDDEN 并把 DOM 置为透明（pre-show）。
     if pod_panel(app, id).is_some() {
@@ -311,7 +287,6 @@ pub(super) fn show_panel_locked(app: &AppHandle, id: u64, pod: &Pod, pin_on_show
         let mut guard = state.pods.lock().unwrap();
         let runtime = guard.entry(id).or_default();
         runtime.panel_visible = true;
-        runtime.panel_hide_at = None;
         if pin_on_show {
             runtime.panel_pinned = true;
         }
