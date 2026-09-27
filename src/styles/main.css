@@ -36,15 +36,11 @@
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
 
-  /*
-   * 浮动面板自绘阴影：1.7.4 起面板窗口不带系统框架（DWM 阴影与系统
-   * 强调色边框线同源，无法只留其一），阴影改在窗口内绘制。窗口比内容
-   * 四周各大 --panel-halo，阴影必须在光晕边距内衰减完毕，否则会在窗口
-   * 边缘被截出硬边。必须与 Rust 侧 PANEL_HALO_LOGICAL 保持一致。
-   */
-  --panel-halo: 14px;
+  /* 浮动面板不绘制外阴影：层级感由系统亚克力材质与 1px 玻璃描边承担。
+     --shadow-panel 仅供设置界面的浮起卡片使用，--shadow-pop 仅供面板
+     内浮层（内嵌菜单）使用。 */
   --shadow-panel:
-    0 3px 18px -2px oklch(0.2 0.02 230 / 0.32), 0 1px 6px -1px oklch(0.2 0.02 230 / 0.2);
+    0 18px 50px -12px oklch(0.2 0.02 230 / 0.35), 0 4px 14px -6px oklch(0.2 0.02 230 / 0.18);
   --shadow-pop:
     0 10px 30px -10px oklch(0.2 0.02 230 / 0.3), 0 2px 8px -4px oklch(0.2 0.02 230 / 0.15);
 
@@ -80,7 +76,7 @@
   --glass-line: oklch(1 0 0 / 0.12);
   --glass-inner: oklch(1 0 0 / 0.06);
 
-  --shadow-panel: 0 3px 18px -2px oklch(0 0 0 / 0.56), 0 1px 6px -1px oklch(0 0 0 / 0.42);
+  --shadow-panel: 0 18px 50px -12px oklch(0 0 0 / 0.6), 0 4px 14px -6px oklch(0 0 0 / 0.4);
   --shadow-pop: 0 10px 30px -10px oklch(0 0 0 / 0.55), 0 2px 8px -4px oklch(0 0 0 / 0.35);
 }
 

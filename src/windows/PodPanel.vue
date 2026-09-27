@@ -893,17 +893,15 @@ async function openSettings() {
 
 <style scoped>
 /*
- * 面板本体。1.7.4 起原生窗口比内容四周各大 --panel-halo（光晕边距，
- * 与 Rust 侧 place_panel 的 PANEL_HALO_LOGICAL 一致）：窗口不带系统
- * 框架，阴影与圆角全部在这里自绘——系统强调色窗口边框对无框架窗口
- * 无处可画，聚焦后顶部不会再出现蓝色边框线。clip-path 不能再用于
- * 裁切（会连自绘外阴影一起裁掉），内容圆角由 border-radius +
- * overflow: clip 承担。注意：亚克力材质的系统模糊作用于整个窗口
- * （含光晕边距），边距区域呈现为叠加了阴影的轻微背景模糊。
+ * 面板本体。1.7.4 起原生窗口不带系统框架（客户区铺满窗口），强调色
+ * 窗口边框对无框架窗口无处可画；1.7.5 起窗口矩形即面板本体，不绘制
+ * 任何外阴影——层级感由系统亚克力材质与 1px 玻璃描边承担，DWM 系统
+ * 圆角让材质随这里的 border-radius 轮廓裁出圆角。内容圆角由
+ * border-radius + overflow: clip 承担。
  */
 .panel-root {
   position: fixed;
-  inset: var(--panel-halo);
+  inset: 0;
   display: flex;
   flex-direction: column;
   background: color-mix(
@@ -913,9 +911,7 @@ async function openSettings() {
   );
   border-radius: var(--radius-panel);
   border: 1px solid var(--glass-line);
-  box-shadow:
-    var(--shadow-panel),
-    inset 0 1px 0 var(--glass-inner);
+  box-shadow: inset 0 1px 0 var(--glass-inner);
   backdrop-filter: blur(24px) saturate(1.16);
   overflow: clip;
   box-sizing: border-box;
