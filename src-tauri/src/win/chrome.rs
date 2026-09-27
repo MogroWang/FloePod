@@ -212,14 +212,34 @@ pub fn prepare_shaped_window(hwnd: isize) {
 }
 
 /// 准备浮动面板窗口：清除创建时残留的非客户区样式位并压制 DWM 外描边
-/// 与焦点过渡，返回是否清理过样式位（需要时随后的框架重算由子类内的
-/// WM_NCCALCSIZE 返回 0 完成，无需额外扰动）。
+/// 与焦点过渡，返回是否清理过样式位。
 ///
 /// 与 prepare_shaped_window 的差别只有两点：不禁用 DWM 非客户区渲染
 /// （ACCENT 亚克力模糊作用于窗口背景合成，保留策略避免误伤），也不做
-/// GDI 强制重绘（面板不设窗口区域，不存在区域触发的重算）。幂等。
+/// GDI 强制重绘（面板不设窗口区域，不存在区域触发的重算）。清理过
+/// 样式位时补一次框架重算：窗口创建时按带框架样式算好了非客户区布局
+/// （标题栏 + 边框内缩），样式位清掉后若不重算，客户区会停留在创建时
+/// 的旧布局直到下一次真实 resize——首次显示不依赖这种时序巧合。幂等。
 pub fn prepare_panel_window(hwnd: isize) -> bool {
-    unsafe { clean_frame_bits(hwnd as *mut c_void) }
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    };
+    unsafe {
+        let handle = hwnd as *mut c_void;
+        let stripped = clean_frame_bits(handle);
+        if stripped {
+            SetWindowPos(
+                handle,
+                std::ptr::null_mut(),
+                0,
+                0,
+                0,
+                0,
+                SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+            );
+        }
+        stripped
+    }
 }
 
 #[cfg(test)]
@@ -474,7 +494,9 @@ mod tests {
             );
             assert!(install_borderless_chrome_guard(window.0 as isize));
             assert!(install_borderless_chrome_guard(window.0 as isize));
-            // 真实改尺寸（而非仅 FRAMECHANGED）：确保 WM_NCCALCSIZE 以
+            // 真实改变尺寸（而非仅 FRAMECHANGED，更不能与创建尺寸相同——
+            // 无几何变化的 SetWindowPos 不会触发 WM_NCCALCSIZE，布局会停留
+            // 在创建时按带框架样式算出的旧值）：确保 WM_NCCALCSIZE 以
             // wParam=TRUE 到达，正是 tao 内缩分支会执行的消息形态。
             assert_ne!(
                 SetWindowPos(
@@ -482,8 +504,8 @@ mod tests {
                     std::ptr::null_mut(),
                     10,
                     10,
-                    380,
-                    240,
+                    420,
+                    300,
                     SWP_NOACTIVATE | SWP_NOZORDER,
                 ),
                 0
