@@ -86,7 +86,18 @@ pub fn place_pod_bar(app: &AppHandle, pod: &Pod, accepting: bool) {
     }
 }
 
+/// 浮动面板窗口四周的阴影光晕边距（逻辑像素）：1.7.4 起面板窗口不再
+/// 携带系统框架（DWM 阴影与系统强调色边框线同源，per-window 属性在
+/// 开启「在标题栏和窗口边框上显示强调色」的 Win11 24H2 上压不掉），
+/// 阴影与圆角由前端 CSS 自绘，窗口必须比内容大一圈给阴影留出绘制空间。
+/// 必须与前端 `--panel-halo`（src/styles/main.css）保持一致。
+pub(super) const PANEL_HALO_LOGICAL: u32 = 14;
+
 /// 浮动面板：贴着匣弹出，长边方向垂直/水平时对齐到匣中心。
+///
+/// `panel_geometry` 返回的是内容矩形（面板本体的视觉范围）；原生窗口
+/// 在内容四周各外扩一个阴影光晕边距，WebView 里 CSS 用同样的边距把
+/// 面板本体缩回内容矩形，差额区域只承载自绘阴影。
 pub(super) fn place_panel(app: &AppHandle, pod: &Pod) {
     let Some(panel) = pod_panel(app, pod.id) else {
         return;
@@ -106,6 +117,7 @@ pub(super) fn place_panel(app: &AppHandle, pod: &Pod) {
         return;
     };
     let scale = target.scale_factor;
+    let halo = scale_logical_px(PANEL_HALO_LOGICAL, scale);
     let requested_width = scale_logical_px(pod.panel_width, scale);
     let requested_height = scale_logical_px(logical_height, scale);
 
@@ -127,8 +139,11 @@ pub(super) fn place_panel(app: &AppHandle, pod: &Pod) {
         requested_height.max(scale_logical_px(120, scale)),
         scale,
     );
-    let _ = panel.set_size(PhysicalSize::new(width as u32, height as u32));
-    let _ = panel.set_position(PhysicalPosition::new(x, y));
+    let _ = panel.set_size(PhysicalSize::new(
+        (width + halo * 2) as u32,
+        (height + halo * 2) as u32,
+    ));
+    let _ = panel.set_position(PhysicalPosition::new(x - halo, y - halo));
 }
 
 pub(super) fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
@@ -174,7 +189,10 @@ pub(super) fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
         .always_on_top(true)
         .skip_taskbar(true)
         .resizable(false)
-        .shadow(true)
+        // 1.7.4 起面板不带系统框架：系统阴影与强调色边框线同源（都画在
+        // DWM 的框架延伸区），保留系统阴影就无法根治强调色边框下的顶部
+        // 蓝线。窗口改为无框架 + CSS 自绘阴影（见 place_panel 的光晕边距）。
+        .shadow(false)
         .focusable(true) // 必须可聚焦才能接收拖放事件
         .visible(false)
         .build()
@@ -193,9 +211,12 @@ pub(super) fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
         if let Err(error) = bar.run_on_main_thread(move || {
             if let Some(bar) = pod_bar(&handle, id) {
                 if let Ok(hwnd) = bar.hwnd() {
-                    if !win::install_bar_chrome_guard(hwnd.0 as isize) {
+                    // 安装与样式清理同在窗口线程顺序执行：防护先落位，
+                    // 随后的清理不会被打断，也不会再被 tao 重写覆盖。
+                    if !win::install_borderless_chrome_guard(hwnd.0 as isize) {
                         crate::logging::write("[window] 安装浮动条无边框消息处理失败");
                     }
+                    win::prepare_shaped_window(hwnd.0 as isize);
                 }
             }
         }) {
@@ -208,26 +229,30 @@ pub(super) fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
             win::prepare_shaped_window(hwnd.0 as isize);
         }
     }
-    // 浮动面板：请求系统圆角，与 CSS 的 clip-path 圆角轮廓对齐；
-    // 只压制 Win11 的 1px 外描边、顶部内缩条的 caption 填充与焦点过渡
-    // （suppress_panel_frame），绝不动样式位与框架——面板的系统阴影
-    // 依赖它们（见该函数注释）。
+    // 浮动面板：与边缘浮动条共用「无框架身份」——常驻消息防护拦截 tao
+    // 重写样式位并让客户区铺满窗口（WM_NCCALCSIZE 返回 0），创建时的
+    // 残留样式位由 prepare_panel_window 清理。DWM 不再把窗口当有框架
+    // 窗口：系统强调色边框（含聚焦后顶部那条蓝线）无处可画；阴影与
+    // 圆角由前端 CSS 在光晕边距内自绘。DWMWCP_ROUND 仍请求系统圆角，
+    // 让 ACCENT 亚克力模糊的窗口矩形四角随内容轮廓。
     if let Some(panel) = pod_panel(app, pod.id) {
+        // DWM 属性可跨线程写入；样式位清理必须在窗口所属线程，放到下面
+        // 与消息防护同批执行。
         if let Ok(hwnd) = panel.hwnd() {
             win::prefer_rounded_corners(hwnd.0 as isize);
-            win::suppress_panel_frame(hwnd.0 as isize);
         }
-        // 顶部客户区恢复：tao 的 NCCALCSIZE 顶部内缩留下一条 CSS 够不到的
-        // 空缝（DWM 强调色边框下呈蓝色细线），消息处理把它减回去。子类
-        // 必须在窗口所属线程安装，且早于首次显示。
+        // 无边框消息防护必须在窗口所属线程安装，且早于首次显示。重复
+        // 安装同一回调是幂等的。
         let handle = app.clone();
         let id = pod.id;
         if let Err(error) = panel.run_on_main_thread(move || {
             if let Some(panel) = pod_panel(&handle, id) {
                 if let Ok(hwnd) = panel.hwnd() {
-                    if !win::install_panel_chrome_guard(hwnd.0 as isize) {
-                        crate::logging::write("[window] 安装面板顶部客户区恢复处理失败");
+                    // 安装与样式清理同在窗口线程顺序执行（理由同浮动条）。
+                    if !win::install_borderless_chrome_guard(hwnd.0 as isize) {
+                        crate::logging::write("[window] 安装面板无边框消息处理失败");
                     }
+                    win::prepare_panel_window(hwnd.0 as isize);
                 }
             }
         }) {
