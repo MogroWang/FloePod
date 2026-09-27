@@ -517,7 +517,6 @@ mod tests {
 
     #[test]
     fn prepare_panel_window_clears_styles_idempotently() {
-        use core::ffi::c_void;
         use windows_sys::Win32::UI::WindowsAndMessaging::{
             CreateWindowExW, DestroyWindow, GetWindowLongPtrW, WS_POPUP,
         };
