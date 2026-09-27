@@ -28,8 +28,6 @@ impl PanelMode {
 /// 单个「匣」的运行时状态（看门狗 / 浮动面板显隐）。
 #[derive(Debug)]
 pub struct PodRuntime {
-    /// Native hide deadline after the frontend fade; a later show/hide replaces the old deadline.
-    pub panel_hide_at: Option<Instant>,
     pub bar_inside: bool,
     pub panel_inside: bool,
     pub panel_visible: bool,
@@ -121,7 +119,6 @@ pub struct DragCutSnapshot {
 impl Default for PodRuntime {
     fn default() -> Self {
         Self {
-            panel_hide_at: None,
             bar_inside: false,
             panel_inside: false,
             panel_visible: false,
@@ -145,17 +142,6 @@ impl Default for PodRuntime {
 }
 
 impl PodRuntime {
-    pub fn take_due_hide(&mut self, now: Instant) -> bool {
-        if self.panel_visible {
-            self.panel_hide_at = None;
-            return false;
-        }
-        if self.panel_hide_at.is_some_and(|deadline| deadline <= now) {
-            self.panel_hide_at = None;
-            return true;
-        }
-        false
-    }
     /// 「单一活动浮动面板」可以收起的普通浮动面板。拖出与交互模式都必须受到保护。
     pub fn can_dismiss(&self) -> bool {
         self.panel_visible
@@ -289,21 +275,6 @@ impl AppState {
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_new_hide_replaces_the_old_fade_deadline_and_show_cancels_it() {
-        let now = Instant::now();
-        let mut runtime = PodRuntime {
-            panel_hide_at: Some(now),
-            ..Default::default()
-        };
-        runtime.panel_visible = true;
-        assert!(!runtime.take_due_hide(now));
-        runtime.mark_hidden(now);
-        runtime.panel_hide_at = Some(now + std::time::Duration::from_millis(220));
-        assert!(!runtime.take_due_hide(now + std::time::Duration::from_millis(100)));
-        assert!(runtime.take_due_hide(now + std::time::Duration::from_millis(220)));
-        assert!(!runtime.take_due_hide(now + std::time::Duration::from_secs(1)));
-    }
     use std::time::Duration;
 
     #[test]
