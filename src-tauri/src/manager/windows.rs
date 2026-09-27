@@ -86,18 +86,12 @@ pub fn place_pod_bar(app: &AppHandle, pod: &Pod, accepting: bool) {
     }
 }
 
-/// 浮动面板窗口四周的阴影光晕边距（逻辑像素）：1.7.4 起面板窗口不再
-/// 携带系统框架（DWM 阴影与系统强调色边框线同源，per-window 属性在
-/// 开启「在标题栏和窗口边框上显示强调色」的 Win11 24H2 上压不掉），
-/// 阴影与圆角由前端 CSS 自绘，窗口必须比内容大一圈给阴影留出绘制空间。
-/// 必须与前端 `--panel-halo`（src/styles/main.css）保持一致。
-pub(super) const PANEL_HALO_LOGICAL: u32 = 14;
-
 /// 浮动面板：贴着匣弹出，长边方向垂直/水平时对齐到匣中心。
 ///
-/// `panel_geometry` 返回的是内容矩形（面板本体的视觉范围）；原生窗口
-/// 在内容四周各外扩一个阴影光晕边距，WebView 里 CSS 用同样的边距把
-/// 面板本体缩回内容矩形，差额区域只承载自绘阴影。
+/// 窗口矩形即面板本体（内容矩形）：1.7.5 起面板不绘制任何外阴影
+/// （无框架窗口也没有系统阴影），ACCENT 亚克力材质覆盖整个窗口并随
+/// DWM 系统圆角（prefer_rounded_corners）裁出轮廓，材质与面板形状
+/// 天然贴合，窗口尺寸与 `panel_geometry` 的结果一一对应。
 pub(super) fn place_panel(app: &AppHandle, pod: &Pod) {
     let Some(panel) = pod_panel(app, pod.id) else {
         return;
@@ -117,7 +111,6 @@ pub(super) fn place_panel(app: &AppHandle, pod: &Pod) {
         return;
     };
     let scale = target.scale_factor;
-    let halo = scale_logical_px(PANEL_HALO_LOGICAL, scale);
     let requested_width = scale_logical_px(pod.panel_width, scale);
     let requested_height = scale_logical_px(logical_height, scale);
 
@@ -139,11 +132,8 @@ pub(super) fn place_panel(app: &AppHandle, pod: &Pod) {
         requested_height.max(scale_logical_px(120, scale)),
         scale,
     );
-    let _ = panel.set_size(PhysicalSize::new(
-        (width + halo * 2) as u32,
-        (height + halo * 2) as u32,
-    ));
-    let _ = panel.set_position(PhysicalPosition::new(x - halo, y - halo));
+    let _ = panel.set_size(PhysicalSize::new(width as u32, height as u32));
+    let _ = panel.set_position(PhysicalPosition::new(x, y));
 }
 
 pub(super) fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
@@ -191,7 +181,8 @@ pub(super) fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
         .resizable(false)
         // 1.7.4 起面板不带系统框架：系统阴影与强调色边框线同源（都画在
         // DWM 的框架延伸区），保留系统阴影就无法根治强调色边框下的顶部
-        // 蓝线。窗口改为无框架 + CSS 自绘阴影（见 place_panel 的光晕边距）。
+        // 蓝线。窗口改为无框架；1.7.5 起面板不绘制外阴影，材质随窗口
+        // 轮廓贴合面板本体（见 place_panel）。
         .shadow(false)
         .focusable(true) // 必须可聚焦才能接收拖放事件
         .visible(false)
@@ -232,9 +223,9 @@ pub(super) fn ensure_pod_windows(app: &AppHandle, pod: &Pod) {
     // 浮动面板：与边缘浮动条共用「无框架身份」——常驻消息防护拦截 tao
     // 重写样式位并让客户区铺满窗口（WM_NCCALCSIZE 返回 0），创建时的
     // 残留样式位由 prepare_panel_window 清理。DWM 不再把窗口当有框架
-    // 窗口：系统强调色边框（含聚焦后顶部那条蓝线）无处可画；阴影与
-    // 圆角由前端 CSS 在光晕边距内自绘。DWMWCP_ROUND 仍请求系统圆角，
-    // 让 ACCENT 亚克力模糊的窗口矩形四角随内容轮廓。
+    // 窗口：系统强调色边框（含聚焦后顶部那条蓝线）无处可画。窗口矩形
+    // 即面板本体，DWMWCP_ROUND 让 ACCENT 亚克力材质随 CSS 圆角轮廓
+    // 裁出圆角。
     if let Some(panel) = pod_panel(app, pod.id) {
         // DWM 属性可跨线程写入；样式位清理必须在窗口所属线程，放到下面
         // 与消息防护同批执行。
