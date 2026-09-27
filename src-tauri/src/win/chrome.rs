@@ -1,4 +1,12 @@
-//! Win32 辅助：不抢焦点显示窗口、修饰键状态、前台进程与窗口显隐。
+//! Win32 辅助：无边框窗口的消息级防护与框架清理。
+//!
+//! 浮动面板 1.7.4 起与边缘浮动条共用同一套「无框架身份」：窗口样式中的
+//! 非客户区位（WS_CAPTION 等）在创建后立即清除并由常驻子类拦截重写，
+//! WM_NCCALCSIZE 恒返回 0 让客户区铺满整个窗口矩形。DWM 因此不再把
+//! 窗口当作有框架窗口——系统强调色窗口边框（设置里「在标题栏和窗口
+//! 边框上显示强调色」）对它无处可画，此前聚焦后顶部出现的那条蓝色
+//! 边框线在结构上不可能再出现。阴影与圆角改由前端 CSS 自绘（窗口比
+//! 内容大一圈阴影边距），不再依赖 DWM。
 
 use core::ffi::c_void;
 
@@ -21,13 +29,18 @@ fn strip_non_client_styles(style: u32, ex_style: u32) -> (u32, u32) {
 }
 
 const BAR_CHROME_SUBCLASS_ID: usize = 0x4650_4241;
-const PANEL_CHROME_SUBCLASS_ID: usize = 0x4650_4242;
 
-/// 在窗口所属 UI 线程安装浮动条的无边框消息处理，早于首次显示。
-/// tao 会从内部 WindowFlags 重新生成 WS_CAPTION 等样式；只在焦点事件
-/// 之后清理已经太迟。这里阻止样式重新写入，并在原生消息边界禁止绘制
-/// 非客户区。仅用于没有系统阴影的浮动条，不用于面板或设置窗口。
-pub fn install_bar_chrome_guard(hwnd: isize) -> bool {
+/// 在窗口所属 UI 线程安装无边框消息防护，早于首次显示。浮动条与浮动
+/// 面板共用。
+///
+/// tao 会从内部 WindowFlags 重新生成 WS_CAPTION 等样式（任何窗口标志
+/// 变化都会触发 SetWindowLongW 重写）；只在焦点事件之后清理已经太迟。
+/// 这里从源头拦截：WM_STYLECHANGING 过滤最终样式、WM_NCCALCSIZE 恒
+/// 返回 0（客户区铺满窗口，tao 的阴影内缩分支也不会再执行）、非客户
+/// 区绘制一律禁止。窗口创建时残留的样式位由调用方随后按窗口类型选择
+/// prepare_shaped_window（自绘形状窗口，连带 DWM 非客户区渲染策略）或
+/// prepare_panel_window（浮动面板，保留 ACCENT 合成）清理。幂等。
+pub fn install_borderless_chrome_guard(hwnd: isize) -> bool {
     use windows_sys::Win32::System::Threading::GetCurrentThreadId;
     use windows_sys::Win32::UI::Shell::SetWindowSubclass;
     use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
@@ -36,15 +49,20 @@ pub fn install_bar_chrome_guard(hwnd: isize) -> bool {
         if GetWindowThreadProcessId(handle, std::ptr::null_mut()) != GetCurrentThreadId() {
             return false;
         }
-        if SetWindowSubclass(handle, Some(bar_chrome_proc), BAR_CHROME_SUBCLASS_ID, 0) == 0 {
+        if SetWindowSubclass(
+            handle,
+            Some(borderless_chrome_proc),
+            BAR_CHROME_SUBCLASS_ID,
+            0,
+        ) == 0
+        {
             return false;
         }
     }
-    prepare_shaped_window(hwnd);
     true
 }
 
-unsafe extern "system" fn bar_chrome_proc(
+unsafe extern "system" fn borderless_chrome_proc(
     hwnd: *mut c_void,
     message: u32,
     wparam: usize,
@@ -71,158 +89,41 @@ unsafe extern "system" fn bar_chrome_proc(
             }
             result
         }
-        // 两种 NCCALCSIZE 参数形式都保持整个窗口为客户区；不留下标题栏高度。
-        WM_NCCALCSIZE | WM_NCPAINT => 0,
-        // 浮动条由透明 WebView 自绘，不让 GDI 擦背景生成白色占位块。
+        // 客户区铺满整个窗口矩形，窗口不存在任何非客户区缝隙；返回 0
+        // 同时短路 tao 对阴影窗口的 inset 内缩（该分支只在本子类不拦截
+        // 时才会执行）。
+        WM_NCCALCSIZE if wparam != 0 => 0,
+        WM_NCPAINT => 0,
+        // 由透明 WebView 自绘，不让 GDI 擦背景生成白色占位块。
         WM_ERASEBKGND => 1,
         // 必须继续交给 tao 更新激活/焦点状态，不能直接吞掉该消息。
         // 微软规定 lParam=-1 只禁止 DefWindowProc 重画非客户区。
         WM_NCACTIVATE => DefSubclassProc(hwnd, message, wparam, -1),
         WM_NCDESTROY => {
-            RemoveWindowSubclass(hwnd, Some(bar_chrome_proc), subclass_id);
+            RemoveWindowSubclass(hwnd, Some(borderless_chrome_proc), subclass_id);
             DefSubclassProc(hwnd, message, wparam, lparam)
         }
         _ => DefSubclassProc(hwnd, message, wparam, lparam),
     }
 }
 
-/// 浮动面板窗口的顶部客户区恢复处理。
-///
-/// tao 对「无边框 + 系统阴影」窗口在 WM_NCCALCSIZE 里把客户区四周内缩一圈
-/// （calculate_insets_for_dpi：左右下为 frame 厚度，顶部在 Win11 上按 DPI
-/// 约为 1-2px）。左右下的内缩由 DWM 绘制阴影，视觉上是玻璃内容外的透明环；
-/// 顶部的 1-2px 却是一条 CSS 永远够不到的非客户区空缝——DWM 不填它时呈现
-/// 为顶部「空缺的边框」，系统开启强调色窗口边框时又被画成一条蓝色细线，
-/// 且 DWMWA_CAPTION_COLOR / DWMWA_BORDER_COLOR 都压不住这圈区域本身的存在。
-///
-/// 本子类在 tao 处理之后把客户区顶边减回 tao 加上的内缩量（同 DPI 公式复算），
-/// 让 WebView 铺满窗口顶部：空缝消失，系统阴影（样式位常驻）、DWM 圆角与
-/// 外描边压制（suppress_panel_frame）全部不受影响。恢复无条件执行——真实
-/// 面板恒走 tao 内缩分支（shadow(true) 使 MARKER_UNDECORATED_SHADOW 常置），
-/// 恢复量恰为 inset；1.7.2 曾按瞬时窗口矩形做防护，但面板显示路径上
-/// WM_NCCALCSIZE 触发时窗口矩形可能尚未更新，防护被误拦导致空缺时隐时现。
-/// 每次恢复写入 debug.log（[panel-chrome]），真机可核对是否生效。
-pub fn install_panel_chrome_guard(hwnd: isize) -> bool {
-    use windows_sys::Win32::System::Threading::GetCurrentThreadId;
-    use windows_sys::Win32::UI::Shell::SetWindowSubclass;
-    use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
-    unsafe {
-        let handle = hwnd as *mut c_void;
-        if GetWindowThreadProcessId(handle, std::ptr::null_mut()) != GetCurrentThreadId() {
-            return false;
-        }
-        if SetWindowSubclass(handle, Some(panel_chrome_proc), PANEL_CHROME_SUBCLASS_ID, 0) == 0 {
-            return false;
-        }
-    }
-    true
-}
-
-/// 顶部恢复日志的累计上限：面板几何变化会高频触发 NCCALCSIZE，
-/// 只记录前若干次供真机核对，之后静默。
-static PANEL_CHROME_LOGGED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-
-unsafe extern "system" fn panel_chrome_proc(
-    hwnd: *mut c_void,
-    message: u32,
-    wparam: usize,
-    lparam: isize,
-    subclass_id: usize,
-    _data: usize,
-) -> isize {
-    use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
-    use windows_sys::Win32::UI::Shell::DefSubclassProc;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        IsZoomed, NCCALCSIZE_PARAMS, WM_NCCALCSIZE, WM_NCDESTROY,
-    };
-    match message {
-        WM_NCCALCSIZE if wparam != 0 => {
-            let result = DefSubclassProc(hwnd, message, wparam, lparam);
-            if IsZoomed(hwnd) == 0 {
-                // tao 顶部内缩：build >= 22000 时 round(dpi/96)，更早的系统为 0。
-                // 1.7.2 版曾用 GetWindowRect 防护「未内缩时不越界」：但面板每次
-                // 显示都连发 set_position + set_size，WM_NCCALCSIZE 在几何应用
-                // 过程中触发时窗口矩形可能仍是旧值，防护被误拦、恢复失效——
-                // 这正是顶部空缺时隐时现的原因。真实面板恒走 tao 内缩分支
-                // （MARKER_UNDECORATED_SHADOW 随 shadow(true) 常置），恢复量
-                // 恰为 inset，因此这里无条件恢复，不再依赖瞬时窗口矩形。
-                let dpi = GetDpiForWindow(hwnd);
-                let inset = if dpi == 0 {
-                    0
-                } else {
-                    (dpi as f32 / 96.0).round() as i32
-                };
-                if inset > 0 {
-                    let params = &mut *(lparam as *mut NCCALCSIZE_PARAMS);
-                    let before = params.rgrc[0].top;
-                    params.rgrc[0].top = before - inset;
-                    use std::sync::atomic::Ordering;
-                    if PANEL_CHROME_LOGGED.fetch_add(1, Ordering::Relaxed) < 16 {
-                        crate::logging::write(&format!(
-                            "[panel-chrome] NCCALCSIZE 顶部恢复 inset={inset} top {before} -> {}",
-                            params.rgrc[0].top
-                        ));
-                    }
-                }
-            }
-            result
-        }
-        WM_NCDESTROY => {
-            use windows_sys::Win32::UI::Shell::{DefSubclassProc as Def, RemoveWindowSubclass};
-            RemoveWindowSubclass(hwnd, Some(panel_chrome_proc), subclass_id);
-            Def(hwnd, message, wparam, lparam)
-        }
-        _ => DefSubclassProc(hwnd, message, wparam, lparam),
-    }
-}
-
-/// 浮动面板窗口的幂等框架抑制：只关掉 Win11 的 1px 系统外描边与 DWM
-/// 的焦点过渡动画。绝不清除窗口样式位、不请求框架重算、不禁用非客户
-/// 区渲染。
-///
-/// tao（Tauri 的窗口层）的无边框架构：WS_CAPTION 等样式位在窗口整个
-/// 生命周期常驻（to_window_styles 从不清除它们），无边框完全由子类化的
-/// WM_NCCALCSIZE 返回 0 实现；带系统阴影的无边框窗口（本面板）还会把
-/// 客户区内缩一圈 frame 厚度，DWM 正是在这圈非客户区里绘制系统阴影
-/// ——阴影与样式位共存亡。
-///
-/// 1.5.0 起曾对面板清除样式位并强刷框架：样式位一掉，DWM 框架连同
-/// 阴影一起消失，内缩环变成无人绘制的裸窗口表面，呈现为面板四周的
-/// 白色边框。因此这里只压制真正多余的部分——Win11 给带框架窗口外缘
-/// 描的 1px 边线（DWMWA_BORDER_COLOR 单独负责，不影响阴影）与焦点
-/// 过渡动画（透明 WebView2 场景下会闪出残影）。面板的标题栏伪影在
-/// 该架构下本就不可能出现：NCCALCSIZE 内缩后顶部非客户区只有 1-2px，
-/// 容不下任何标题栏。
-///
-/// Win11 的 NCCALCSIZE 顶部内缩（tao calculate_insets_for_dpi，按 DPI
-/// 约 1-2px）会把客户区顶边压到 WebView 之下，留下一条 CSS 够不到的
-/// 顶部非客户区；DWM 默认用主题 caption 色（浅色主题下是白色）填充
-/// 它，呈现为面板顶部的一条白色细线。DWMWA_CAPTION_COLOR 请求不绘制
-/// caption，让这条落回透明——它同样不触及阴影、圆角与样式位；不支持
-/// 该属性的系统（Win10 无此内缩）安全地忽略调用失败。
-pub fn suppress_panel_frame(hwnd: isize) {
+/// 清除非客户区样式位并压制 DWM 的 1px 外描边与焦点过渡动画，返回样式
+/// 位是否在本轮调用中被实际清除。不改动 DWMWA_NCRENDERING_POLICY——
+/// 浮动面板的 ACCENT 亚克力模糊作用在整个窗口背景上，禁用非客户区渲染
+/// 有误伤窗口合成效果的嫌疑，而样式位清除后 DWM 本就无非客户区可画。
+fn clean_frame_bits(hwnd: *mut c_void) -> bool {
     use windows_sys::Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_COLOR_NONE,
+        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE,
         DWMWA_TRANSITIONS_FORCEDISABLED,
     };
     unsafe {
-        let hwnd = hwnd as *mut c_void;
-        // 只关掉 1px 外描边；系统阴影与 DWMWCP_ROUND 圆角继续绘制。
-        // 不支持该属性的旧系统会安全地忽略调用失败。
+        // Win11 即使样式位干净也可能给窗口外缘描 1px 边线；显式请求不
+        // 绘制。不支持该属性的旧系统会安全地忽略调用失败。
         let border_color: u32 = DWMWA_COLOR_NONE;
         DwmSetWindowAttribute(
             hwnd,
             DWMWA_BORDER_COLOR as u32,
             &border_color as *const u32 as *const c_void,
-            std::mem::size_of::<u32>() as u32,
-        );
-
-        // 顶部 1-2px 内缩条不绘制（见函数注释），否则浅色主题下是白线。
-        let caption_color: u32 = DWMWA_COLOR_NONE;
-        DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_CAPTION_COLOR as u32,
-            &caption_color as *const u32 as *const c_void,
             std::mem::size_of::<u32>() as u32,
         );
 
@@ -234,52 +135,6 @@ pub fn suppress_panel_frame(hwnd: isize) {
             DWMWA_TRANSITIONS_FORCEDISABLED as u32,
             &transitions_disabled as *const i32 as *const c_void,
             std::mem::size_of::<i32>() as u32,
-        );
-    }
-}
-
-/// 关闭窗口的全部 DWM 非客户区来源：禁用非客户区渲染、禁用框架过渡、
-/// 显式不绘制边框，并清掉普通与扩展样式中的非客户区样式位。幂等。
-///
-/// 仅供无系统阴影的自绘形状窗口（边缘浮动条 / 右键菜单）使用——
-/// DWMNCRP_DISABLED 会连系统阴影一起关掉，需要阴影的浮动面板禁用
-/// 本函数（见 suppress_panel_frame）。返回样式位是否在本轮调用中被
-/// 实际清除：只有真正清除过才需要随后的框架重算与重绘。
-///
-/// 保留 TOPMOST、TOOLWINDOW、LAYERED 等透明置顶窗口正常运行所需的位。
-fn disable_dwm_chrome(hwnd: *mut c_void) -> bool {
-    use windows_sys::Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute, DWMNCRP_DISABLED, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE,
-        DWMWA_NCRENDERING_POLICY, DWMWA_TRANSITIONS_FORCEDISABLED,
-    };
-    unsafe {
-        // DWM 不再绘制任何非客户区内容（标题栏 / 边框 / 系统阴影）。
-        let policy: i32 = DWMNCRP_DISABLED;
-        DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_NCRENDERING_POLICY as u32,
-            &policy as *const i32 as *const c_void,
-            std::mem::size_of::<i32>() as u32,
-        );
-
-        // 禁用 DWM 在激活 / 失活时针对透明窗口运行的框架过渡；这些过渡正是
-        // WebView2 下方短暂显露幽灵标题栏的常见触发点。CSS 仍负责应用自身动效。
-        let transitions_disabled: i32 = 1;
-        DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_TRANSITIONS_FORCEDISABLED as u32,
-            &transitions_disabled as *const i32 as *const c_void,
-            std::mem::size_of::<i32>() as u32,
-        );
-
-        // Windows 11 即使 decorations(false) 也可能保留 1px DWM 边框；显式请求
-        // 不绘制边框。不支持该属性的旧系统会安全地忽略调用失败。
-        let border_color: u32 = DWMWA_COLOR_NONE;
-        DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_BORDER_COLOR as u32,
-            &border_color as *const u32 as *const c_void,
-            std::mem::size_of::<u32>() as u32,
         );
 
         let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
@@ -305,6 +160,9 @@ fn disable_dwm_chrome(hwnd: *mut c_void) -> bool {
 /// 焦点与拖动路径反复打断 WebView2。浮动条另外安装常驻消息处理，
 /// 从源头阻止样式重新引入；本函数保留给首次清理及右键菜单使用。
 pub fn prepare_shaped_window(hwnd: isize) {
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMNCRP_DISABLED, DWMWA_NCRENDERING_POLICY,
+    };
     use windows_sys::Win32::Graphics::Gdi::{
         RedrawWindow, RDW_ALLCHILDREN, RDW_FRAME, RDW_INVALIDATE, RDW_UPDATENOW,
     };
@@ -313,7 +171,17 @@ pub fn prepare_shaped_window(hwnd: isize) {
     };
     unsafe {
         let hwnd = hwnd as *mut c_void;
-        let stripped = disable_dwm_chrome(hwnd);
+        // DWM 不再绘制任何非客户区内容（标题栏 / 边框 / 系统阴影）。
+        // 自绘形状窗口不依赖 DWM 的任何非客户区效果，禁用是一劳永逸的
+        // 兜底；与面板不同，这里没有需要 DWM 继续合成的窗口背景。
+        let policy: i32 = DWMNCRP_DISABLED;
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_NCRENDERING_POLICY as u32,
+            &policy as *const i32 as *const c_void,
+            std::mem::size_of::<i32>() as u32,
+        );
+        let stripped = clean_frame_bits(hwnd);
 
         // 只有本轮真正清掉样式位时才重刷框架。稳态（样式早已干净）下的
         // SWP_FRAMECHANGED + RedrawWindow 是纯扰动：GDI 重绘不作用于
@@ -342,12 +210,44 @@ pub fn prepare_shaped_window(hwnd: isize) {
         }
     }
 }
+
+/// 准备浮动面板窗口：清除创建时残留的非客户区样式位并压制 DWM 外描边
+/// 与焦点过渡，返回是否清理过样式位。
+///
+/// 与 prepare_shaped_window 的差别只有两点：不禁用 DWM 非客户区渲染
+/// （ACCENT 亚克力模糊作用于窗口背景合成，保留策略避免误伤），也不做
+/// GDI 强制重绘（面板不设窗口区域，不存在区域触发的重算）。清理过
+/// 样式位时补一次框架重算：窗口创建时按带框架样式算好了非客户区布局
+/// （标题栏 + 边框内缩），样式位清掉后若不重算，客户区会停留在创建时
+/// 的旧布局直到下一次真实 resize——首次显示不依赖这种时序巧合。幂等。
+pub fn prepare_panel_window(hwnd: isize) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    };
+    unsafe {
+        let handle = hwnd as *mut c_void;
+        let stripped = clean_frame_bits(handle);
+        if stripped {
+            SetWindowPos(
+                handle,
+                std::ptr::null_mut(),
+                0,
+                0,
+                0,
+                0,
+                SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+            );
+        }
+        stripped
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn bar_guard_survives_native_style_rewrites_without_swallowing_focus() {
+    fn guard_survives_native_style_rewrites_without_swallowing_focus() {
         use windows_sys::Win32::Foundation::{POINT, RECT};
         use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
         use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
@@ -415,8 +315,8 @@ mod tests {
                 SetWindowSubclass(window.0, Some(observer), 1, &mut seen as *mut _ as usize),
                 0
             );
-            assert!(install_bar_chrome_guard(window.0 as isize));
-            assert!(install_bar_chrome_guard(window.0 as isize));
+            assert!(install_borderless_chrome_guard(window.0 as isize));
+            assert!(install_borderless_chrome_guard(window.0 as isize));
             seen.activations = 0;
             seen.painting = 0;
             for (width, height) in [(44, 190), (190, 44), (66, 285), (285, 66)] {
@@ -482,8 +382,10 @@ mod tests {
         assert_eq!(cleaned_ex_style, preserved_ex_style);
     }
 
-    /// 模拟 tao 的 WM_NCCALCSIZE 顶部内缩（Win11 100% DPI = 1px），供测试
-    /// 验证面板子类把客户区顶边恢复回窗口顶边。
+    /// 模拟 tao 对「无边框 + 系统阴影」窗口的 WM_NCCALCSIZE 顶部内缩
+    /// （Win11 100% DPI = 1px）。子类安装顺序决定消息顺序：本模拟器装在
+    /// 面板防护之前，真实窗口上 tao 的子类同样晚于防护安装——防护对
+    /// WM_NCCALCSIZE 直接返回 0，模拟器根本不应收到消息。
     unsafe extern "system" fn mock_tao_inset_proc(
         hwnd: *mut c_void,
         message: u32,
@@ -533,110 +435,131 @@ mod tests {
             );
             assert_eq!(origin.x, outer.left, "client-left mismatch: {report}");
             assert_eq!(origin.y, outer.top, "client-top mismatch: {report}");
-            // 顶部内缩恢复后客户区在竖直方向覆盖整个窗口。
+            // 客户区在两个方向上覆盖整个窗口：不存在 CSS 够不到的非客户区缝隙。
             assert_eq!(client.top, 0, "client rect must start at 0: {report}");
+            assert_eq!(client.left, 0, "client rect must start at 0: {report}");
             assert_eq!(
                 client.bottom,
                 outer.bottom - outer.top,
                 "client height mismatch: {report}"
             );
+            assert_eq!(
+                client.right,
+                outer.right - outer.left,
+                "client width mismatch: {report}"
+            );
         }
     }
 
     #[test]
-    fn panel_guard_restores_tao_top_inset_and_keeps_plain_windows_untouched() {
+    fn panel_guard_blocks_shadow_inset_and_keeps_client_area_full() {
         use core::ffi::c_void;
-        use windows_sys::Win32::Foundation::RECT;
         use windows_sys::Win32::UI::Shell::SetWindowSubclass;
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            CreateWindowExW, GetClientRect, SetWindowPos, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-            SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_POPUP,
+            CreateWindowExW, DestroyWindow, SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER, WS_POPUP,
         };
 
         struct PanelTestWindow(*mut c_void);
         impl Drop for PanelTestWindow {
             fn drop(&mut self) {
-                use windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow;
                 unsafe { DestroyWindow(self.0) };
             }
         }
 
         unsafe {
             let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
-            let make_window = || {
-                let window = PanelTestWindow(CreateWindowExW(
-                    0,
-                    class.as_ptr(),
-                    std::ptr::null(),
-                    WS_POPUP,
+            let window = PanelTestWindow(CreateWindowExW(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                WS_POPUP | WS_CAPTION,
+                10,
+                10,
+                380,
+                240,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            ));
+            assert!(!window.0.is_null());
+
+            // 先装模拟器再装防护：防护后安装因此先收到消息，对
+            // WM_NCCALCSIZE 直接返回 0，模拟器（同真实窗口上的 tao 子类）
+            // 不再有机会加顶部内缩。窗口带 WS_CAPTION 建立时样式也是如此
+            // ——防护的首次清理与消息拦截必须能压住它。
+            assert_ne!(
+                SetWindowSubclass(window.0, Some(mock_tao_inset_proc), 7, 0),
+                0
+            );
+            assert!(install_borderless_chrome_guard(window.0 as isize));
+            assert!(install_borderless_chrome_guard(window.0 as isize));
+            // 真实改变尺寸（而非仅 FRAMECHANGED，更不能与创建尺寸相同——
+            // 无几何变化的 SetWindowPos 不会触发 WM_NCCALCSIZE，布局会停留
+            // 在创建时按带框架样式算出的旧值）：确保 WM_NCCALCSIZE 以
+            // wParam=TRUE 到达，正是 tao 内缩分支会执行的消息形态。
+            assert_ne!(
+                SetWindowPos(
+                    window.0,
+                    std::ptr::null_mut(),
                     10,
                     10,
-                    380,
-                    240,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                    std::ptr::null(),
-                ));
-                assert!(!window.0.is_null());
-                window
-            };
+                    420,
+                    300,
+                    SWP_NOACTIVATE | SWP_NOZORDER,
+                ),
+                0
+            );
+            assert_client_covers_window(window.0);
+            drop(window);
+        }
+    }
 
-            // 场景一：模拟 tao 顶部内缩——子类必须把客户区顶边恢复到窗口顶边。
-            // 安装顺序决定调用顺序：panel 子类先收到消息，经 DefSubclassProc
-            // 链到模拟器（top += 1），再减回去。
-            {
-                let window = make_window();
-                assert_ne!(
-                    SetWindowSubclass(
-                        window.0,
-                        Some(mock_tao_inset_proc),
-                        PANEL_CHROME_SUBCLASS_ID + 1,
-                        0
-                    ),
-                    0
-                );
-                assert!(install_panel_chrome_guard(window.0 as isize));
-                assert!(install_panel_chrome_guard(window.0 as isize));
-                assert_ne!(
-                    SetWindowPos(
-                        window.0,
-                        std::ptr::null_mut(),
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE,
-                    ),
-                    0
-                );
-                assert_client_covers_window(window.0);
-                drop(window);
-            }
+    #[test]
+    fn prepare_panel_window_clears_styles_idempotently() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, GetWindowLongPtrW, WS_POPUP,
+        };
 
-            // 场景二：恢复无条件执行——无内缩模拟时（DefWindowProc 不内缩
-            // 的 WS_POPUP 窗口），panel 子类按窗口 DPI 减回 inset，客户区
-            // 顶边相应上移。这里只验证子类不崩溃、几何仍可查询；恢复量的
-            // 精确性由场景一的模拟链路断言。
-            {
-                let window = make_window();
-                assert!(install_panel_chrome_guard(window.0 as isize));
-                assert_ne!(
-                    SetWindowPos(
-                        window.0,
-                        std::ptr::null_mut(),
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE,
-                    ),
+        unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let window = CreateWindowExW(
+                WS_EX_WINDOWEDGE,
+                class.as_ptr(),
+                std::ptr::null(),
+                WS_POPUP | WS_CAPTION | WS_SYSMENU,
+                10,
+                10,
+                80,
+                60,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            );
+            assert!(!window.is_null());
+
+            // 首轮：脏样式被清干净；再写脏样式并重复调用：仍然干净且不崩
+            // （幂等是显示 / 焦点路径反复调用的前提）。
+            assert!(prepare_panel_window(window as isize));
+            for _ in 0..2 {
+                SetWindowLongPtrW(
+                    window,
+                    GWL_STYLE,
+                    (WS_POPUP | NON_CLIENT_STYLE_BITS) as isize,
+                );
+                SetWindowLongPtrW(window, GWL_EXSTYLE, NON_CLIENT_EX_STYLE_BITS as isize);
+                assert!(prepare_panel_window(window as isize));
+                assert_eq!(
+                    GetWindowLongPtrW(window, GWL_STYLE) as u32 & NON_CLIENT_STYLE_BITS,
                     0
                 );
-                let mut client: RECT = std::mem::zeroed();
-                assert_ne!(GetClientRect(window.0, &mut client), 0);
-                drop(window);
+                assert_eq!(
+                    GetWindowLongPtrW(window, GWL_EXSTYLE) as u32 & NON_CLIENT_EX_STYLE_BITS,
+                    0
+                );
             }
+            DestroyWindow(window);
         }
     }
 }

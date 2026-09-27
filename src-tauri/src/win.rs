@@ -4,10 +4,7 @@ mod input;
 mod material;
 mod shape;
 mod visibility;
-pub use chrome::{
-    install_bar_chrome_guard, install_panel_chrome_guard, prepare_shaped_window,
-    suppress_panel_frame,
-};
+pub use chrome::{install_borderless_chrome_guard, prepare_panel_window, prepare_shaped_window};
 pub use input::{cursor_pos, foreground_exe, modifier_state, ModifierState};
 pub use material::{apply_panel_acrylic, disable_accent, redraw_window};
 pub use shape::{disable_rounding, prefer_rounded_corners, set_bar_region, set_rounded_region};

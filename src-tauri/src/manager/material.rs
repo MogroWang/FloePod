@@ -72,8 +72,8 @@ pub(crate) fn refresh_pod_bar_chrome(app: &AppHandle, id: u64) {
 /// 焦点变化时幂等重放浮动面板材质：重发一次全量材质，
 /// 保证无论浮动面板是否持有焦点，材质属性始终处于已下发状态。
 /// 边缘浮动条固定普通材质，无材质可重放，仅在显示 / 首摆路径做样式
-/// 清理（见 prepare_shaped_window）；浮动面板额外重放框架抑制
-/// （只写 DWM 属性，不动样式位）。
+/// 清理（见 prepare_shaped_window）。面板的无框架身份由常驻消息防护
+/// 保证，与焦点状态无关，这里无需重放任何非客户区相关属性。
 pub fn refresh_window_material(app: &AppHandle, label: &str) {
     let target = match events::pod_window(label) {
         Some(events::PodWindow::Bar(id)) => pod_bar(app, id).map(|window| (id, window, true)),
@@ -103,11 +103,6 @@ pub fn refresh_window_material(app: &AppHandle, label: &str) {
             // 重放同样轻推一次合成，焦点切换后材质立即可见。
             nudge_recomposite(&window);
         }
-    }
-    // 浮动面板焦点变化时幂等重放一次框架抑制（只写两个 DWM 属性，
-    // 不触碰样式位与框架——面板的系统阴影依赖它们）。
-    if let Ok(hwnd) = window.hwnd() {
-        win::suppress_panel_frame(hwnd.0 as isize);
     }
 }
 
