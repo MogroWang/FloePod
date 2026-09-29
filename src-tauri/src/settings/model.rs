@@ -179,6 +179,8 @@ pub struct Pod {
     /// 浮动面板填充色（#RGB/#RRGGBB/#RRGGBBAA）；空串 = 跟随主题表面色。
     pub panel_color: String,
     pub panel_width: u32,
+    /// 浮动面板最小长度（高度）下限：内容较少时面板不会低于该值（160-900）。
+    pub panel_min_height: u32,
     pub hover_delay_ms: u64,
     /// 是否允许悬停自动弹出；关闭后仍可单击或用键盘打开浮动面板。
     pub hover_open: bool,
@@ -230,6 +232,7 @@ impl Default for Pod {
             panel_opacity: 1.0,
             panel_color: String::new(),
             panel_width: 440,
+            panel_min_height: 160,
             hover_delay_ms: 120,
             hover_open: true,
             auto_hide: true,

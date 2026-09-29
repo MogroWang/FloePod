@@ -52,7 +52,7 @@ export function usePanelFiles(
       showToast(`已移出 ${ids.length} 项（文件已移入回收站）`);
     } catch (err) {
       console.error("remove selected failed", err);
-      showToast("移出失败，请重试");
+      showToast(`移出失败：${String(err)}`);
     } finally {
       listActionBusy.value = false;
     }

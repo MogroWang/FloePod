@@ -212,23 +212,37 @@ pub fn prepare_shaped_window(hwnd: isize) {
     }
 }
 
-/// 准备浮动面板窗口：清除创建时残留的非客户区样式位并压制 DWM 外描边
-/// 与焦点过渡动画，返回是否清理过样式位。
+/// 准备浮动面板窗口：清除创建时残留的非客户区样式位、禁用 DWM 非客户区
+/// 渲染并压制外描边与焦点过渡动画，返回是否清理过样式位。
 ///
-/// 与 prepare_shaped_window 的差别只有两点：不禁用 DWM 非客户区渲染
-/// （ACCENT 亚克力模糊作用于窗口背景合成，保留策略避免误伤），也不做
-/// GDI 强制重绘（面板不设窗口区域，不存在区域触发的重算）。面板的
-/// 显隐动画由前端 CSS 播放（1.8.0 起），原生层只负责在淡出后落定
-/// SW_HIDE；清理过样式位时补一次框架重算：窗口创建时按带框架样式算好
-/// 了非客户区布局（标题栏 + 边框内缩），样式位清掉后若不重算，客户区
-/// 会停留在创建时的旧布局直到下一次真实 resize——首次显示不依赖这种
-/// 时序巧合。幂等。
+/// 与 prepare_shaped_window 的差别只剩不做 GDI 强制重绘（面板不设窗口
+/// 区域，不存在区域触发的重算）。DWMWCP_ROUND 系统圆角窗口会被 DWM
+/// 附加投影，即使窗口不带任何框架样式——1.8.1 起与边缘浮动条 / 右键
+/// 菜单一致禁用 DWMWA_NCRENDERING_POLICY 去掉投影与标题栏类非客户区
+/// 效果；面板的亚克力走 SWCA 客户区通道，不受非客户区渲染策略影响
+/// （同款组合已在边缘胶囊与菜单窗口上长期验证）。面板的显隐动画由
+/// 前端 CSS 播放（1.8.0 起），原生层只负责在淡出后落定 SW_HIDE；清理
+/// 过样式位时补一次框架重算：窗口创建时按带框架样式算好了非客户区
+/// 布局（标题栏 + 边框内缩），样式位清掉后若不重算，客户区会停留在
+/// 创建时的旧布局直到下一次真实 resize——首次显示不依赖这种时序巧合。
+/// 幂等。
 pub fn prepare_panel_window(hwnd: isize) -> bool {
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMNCRP_DISABLED, DWMWA_NCRENDERING_POLICY,
+    };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         SetWindowPos, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
     };
     unsafe {
         let handle = hwnd as *mut c_void;
+        // DWM 不再绘制任何非客户区内容（标题栏 / 边框 / 系统阴影 / 投影）。
+        let policy: i32 = DWMNCRP_DISABLED;
+        DwmSetWindowAttribute(
+            handle,
+            DWMWA_NCRENDERING_POLICY as u32,
+            &policy as *const i32 as *const c_void,
+            std::mem::size_of::<i32>() as u32,
+        );
         let stripped = clean_frame_bits(handle);
         if stripped {
             SetWindowPos(

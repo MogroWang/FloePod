@@ -124,6 +124,9 @@ fn validate_impl(s: &Settings, data_dir: &str, allow_missing_roots: bool) -> Res
         if !(410..=600).contains(&pod.panel_width) {
             return Err(format!("匣「{}」的浮动面板宽度无效", pod.name));
         }
+        if !(160..=900).contains(&pod.panel_min_height) {
+            return Err(format!("匣「{}」的浮动面板最小长度无效", pod.name));
+        }
         if pod.hover_delay_ms > 600 {
             return Err(format!("匣「{}」的悬停延迟无效", pod.name));
         }
