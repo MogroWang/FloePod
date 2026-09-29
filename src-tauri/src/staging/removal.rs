@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 use std::fs;
 use std::io;
-use std::path::PathBuf;
 
 use tauri::{AppHandle, Manager};
 

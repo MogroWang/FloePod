@@ -21,12 +21,9 @@ pub fn preview_remove(
     delete_files: bool,
 ) -> Result<OperationPreview, String> {
     let state = app.state::<AppState>();
-    let (settings, items) = {
+    let items = {
         let connection = state.db.lock().unwrap();
-        (
-            staging::load_settings_from(&connection, &state)?,
-            db::items_by_ids(&connection, ids)?,
-        )
+        db::items_by_ids(&connection, ids)?
     };
     security::require_items_unlocked(app, &items)?;
     let details = items
