@@ -153,24 +153,33 @@ mod tests {
 
     #[test]
     fn stage_to_parses_pod_id_and_paths() {
+        // collect_paths 只保留真实存在的绝对路径，测试用临时文件。
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.txt");
+        std::fs::write(&file, b"x").unwrap();
+        let file = file.to_string_lossy().to_string();
         let request = stage_request_from_args(&[
             "FloePod.exe".into(),
             "--stage-to".into(),
             "2".into(),
-            "C:\\a.txt".into(),
+            file.clone(),
         ])
         .unwrap();
         assert_eq!(request.0, Some(2));
-        assert_eq!(request.1, vec!["C:\\a.txt".to_string()]);
+        assert_eq!(request.1, vec![file]);
     }
 
     #[test]
     fn legacy_stage_argument_has_no_pod_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("b.txt");
+        std::fs::write(&file, b"x").unwrap();
+        let file = file.to_string_lossy().to_string();
         let request =
-            stage_request_from_args(&["FloePod.exe".into(), "--stage".into(), "C:\\b.txt".into()])
+            stage_request_from_args(&["FloePod.exe".into(), "--stage".into(), file.clone()])
                 .unwrap();
         assert_eq!(request.0, None);
-        assert_eq!(request.1, vec!["C:\\b.txt".to_string()]);
+        assert_eq!(request.1, vec![file]);
     }
 
     #[test]

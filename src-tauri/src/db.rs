@@ -224,6 +224,8 @@ pub fn find_by_path(conn: &Connection, path: &str) -> Result<Option<StagedItem>,
     .map_err(|e| e.to_string())
 }
 
+// 全表列出仅剩测试在用（生产路径都按匣查询）；标注 cfg(test) 避免 dead_code。
+#[cfg(test)]
 pub fn list_items(conn: &Connection) -> Result<Vec<StagedItem>, String> {
     let mut stmt = conn
         .prepare(&format!(
