@@ -12,7 +12,7 @@ export type HandoffResult = { "directory": string; "files": Array<HandoffFile>; 
 export type Hotkeys = { "collectClipboard": string; "lockSensitive": string; "openPanel": string; "toggleBar": string; };
 export type MenuChoice = { "action": MenuItemSpec; "podId": number; };
 export type MenuItemSpec = { "danger": boolean; "disabled": boolean; "id": string; "itemIds": Array<number>; "label": string; "separator": boolean; "text": string; };
-export type MenuShow = { "items": Array<MenuItemSpec>; "material": "plain" | "acrylic"; "podId": number; "seq": number; };
+export type MenuShow = { "items": Array<MenuItemSpec>; "podId": number; "seq": number; };
 export type MetadataCheck = { "path": string; "reason": string | null; "status": ScanStatus; };
 export type ModeChanged = { "mode": "list" | "ask" | "conflict"; "paths": Array<string>; };
 export type ModifierState = { "alt": boolean; "ctrl": boolean; "shift": boolean; };
@@ -112,7 +112,7 @@ export interface EventContract {
   "floepod://context-menu-choice": { "action": MenuItemSpec; "podId": number; };
   "floepod://context-menu-closed": { "podId": number; };
   "floepod://context-menu-hide": void;
-  "floepod://context-menu-show": { "items": Array<MenuItemSpec>; "material": "plain" | "acrylic"; "podId": number; "seq": number; };
+  "floepod://context-menu-show": { "items": Array<MenuItemSpec>; "podId": number; "seq": number; };
   "floepod://items-changed": { "podId": number; };
   "floepod://panel-hidden": void;
   "floepod://panel-mode": { "mode": "list" | "ask" | "conflict"; "paths": Array<string>; };
