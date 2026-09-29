@@ -7,7 +7,6 @@ use tauri::{AppHandle, Manager};
 use crate::db;
 use crate::events;
 use crate::manager;
-use crate::policy;
 use crate::security;
 use crate::settings::{self, Pod, Settings};
 use crate::staging;
@@ -166,7 +165,6 @@ pub fn create(
             existing.clone()
         } else {
             pod.id = settings::next_pod_id_from(&connection, &current)?;
-            policy::enforce_pod(&app, &pod, false)?;
             if pod.security.enabled {
                 security::ensure_efs(Path::new(&pod.staging_folder))?;
             }
@@ -201,7 +199,6 @@ pub fn update(app: AppHandle, pod_id: u64, patch: serde_json::Value) -> Result<P
         let old_enabled = pod.enabled;
         let old_sensitive = pod.security.enabled;
         apply_patch(&mut pod, &patch)?;
-        policy::enforce_pod(&app, &pod, patch.get("rules").is_some())?;
         let folder_changed = staging_folder_changed(&old_folder, &pod.staging_folder)?;
         if pod.security.enabled && (!old_sensitive || folder_changed) {
             security::ensure_efs(Path::new(&pod.staging_folder))?;

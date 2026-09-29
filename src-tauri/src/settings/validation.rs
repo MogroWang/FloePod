@@ -42,8 +42,8 @@ fn validate_impl(s: &Settings, data_dir: &str, allow_missing_roots: bool) -> Res
     if s.auto_block.apps.len() > 64 {
         return Err("自动屏蔽应用列表过长".into());
     }
-    if !s.accessibility.scale.is_finite() || !(1.0..=2.0).contains(&s.accessibility.scale) {
-        return Err("辅助功能缩放比例必须在 100% 到 200% 之间".into());
+    if !s.accessibility.scale.is_finite() || !(0.5..=1.5).contains(&s.accessibility.scale) {
+        return Err("辅助功能缩放比例必须在 50% 到 150% 之间".into());
     }
     for app in &s.auto_block.apps {
         if app.trim().trim_matches('"').is_empty() {

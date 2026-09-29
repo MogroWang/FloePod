@@ -49,7 +49,7 @@ export function usePanelFiles(
       if (!(await confirmPreview(preview))) return;
       await staging.removeItems(ids, true);
       resetAnchor();
-      showToast(`已移出 ${ids.length} 项，24 小时内可恢复`);
+      showToast(`已移出 ${ids.length} 项（文件已移入回收站）`);
     } catch (err) {
       console.error("remove selected failed", err);
       showToast("移出失败，请重试");

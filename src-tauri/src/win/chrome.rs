@@ -218,11 +218,11 @@ pub fn prepare_shaped_window(hwnd: isize) {
 /// 与 prepare_shaped_window 的差别只有两点：不禁用 DWM 非客户区渲染
 /// （ACCENT 亚克力模糊作用于窗口背景合成，保留策略避免误伤），也不做
 /// GDI 强制重绘（面板不设窗口区域，不存在区域触发的重算）。面板的
-/// 显隐动画不走 DWM 过渡（对 SW_HIDE 实测不生效），由 win 层的
-/// AnimateWindow 显式播放；清理过样式位时补一次框架重算：窗口创建时
-/// 按带框架样式算好了非客户区布局（标题栏 + 边框内缩），样式位清掉后
-/// 若不重算，客户区会停留在创建时的旧布局直到下一次真实 resize——
-/// 首次显示不依赖这种时序巧合。幂等。
+/// 显隐动画由前端 CSS 播放（1.8.0 起），原生层只负责在淡出后落定
+/// SW_HIDE；清理过样式位时补一次框架重算：窗口创建时按带框架样式算好
+/// 了非客户区布局（标题栏 + 边框内缩），样式位清掉后若不重算，客户区
+/// 会停留在创建时的旧布局直到下一次真实 resize——首次显示不依赖这种
+/// 时序巧合。幂等。
 pub fn prepare_panel_window(hwnd: isize) -> bool {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         SetWindowPos, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,

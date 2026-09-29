@@ -17,7 +17,6 @@ pub fn load(conn: &Connection, data_dir: &str, version: &str) -> Result<Settings
         }
         None => Settings::default(),
     };
-    crate::policy::apply_to_settings(&mut s)?;
     s.version = version.to_string();
     s.data_dir = data_dir.to_string();
     Ok(s)

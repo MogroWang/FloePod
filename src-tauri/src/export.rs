@@ -10,7 +10,6 @@ use crate::db;
 use crate::events;
 use crate::file_ops;
 use crate::operations::{self, CompensationDraft, OperationDraft, OperationItemDraft};
-use crate::policy;
 use crate::security;
 use crate::settings;
 use crate::staging;
@@ -45,7 +44,6 @@ pub fn export_items(
     if !matches!(mode.as_str(), "copy" | "move") {
         return Err(format!("未知导出模式: {mode}"));
     }
-    policy::enforce_export(&mode, false)?;
     if !matches!(
         conflict_strategy.as_str(),
         "ask" | "overwrite" | "skip" | "rename"

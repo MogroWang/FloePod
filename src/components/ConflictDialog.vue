@@ -4,7 +4,6 @@ import { computed } from "vue";
 import { exportVerb } from "@/domain/exportPresentation";
 import type { ConflictStrategy } from "@/domain/types";
 import { previewSlice } from "@/lib/format";
-import { useSettingsStore } from "@/stores/settings";
 
 const props = withDefaults(
   defineProps<{ names: string[]; mode: "copy" | "move"; busy?: boolean }>(),
@@ -17,10 +16,6 @@ const emit = defineEmits<{
 
 const preview = computed(() => previewSlice(props.names));
 const verb = computed(() => exportVerb(props.mode));
-const settingsStore = useSettingsStore();
-const simpleLanguage = computed(() =>
-  Boolean(settingsStore.settings?.accessibility.simpleLanguage),
-);
 </script>
 
 <template>
@@ -32,17 +27,15 @@ const simpleLanguage = computed(() =>
     </ul>
     <div class="actions">
       <button type="button" class="act primary" :disabled="busy" @click="emit('resolve', 'rename')">
-        {{ simpleLanguage ? "两个都保留（自动改名）" : "保留两者" }}
+        保留两者
       </button>
       <button type="button" class="act" :disabled="busy" @click="emit('resolve', 'overwrite')">
-        {{ simpleLanguage ? "用新文件替换原文件" : "覆盖" }}
+        覆盖
       </button>
       <button type="button" class="act ghost" :disabled="busy" @click="emit('resolve', 'skip')">
-        {{ simpleLanguage ? "不处理这些文件" : "跳过" }}
+        跳过
       </button>
-      <button type="button" class="act ghost" :disabled="busy" @click="emit('cancel')">
-        {{ simpleLanguage ? "返回" : "取消" }}
-      </button>
+      <button type="button" class="act ghost" :disabled="busy" @click="emit('cancel')">取消</button>
     </div>
   </div>
 </template>

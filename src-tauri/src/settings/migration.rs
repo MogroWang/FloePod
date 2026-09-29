@@ -8,7 +8,15 @@ pub(super) fn decode(value: serde_json::Value) -> Result<Settings, String> {
     migrate_panel_appearance(&mut settings, &value);
     normalize_materials(&mut settings);
     normalize_panel_width(&mut settings);
+    normalize_ui_scale(&mut settings);
     Ok(settings)
+}
+
+/// 1.8.0 起界面缩放收紧为 50%-150%（此前 100%-200%）：旧存储里的存量值
+/// 收敛到新范围，否则严格校验会让保存路径全部报错。旧字段 simpleLanguage
+/// 与 confirmDangerous 已移除，serde 反序列化时忽略。
+fn normalize_ui_scale(s: &mut Settings) {
+    s.accessibility.scale = s.accessibility.scale.clamp(0.5, 1.5);
 }
 
 /// 旧版（0.2/0.3）单个暂存配置 -> 生成一个默认「匣」，保证老用户升级不丢配置。

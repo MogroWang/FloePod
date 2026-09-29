@@ -4,22 +4,19 @@ import type { MenuItemSpec } from "@/domain/menu";
 import type {
   Bootstrap,
   ConflictStrategy,
+  DataUsage,
   DragCutOutcome,
   DragCutToken,
   DropAction,
   ExportMode,
   ExportResult,
-  ExportedArtifact,
   Hotkeys,
   HandoffResult,
-  IndexResult,
-  ItemAnnotation,
   ModifierState,
   OperationEntry,
   OperationPreview,
   PanelMode,
   PanelState,
-  PolicyStatus,
   PrivacyScanResult,
   Pod,
   Settings,
@@ -28,7 +25,6 @@ import type {
   ThumbnailPayload,
   RetryResult,
   SafeExportResult,
-  SearchHit,
   SecurityStatus,
   UndoResult,
   VerifyResult,
@@ -60,6 +56,10 @@ export const ipc = {
   getBootstrap: (): Promise<Bootstrap> => invoke(Commands.GetBootstrap),
   getHotkeyDefaults: (): Promise<Hotkeys> => invoke(Commands.GetHotkeyDefaults),
   getModifierState: (): Promise<ModifierState> => invoke(Commands.GetModifierState),
+  getDataUsage: (): Promise<DataUsage> => invoke(Commands.GetDataUsage),
+  /** 迁移数据目录到新位置；重启应用后生效。 */
+  changeDataDir: (newPath: string): Promise<void> => invoke(Commands.ChangeDataDir, { newPath }),
+  restartApp: (): Promise<void> => invoke(Commands.RestartApp),
 
   createPod: (config: Partial<Pod>, reuseExisting = false): Promise<Pod> =>
     invoke(Commands.CreatePod, { config, reuseExisting }),
@@ -109,30 +109,12 @@ export const ipc = {
     invoke(Commands.CreateHandoff, { ids, destDir, title, note, cleanMetadata }),
   verifyHandoff: (directory: string): Promise<VerifyResult> =>
     invoke(Commands.VerifyHandoff, { directory }),
-  rebuildSearchIndex: (podId?: number): Promise<IndexResult> =>
-    invoke(Commands.RebuildSearchIndex, { podId: podId ?? null }),
-  searchItems: (query: string, podId?: number): Promise<SearchHit[]> =>
-    invoke(Commands.SearchItems, { query, podId: podId ?? null }),
-  updateItemAnnotation: (itemId: number, tags: string[], note: string): Promise<void> =>
-    invoke(Commands.UpdateItemAnnotation, { itemId, tags, note }),
-  getItemAnnotation: (itemId: number): Promise<ItemAnnotation> =>
-    invoke(Commands.GetItemAnnotation, { itemId }),
   getPodSecurityStatus: (podId: number): Promise<SecurityStatus> =>
     invoke(Commands.GetPodSecurityStatus, { podId }),
   unlockSensitivePod: (podId: number): Promise<SecurityStatus> =>
     invoke(Commands.UnlockSensitivePod, { podId }),
   lockSensitivePod: (podId: number): Promise<void> => invoke(Commands.LockSensitivePod, { podId }),
   lockAllSensitivePods: (): Promise<void> => invoke(Commands.LockAllSensitivePods),
-  getOrganizationPolicy: (): Promise<PolicyStatus> => invoke(Commands.GetOrganizationPolicy),
-  exportAuditLog: (destDir: string, format: "json" | "csv"): Promise<ExportedArtifact> =>
-    invoke(Commands.ExportAuditLog, { destDir, format }),
-  exportDiagnosticBundle: (destDir: string): Promise<ExportedArtifact> =>
-    invoke(Commands.ExportDiagnosticBundle, { destDir }),
-  exportSettingsFile: (destDir: string): Promise<ExportedArtifact> =>
-    invoke(Commands.ExportSettingsFile, { destDir }),
-  importSettingsFile: (source: string): Promise<Settings> =>
-    invoke(Commands.ImportSettingsFile, { source }),
-
   exportItems: (
     ids: number[],
     destDir: string,

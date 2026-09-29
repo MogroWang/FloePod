@@ -9,8 +9,8 @@ use crate::settings::{Hotkeys, Pod, PodPatch, Settings, SettingsPatch};
 use crate::staging::StagePathsResult;
 use crate::thumbnail::ThumbnailPayload;
 use crate::{
-    drag_out, export, handoff, logging, manager, operations, pods, policy, privacy, search,
-    security, staging, thumbnail,
+    drag_out, export, handoff, logging, manager, operations, paths, pods, privacy, security,
+    staging, thumbnail,
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -60,6 +60,49 @@ pub fn get_modifier_state() -> crate::win::ModifierState {
 #[tauri::command]
 pub fn get_hotkey_defaults() -> Hotkeys {
     Hotkeys::with_defaults()
+}
+
+#[derive(Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DataUsage {
+    pub bytes: u64,
+}
+
+/// 统计数据目录（数据库、撤销区、日志）占用的磁盘字节数。
+#[tauri::command]
+pub async fn get_data_usage(app: AppHandle) -> Result<DataUsage, String> {
+    blocking(app.clone(), "统计数据占用", move || {
+        let state = app.state::<crate::state::AppState>();
+        Ok(DataUsage {
+            bytes: paths::directory_size(&state.data_dir),
+        })
+    })
+    .await
+}
+
+/// 把数据目录迁移到新位置（复制数据库快照与撤销区，写入注册表覆盖项），
+/// 重启应用后生效。迁移期间锁住文件操作，避免快照中途变化。
+#[tauri::command]
+pub async fn change_data_dir(app: AppHandle, new_path: String) -> Result<(), String> {
+    blocking(app.clone(), "迁移数据目录", move || {
+        let state = app.state::<crate::state::AppState>();
+        let _file_operation = state.file_ops.lock().unwrap();
+        let migrated = {
+            let connection = state.db.lock().unwrap();
+            paths::migrate_data_dir(&state.data_dir, &connection, &new_path)
+        };
+        if migrated.is_ok() {
+            paths::set_override_data_dir(&new_path)?;
+        }
+        migrated
+    })
+    .await
+}
+
+/// 退出并重新启动应用（数据目录迁移后使新位置生效）。
+#[tauri::command]
+pub fn restart_app(app: AppHandle) {
+    app.restart();
 }
 
 // Windows 上创建窗口必须使用异步 Tauri 命令，同步命令可能与 UI 消息循环死锁。
@@ -280,47 +323,6 @@ pub async fn verify_handoff(
 }
 
 #[tauri::command]
-pub async fn rebuild_search_index(
-    app: AppHandle,
-    pod_id: Option<u64>,
-) -> Result<search::IndexResult, String> {
-    blocking(app.clone(), "重建本地搜索索引", move || {
-        search::rebuild(&app, pod_id)
-    })
-    .await
-}
-
-#[tauri::command]
-pub async fn search_items(
-    app: AppHandle,
-    query: String,
-    pod_id: Option<u64>,
-) -> Result<Vec<search::SearchHit>, String> {
-    blocking(app.clone(), "本地搜索", move || {
-        search::search(&app, query, pod_id)
-    })
-    .await
-}
-
-#[tauri::command]
-pub async fn update_item_annotation(
-    app: AppHandle,
-    item_id: i64,
-    tags: Vec<String>,
-    note: String,
-) -> Result<(), String> {
-    blocking(app.clone(), "保存标签和备注", move || {
-        search::update_annotation(&app, item_id, tags, note)
-    })
-    .await
-}
-
-#[tauri::command]
-pub fn get_item_annotation(app: AppHandle, item_id: i64) -> Result<search::Annotation, String> {
-    search::annotation(&app, item_id)
-}
-
-#[tauri::command]
 pub fn get_pod_security_status(
     app: AppHandle,
     pod_id: u64,
@@ -347,53 +349,6 @@ pub fn lock_sensitive_pod(app: AppHandle, pod_id: u64) {
 #[tauri::command]
 pub fn lock_all_sensitive_pods(app: AppHandle) {
     security::lock_all(&app);
-}
-
-#[tauri::command]
-pub fn get_organization_policy() -> Result<policy::PolicyStatus, String> {
-    policy::load()
-}
-
-#[tauri::command]
-pub async fn export_audit_log(
-    app: AppHandle,
-    dest_dir: String,
-    format: String,
-) -> Result<policy::ExportedArtifact, String> {
-    blocking(app.clone(), "导出本地审计记录", move || {
-        policy::export_audit(&app, dest_dir, format)
-    })
-    .await
-}
-
-#[tauri::command]
-pub async fn export_diagnostic_bundle(
-    app: AppHandle,
-    dest_dir: String,
-) -> Result<policy::ExportedArtifact, String> {
-    blocking(app.clone(), "生成本地诊断包", move || {
-        policy::diagnostic_bundle(&app, dest_dir)
-    })
-    .await
-}
-
-#[tauri::command]
-pub async fn export_settings_file(
-    app: AppHandle,
-    dest_dir: String,
-) -> Result<policy::ExportedArtifact, String> {
-    blocking(app.clone(), "导出设置", move || {
-        policy::export_settings(&app, dest_dir)
-    })
-    .await
-}
-
-#[tauri::command]
-pub async fn import_settings_file(app: AppHandle, source: String) -> Result<Settings, String> {
-    blocking(app.clone(), "导入设置", move || {
-        policy::import_settings(&app, source)
-    })
-    .await
 }
 
 #[tauri::command]

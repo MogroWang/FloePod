@@ -10,7 +10,6 @@ use crate::events;
 use crate::file_ops::{self, StagedMove};
 use crate::lnk;
 use crate::operations::{self, CompensationDraft, OperationDraft, OperationItemDraft};
-use crate::policy;
 use crate::rules;
 use crate::security;
 use crate::settings::{self, Pod};
@@ -38,7 +37,6 @@ pub fn stage_paths(
     action: String,
 ) -> Result<StagePathsResult, String> {
     let state = app.state::<AppState>();
-    policy::enforce_stage(&action)?;
     security::require_unlocked(&app, pod_id)?;
     let _permit = state.tasks.enter()?;
     let _operation = state.file_ops.lock().unwrap();

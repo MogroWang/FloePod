@@ -3,74 +3,18 @@
 use core::ffi::c_void;
 
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AnimateWindow, IsWindowVisible, SetWindowPos, ShowWindow, SystemParametersInfoW, AW_BLEND,
-    AW_HIDE, HWND_TOPMOST, SPI_GETCLIENTAREAANIMATION, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE,
+    SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE,
+    SW_SHOW, SW_SHOWNOACTIVATE,
 };
 
 use super::chrome::prepare_shaped_window;
 
-/// 系统是否启用动画（设置 > 辅助功能 > 视觉效果 > 动画效果）。关闭时
-/// 面板显隐退化为瞬时显隐，与系统级行为一致。
-fn client_area_animation_enabled() -> bool {
-    let mut enabled: i32 = 1;
-    unsafe {
-        if SystemParametersInfoW(
-            SPI_GETCLIENTAREAANIMATION,
-            0,
-            &mut enabled as *mut i32 as *mut c_void,
-            0,
-        ) != 0
-        {
-            enabled != 0
-        } else {
-            true
-        }
-    }
-}
-
-/// 浮动面板的原生淡出隐藏：AW_BLEND 是 Windows 标准的窗口关闭淡出
-/// 动画，作用于整个窗口的合成结果——ACCENT 亚克力材质与内容同步渐隐
-/// （CSS/DOM 动画只能覆盖内容层，材质会残留到硬切消失，这正是
-/// 1.7.6 之前「看起来没有退出动画」的根源）。AnimateWindow 同步播放
-/// 动画后返回并隐藏窗口；窗口已是隐藏态时静默返回。
-pub fn hide_panel_animated(hwnd: isize) {
+/// 浮动面板淡出后的原生隐藏：淡出动画由前端 CSS 播放（PANEL_HIDDEN 事件
+/// 先行，220ms 延迟由运行态看门狗保证），这里只负责落定 SW_HIDE。
+pub fn hide_panel_immediately(hwnd: isize) {
     let hwnd = hwnd as *mut c_void;
     unsafe {
-        if IsWindowVisible(hwnd) == 0 {
-            return;
-        }
-        if client_area_animation_enabled() {
-            AnimateWindow(hwnd, 200, AW_HIDE | AW_BLEND);
-        } else {
-            ShowWindow(hwnd, SW_HIDE);
-        }
-    }
-}
-
-/// 浮动面板的原生淡入显示：不携带 AW_ACTIVATE，保持不抢焦点的语义；
-/// 窗口已可见时跳过动画（AnimateWindow 对可见窗口会失败），随后恢复
-/// 置顶（AnimateWindow 不改变 z 序）。
-pub fn show_panel_no_activate(hwnd: isize) {
-    let hwnd = hwnd as *mut c_void;
-    unsafe {
-        let visible = IsWindowVisible(hwnd) != 0;
-        if !visible {
-            if client_area_animation_enabled() {
-                AnimateWindow(hwnd, 200, AW_BLEND);
-            } else {
-                ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-            }
-        }
-        SetWindowPos(
-            hwnd,
-            HWND_TOPMOST,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
-        );
+        ShowWindow(hwnd, SW_HIDE);
     }
 }
 

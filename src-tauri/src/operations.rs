@@ -9,7 +9,7 @@ mod undo;
 pub use identity::signature;
 pub use model::*;
 pub use preview::{preview_export, preview_remove};
-pub use retention::{purge_expired, remove_to_undo_store};
+pub use retention::purge_expired;
 pub use retry::retry;
 pub use store::{list, record, snapshot};
 pub use undo::undo;

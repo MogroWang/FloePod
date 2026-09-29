@@ -555,9 +555,12 @@
   color: var(--ink-3);
   font-size: 11.5px;
 }
-/* 高级设置页:按匣展示规则匣与敏感匣（一张卡片,两个分组） */
+/* 高级设置页:规则匣与敏感匣各自独立成区，按匣选择后编辑 */
 .settings-root .adv-pod-section {
   margin-top: 26px;
+}
+.settings-root .adv-section-hint {
+  margin: -12px 0 10px;
 }
 .settings-root .pod-card .sep {
   margin: 8px 0;
@@ -881,6 +884,36 @@
 .settings-root .about-val {
   color: var(--ink);
   overflow-wrap: anywhere;
+}
+.settings-root .about-val-path {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+.settings-root .about-path {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.settings-root .about-row-actions {
+  flex-shrink: 0;
+  display: flex;
+  gap: 6px;
+}
+.settings-root .about-restart-note {
+  max-width: 430px;
+  margin: 10px auto 0;
+  padding: 8px 12px;
+  border-radius: 9px;
+  background: var(--accent-soft);
+  color: var(--ink-2);
+  font-size: 11.5px;
+  text-align: center;
+}
+.settings-root .about-update-result {
+  font-size: 12px;
+  color: var(--ink-2);
 }
 
 .settings-root .toast {

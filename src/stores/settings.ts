@@ -34,8 +34,7 @@ function applyAccessibility(settings: Settings) {
   root.classList.toggle("high-contrast", accessibility.highContrast);
   root.classList.toggle("reduce-transparency", accessibility.reduceTransparency);
   root.classList.toggle("reduce-motion", accessibility.reduceMotion);
-  root.classList.toggle("simple-language", accessibility.simpleLanguage);
-  const scale = Math.min(2, Math.max(1, accessibility.scale || 1));
+  const scale = Math.min(1.5, Math.max(0.5, accessibility.scale || 1));
   // WebView2 支持 CSS zoom；缩放整个交互表面，固定 px 的旧组件也能同步放大。
   document.body.style.setProperty("zoom", String(scale));
   document.body.style.setProperty("width", `${100 / scale}%`);
@@ -44,6 +43,11 @@ function applyAccessibility(settings: Settings) {
 
 async function applyNativeTheme(mode: ThemeMode) {
   if (!("__TAURI_INTERNALS__" in window)) return;
+  // 只有设置窗口同步原生主题。浮动条 / 浮动面板是透明无框架窗口，
+  // WebView2 的原生主题切换会重新启用非客户区合成，在边缘胶囊上画出
+  // 标题栏伪影（1.8.0 修复）；它们的视觉主题由 CSS class 驱动，
+  // 不需要原生 setTheme。
+  if (getCurrentWindow().label !== "settings") return;
   try {
     await getCurrentWindow().setTheme(mode === "system" ? null : mode);
   } catch (err) {
@@ -114,6 +118,14 @@ export const useSettingsStore = defineStore("settings", {
 
     pod(id: number): Pod | undefined {
       return this.settings?.pods.find((p) => p.id === id);
+    },
+
+    /** 界面大小滑块拖动中的即时预览：只改本窗口缩放，不落库。 */
+    previewScale(scale: number) {
+      const clamped = Math.min(1.5, Math.max(0.5, scale || 1));
+      document.body.style.setProperty("zoom", String(clamped));
+      document.body.style.setProperty("width", `${100 / clamped}%`);
+      document.body.style.setProperty("height", `${100 / clamped}%`);
     },
 
     async watchSystemTheme() {
