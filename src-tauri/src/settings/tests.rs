@@ -260,6 +260,7 @@ fn existing_v040_settings_round_trip_without_losing_fields() {
         .remove("lockSensitive");
     for pod in legacy_view["pods"].as_array_mut().unwrap() {
         pod.as_object_mut().unwrap().remove("hoverOpen");
+        pod.as_object_mut().unwrap().remove("panelMinHeight");
         pod.as_object_mut().unwrap().remove("barLength");
         pod.as_object_mut().unwrap().remove("barColor");
         pod.as_object_mut().unwrap().remove("barEmoji");

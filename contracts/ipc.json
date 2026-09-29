@@ -3077,6 +3077,13 @@
                   ],
                   "type": "string"
                 },
+                "panelMinHeight": {
+                  "default": 160,
+                  "description": "浮动面板最小长度（高度）下限：内容较少时面板不会低于该值（160-900）。",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
                 "panelOpacity": {
                   "default": 1.0,
                   "description": "浮动面板不透明度 0.1 - 1.0；与边缘浮动条不透明度独立设置。",
