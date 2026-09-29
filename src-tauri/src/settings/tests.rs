@@ -242,8 +242,10 @@ fn existing_v040_settings_round_trip_without_losing_fields() {
     let stored: serde_json::Value =
         serde_json::from_str(&db::kv_get(&c, KEY).unwrap().unwrap()).unwrap();
     // 1.5.0 起辅助功能不再有总开关：旧 enabled 字段不得被写回存储。
+    // 1.8.0 起简明语言与危险操作确认开关移除，同样不得回写存储。
     assert!(stored["accessibility"].get("enabled").is_none());
-    assert_eq!(stored["accessibility"]["confirmDangerous"], true);
+    assert!(stored["accessibility"].get("simpleLanguage").is_none());
+    assert!(stored["accessibility"].get("confirmDangerous").is_none());
     assert_eq!(stored["pods"][0]["hoverOpen"], true);
     assert_eq!(stored["pods"][0]["barLength"], 190);
     assert_eq!(stored["pods"][0]["barColor"], "");

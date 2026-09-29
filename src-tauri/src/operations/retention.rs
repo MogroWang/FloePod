@@ -4,17 +4,15 @@
 //! compensations。历史写入失败不能反向破坏已经成功的文件操作，因此调用方应记录
 //! 日志并把操作结果照常返回；撤销则始终保守校验文件身份，内容已变化时拒绝删除。
 
-use std::collections::HashSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use rusqlite::params;
 
-use crate::db::{self, StagedItem};
+use crate::db;
 use crate::file_ops;
 use crate::state::AppState;
 
-use super::undo::move_for_restore;
 pub fn undo_root(state: &AppState) -> PathBuf {
     state.data_dir.join("undo")
 }
@@ -90,17 +88,4 @@ pub fn purge_expired(
     } else {
         Err(failures.join("；"))
     }
-}
-
-pub fn remove_to_undo_store(
-    state: &AppState,
-    item: &StagedItem,
-    path: &Path,
-) -> Result<PathBuf, String> {
-    let batch = format!("{}-{}", db::now_ms(), std::process::id());
-    let root = undo_root(state).join(batch);
-    fs::create_dir_all(&root)
-        .map_err(|error| format!("无法创建可撤销区 {}: {error}", root.display()))?;
-    let target = file_ops::unique_target(&root, &item.name, &mut HashSet::new())?;
-    move_for_restore(path, &target)
 }

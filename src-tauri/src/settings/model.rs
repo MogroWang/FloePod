@@ -53,13 +53,12 @@ pub struct AutoBlock {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Accessibility {
-    /// WebView 内容缩放，范围 1.0 - 2.0。
+    /// WebView 内容缩放，范围 0.5 - 1.5。1.8.0 起上限从 2.0 收紧到
+    /// 1.5，旧存储里的更大值由 migration 收敛（见 normalize_ui_scale）。
     pub scale: f64,
     pub high_contrast: bool,
     pub reduce_transparency: bool,
     pub reduce_motion: bool,
-    pub simple_language: bool,
-    pub confirm_dangerous: bool,
     pub send_to_menu: bool,
 }
 
@@ -139,8 +138,6 @@ impl Default for Accessibility {
             high_contrast: false,
             reduce_transparency: false,
             reduce_motion: false,
-            simple_language: false,
-            confirm_dangerous: true,
             send_to_menu: false,
         }
     }

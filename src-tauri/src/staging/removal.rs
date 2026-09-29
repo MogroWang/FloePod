@@ -9,7 +9,6 @@ use crate::db::{self, StagedItem};
 use crate::events;
 use crate::operations::{self, CompensationDraft, OperationDraft, OperationItemDraft};
 use crate::security;
-use crate::settings::{self};
 use crate::state::AppState;
 
 use super::context::*;
@@ -33,7 +32,8 @@ pub fn remove_items(app: AppHandle, ids: Vec<i64>, delete_files: bool) -> Result
     };
     security::require_items_unlocked(&app, &items)?;
     let validated: Vec<(&StagedItem, PathBuf)> = if delete_files {
-        settings::validate(&current, &data_dir(&state))?;
+        // 移出到回收站不依赖数据目录与全量设置状态；仍要求条目属于当前
+        // 配置中的匣，避免把历史残留路径误送进回收站。
         validate_item_pods(&current, &state, &items)?;
         items
             .iter()
@@ -50,28 +50,39 @@ pub fn remove_items(app: AppHandle, ids: Vec<i64>, delete_files: bool) -> Result
         for (item, path) in validated {
             let item_snapshot = operations::snapshot(item);
             match fs::symlink_metadata(&path) {
-                Ok(_) => match operations::remove_to_undo_store(&state, item, &path) {
-                    Ok(quarantine) => {
+                Ok(metadata) if crate::file_ops::is_reparse_or_symlink(&metadata) => {
+                    let message = "拒绝把符号链接或重解析点移入回收站".to_string();
+                    failed.push(format!("{}: {message}", item.name));
+                    operation_items.push(OperationItemDraft {
+                        item_id: Some(item.id),
+                        name: item.name.clone(),
+                        source_path: Some(path.to_string_lossy().to_string()),
+                        target_path: None,
+                        action: "remove".into(),
+                        status: "failed".into(),
+                        error: Some(message),
+                        snapshot: item_snapshot,
+                        compensation: None,
+                    });
+                }
+                Ok(_) => match trash::delete(&path) {
+                    Ok(()) => {
                         removed_ids.push(item.id);
                         operation_items.push(OperationItemDraft {
                             item_id: Some(item.id),
                             name: item.name.clone(),
                             source_path: Some(path.to_string_lossy().to_string()),
-                            target_path: Some(quarantine.to_string_lossy().to_string()),
+                            target_path: None,
                             action: "remove".into(),
                             status: "completed".into(),
                             error: None,
                             snapshot: item_snapshot,
-                            compensation: Some(CompensationDraft {
-                                kind: "restore_removed_file".into(),
-                                source_path: Some(quarantine.to_string_lossy().to_string()),
-                                target_path: Some(path.to_string_lossy().to_string()),
-                                expected_signature: operations::signature(&quarantine).ok(),
-                            }),
+                            compensation: None,
                         });
                     }
                     Err(error) => {
-                        failed.push(format!("{}: {error}", item.name));
+                        let message = format!("无法移入回收站: {error}");
+                        failed.push(format!("{}: {message}", item.name));
                         operation_items.push(OperationItemDraft {
                             item_id: Some(item.id),
                             name: item.name.clone(),
@@ -79,7 +90,7 @@ pub fn remove_items(app: AppHandle, ids: Vec<i64>, delete_files: bool) -> Result
                             target_path: None,
                             action: "remove".into(),
                             status: "failed".into(),
-                            error: Some(error),
+                            error: Some(message),
                             snapshot: item_snapshot,
                             compensation: None,
                         });
@@ -167,7 +178,7 @@ pub fn remove_items(app: AppHandle, ids: Vec<i64>, delete_files: bool) -> Result
                 "从暂存中移出 {} 项{}",
                 removed_ids.len(),
                 if delete_files {
-                    "（可撤销）"
+                    "（已移入回收站）"
                 } else {
                     "（保留文件）"
                 }
@@ -189,6 +200,6 @@ pub fn remove_items(app: AppHandle, ids: Vec<i64>, delete_files: bool) -> Result
     if failed.is_empty() {
         Ok(())
     } else {
-        Err(format!("部分文件无法进入可撤销区：{}", failed.join("；")))
+        Err(format!("部分文件无法移入回收站：{}", failed.join("；")))
     }
 }

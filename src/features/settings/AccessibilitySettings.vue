@@ -1,14 +1,22 @@
 <script setup lang="ts">
 import { useSettingsEditor } from "./context";
+import { useSettingsStore } from "@/stores/settings";
 import type { AccessibilitySettings } from "@/domain/types";
 import SettingsRow from "@/components/SettingsRow.vue";
 import ToggleSwitch from "@/components/ToggleSwitch.vue";
+import RangeSlider from "@/components/RangeSlider.vue";
 import SafetyCenter from "@/components/SafetyCenter.vue";
-import SearchCenter from "@/components/SearchCenter.vue";
-import OrganizationCenter from "@/components/OrganizationCenter.vue";
 const { s, save } = useSettingsEditor();
+const settingsStore = useSettingsStore();
 function saveAccessibility(patch: Partial<AccessibilitySettings>) {
   void save(() => ({ accessibility: { ...s.value.accessibility, ...patch } }));
+}
+/** 拖动中即时预览缩放；落库交给 commit。 */
+function previewScale(value: number) {
+  settingsStore.previewScale(value);
+}
+function commitScale(value: number) {
+  saveAccessibility({ scale: value });
 }
 </script>
 <template>
@@ -17,17 +25,20 @@ function saveAccessibility(patch: Partial<AccessibilitySettings>) {
     <p class="page-desc">放大界面、减少干扰，并查看或恢复每一步文件操作。</p>
     <div class="settings-card safety-settings">
       <SettingsRow label="界面大小" hint="同时放大文字、按钮和点击目标">
-        <select
-          class="input compact-select"
-          :value="s.accessibility.scale"
-          aria-label="辅助功能界面大小"
-          @change="saveAccessibility({ scale: Number(($event.target as HTMLSelectElement).value) })"
-        >
-          <option :value="1">100%</option>
-          <option :value="1.25">125%</option>
-          <option :value="1.5">150%</option>
-          <option :value="2">200%</option>
-        </select>
+        <div class="scale-control">
+          <RangeSlider
+            :value="s.accessibility.scale"
+            :min="0.5"
+            :max="1.5"
+            :step="0.05"
+            aria-label="界面大小"
+            @update:value="previewScale"
+            @commit="commitScale"
+          />
+          <span class="scale-value" aria-hidden="true">
+            {{ Math.round(s.accessibility.scale * 100) }}%
+          </span>
+        </div>
       </SettingsRow>
       <div class="sep" />
       <SettingsRow label="高对比度" hint="使用黑底、白字和高可见焦点框">
@@ -54,25 +65,9 @@ function saveAccessibility(patch: Partial<AccessibilitySettings>) {
         />
       </SettingsRow>
       <div class="sep" />
-      <SettingsRow label="简明语言" hint="用完整问题代替术语和仅图标提示">
-        <ToggleSwitch
-          label="简明语言"
-          :model-value="s.accessibility.simpleLanguage"
-          @update:model-value="(value) => saveAccessibility({ simpleLanguage: value })"
-        />
-      </SettingsRow>
-      <div class="sep" />
-      <SettingsRow label="危险操作确认" hint="移动、批量移出前始终显示将要发生的事情">
-        <ToggleSwitch
-          label="危险操作确认"
-          :model-value="s.accessibility.confirmDangerous"
-          @update:model-value="(value) => saveAccessibility({ confirmDangerous: value })"
-        />
-      </SettingsRow>
-      <div class="sep" />
       <SettingsRow
         label="资源管理器“发送到 FloePod”"
-        hint="右键文件即可复制到第一个可用匣，作为拖拽替代"
+        hint="为每个匣显示独立的发送选项，右键文件即可暂存"
       >
         <ToggleSwitch
           label="资源管理器发送到 FloePod"
@@ -83,9 +78,24 @@ function saveAccessibility(patch: Partial<AccessibilitySettings>) {
     </div>
     <h3 class="section-title">操作时间线与一键恢复</h3>
     <SafetyCenter />
-    <h3 class="section-title search-section-title">本地 OCR、全文搜索与标签</h3>
-    <SearchCenter />
-    <h3 class="section-title search-section-title">机构策略、审计与诊断</h3>
-    <OrganizationCenter />
   </div>
 </template>
+<style scoped>
+.scale-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 220px;
+}
+.scale-control :deep(input[type="range"]) {
+  flex: 1;
+}
+.scale-value {
+  min-width: 42px;
+  text-align: right;
+  font-size: 12px;
+  font-weight: 550;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+}
+</style>

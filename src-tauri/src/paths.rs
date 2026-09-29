@@ -2,7 +2,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use rusqlite::Connection;
+
 const PORTABLE_MARKER: &str = ".floepod-portable";
+#[cfg(windows)]
+const OVERRIDE_SUBKEY: &str = r"Software\FloePod";
+#[cfg(windows)]
+const OVERRIDE_VALUE: &str = "DataDir";
 
 pub fn resolve() -> PathBuf {
     static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -10,6 +16,10 @@ pub fn resolve() -> PathBuf {
 }
 
 fn resolve_uncached() -> PathBuf {
+    // 关于页「更改数据位置」写入的注册表覆盖项优先于便携模式与默认位置。
+    if let Some(overridden) = override_data_dir() {
+        return overridden;
+    }
     resolve_from(
         std::env::current_exe()
             .ok()
@@ -18,6 +28,152 @@ fn resolve_uncached() -> PathBuf {
         std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
         std::env::temp_dir(),
     )
+}
+
+/// 注册表覆盖的数据目录。路径无效或不可写时忽略并回退默认解析，
+/// 保证应用总能启动；损坏的覆盖项不会把应用锁死。
+fn override_data_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        use winreg::enums::HKEY_CURRENT_USER;
+        use winreg::RegKey;
+        let current_user = RegKey::predef(HKEY_CURRENT_USER);
+        let key = current_user.open_subkey(OVERRIDE_SUBKEY).ok()?;
+        let raw: String = key.get_value(OVERRIDE_VALUE).ok()?;
+        let path = PathBuf::from(raw);
+        if path.is_absolute() && ensure_writable(&path) {
+            Some(path)
+        } else {
+            None
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+/// 写入数据目录覆盖项；重启后 `resolve()` 优先使用该位置。
+pub fn set_override_data_dir(new_path: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use winreg::enums::HKEY_CURRENT_USER;
+        use winreg::RegKey;
+        let current_user = RegKey::predef(HKEY_CURRENT_USER);
+        let (key, _) = current_user
+            .create_subkey(OVERRIDE_SUBKEY)
+            .map_err(|error| format!("无法写入数据位置配置: {error}"))?;
+        key.set_value(OVERRIDE_VALUE, &new_path)
+            .map_err(|error| format!("无法写入数据位置配置: {error}"))?;
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = new_path;
+        Err("当前平台不支持更改数据位置".into())
+    }
+}
+
+/// 递归统计数据目录占用（跳过符号链接与不可读项），单位字节。
+pub fn directory_size(root: &Path) -> u64 {
+    let mut total = 0u64;
+    walk_size(root, &mut total);
+    total
+}
+
+fn walk_size(dir: &Path, total: &mut u64) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        if file_type.is_dir() {
+            walk_size(&path, total);
+        } else if let Ok(metadata) = entry.metadata() {
+            *total += metadata.len();
+        }
+    }
+}
+
+/// 把数据目录迁移到新位置：数据库用 VACUUM INTO 生成一致快照，撤销区
+/// 递归复制（索引中的撤销记录仍指向 undo/ 下的文件）。注册表覆盖项由
+/// 调用方在迁移成功后写入，本函数不触碰任何现有数据。
+pub fn migrate_data_dir(
+    current: &Path,
+    connection: &Connection,
+    new_path: &str,
+) -> Result<(), String> {
+    let target = PathBuf::from(new_path.trim());
+    if !target.is_absolute() {
+        return Err("数据位置必须是绝对路径".into());
+    }
+    let canonical_current = current
+        .canonicalize()
+        .unwrap_or_else(|_| current.to_path_buf());
+    let canonical_target = if target.exists() {
+        target.canonicalize().unwrap_or_else(|_| target.clone())
+    } else {
+        target.clone()
+    };
+    if canonical_current == canonical_target {
+        return Err("新数据位置与当前位置相同".into());
+    }
+    if crate::file_paths::path_is_within(&canonical_target, &canonical_current)
+        || crate::file_paths::path_is_within(&canonical_current, &canonical_target)
+    {
+        return Err("新数据位置不能与当前数据目录互相包含".into());
+    }
+    fs::create_dir_all(&target)
+        .map_err(|error| format!("无法创建目录 {}: {error}", target.display()))?;
+    if !ensure_writable(&target) {
+        return Err(format!("目录不可写: {}", target.display()));
+    }
+    let target_db = target.join("data.db");
+    if target_db.exists() {
+        return Err(format!("目标目录已包含 FloePod 数据: {}", target.display()));
+    }
+    connection
+        .execute("VACUUM INTO ?1", [target_db.to_string_lossy().as_ref()])
+        .map_err(|error| format!("数据库快照失败: {error}"))?;
+    let undo_source = current.join("undo");
+    let undo_target = target.join("undo");
+    if undo_source.is_dir() {
+        if let Err(error) = copy_dir_recursive(&undo_source, &undo_target) {
+            // 尽力清掉半成品快照，失败原因照常返回；现有数据不受影响。
+            let _ = fs::remove_file(&target_db);
+            let _ = fs::remove_dir_all(&undo_target);
+            return Err(format!("撤销区复制失败: {error}"));
+        }
+    }
+    Ok(())
+}
+
+fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), String> {
+    fs::create_dir_all(target).map_err(|error| error.to_string())?;
+    for entry in fs::read_dir(source)
+        .map_err(|error| error.to_string())?
+        .flatten()
+    {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        let dest = target.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_recursive(&entry.path(), &dest)?;
+        } else {
+            fs::copy(entry.path(), &dest).map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 fn resolve_from(

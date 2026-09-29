@@ -35,7 +35,7 @@ pub fn preview_remove(
         .map(|item| format!("{} — {}", item.name, item.staging_path))
         .collect::<Vec<_>>();
     let warnings = if delete_files {
-        vec!["文件会先进入 FloePod 的 24 小时可撤销区；到期清理时再移入系统回收站。".into()]
+        vec!["文件会被移入系统回收站，可随时从回收站还原。".into()]
     } else {
         vec!["只移除索引，原文件仍留在暂存文件夹中。".into()]
     };

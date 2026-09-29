@@ -29,12 +29,6 @@ pub enum Operation {
         source: PathBuf,
         output: PathBuf,
     },
-    PdfText {
-        source: PathBuf,
-    },
-    OfficeText {
-        source: PathBuf,
-    },
     #[cfg(test)]
     Sleep,
     #[cfg(test)]
@@ -255,14 +249,6 @@ fn worker_main() {
                 }
                 .map_err(failed)?;
                 serde_json::to_value(removed).map_err(failed)
-            }
-            Operation::PdfText { source } => {
-                serde_json::to_value(crate::search::extract_pdf(&source).map_err(failed)?)
-                    .map_err(failed)
-            }
-            Operation::OfficeText { source } => {
-                serde_json::to_value(crate::search::extract_office(&source).map_err(failed)?)
-                    .map_err(failed)
             }
             #[cfg(test)]
             Operation::Sleep => {

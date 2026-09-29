@@ -86,7 +86,7 @@ pub fn sync_autostart(_app: &AppHandle, enabled: bool) -> Result<(), String> {
 /// 设置落地：同步匣窗口、材质、监听、托盘全量应用。
 /// 自启动属于可失败的系统副作用，由保存设置和启动流程显式调用 `sync_autostart`。
 pub fn apply_settings(app: &AppHandle, s: &Settings) {
-    if let Err(error) = crate::shell_integration::sync(s.accessibility.send_to_menu) {
+    if let Err(error) = crate::shell_integration::sync(s.accessibility.send_to_menu, &s.pods) {
         crate::logging::write(&format!("[shell] 同步资源管理器菜单失败: {error}"));
     }
     // 自动屏蔽配置驻留内存：轮询线程每几百毫秒读取一次，不能每次都查库。
@@ -113,6 +113,9 @@ pub fn apply_settings(app: &AppHandle, s: &Settings) {
             // 浮动面板材质无论可见与否都要落地，否则未固定的浮动面板改材质永远不生效。
             apply_panel_material_if_changed(app, pod);
             place_pod_bar(app, pod, false);
+            // 主题切换 / 设置保存后 WebView2 可能重新启用透明窗口的非客户区
+            // 合成，在边缘胶囊上画出标题栏伪影；幂等重放一次无边框清理。
+            refresh_pod_bar_chrome(app, pod.id);
             if let Some(panel) = pod_panel(app, pod.id) {
                 let _ = panel.set_title(&format!("{} 浮动面板", pod.name));
             }

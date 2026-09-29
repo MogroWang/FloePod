@@ -1,5 +1,5 @@
 //! Owned periodic presence/stealth work; no detached timer per hide.
-use super::panel::transition_to_hidden_locked;
+use super::panel::{finish_delayed_hides, transition_to_hidden_locked};
 use crate::state::AppState;
 use crate::{events, win};
 use std::{
@@ -88,6 +88,7 @@ pub fn spawn_watchdog(app: AppHandle) {
             let state = app.state::<AppState>();
             let _operation = state.panel_ops.lock().unwrap();
             let now = Instant::now();
+            finish_delayed_hides(&app, now);
             crate::menu::finish_delayed_hide(&app, now);
             if !state.bars_visible.load(Ordering::Relaxed) {
                 return Ok(());

@@ -34,8 +34,6 @@ let settings: Settings = {
     highContrast: false,
     reduceTransparency: false,
     reduceMotion: false,
-    simpleLanguage: false,
-    confirmDangerous: true,
     sendToMenu: false,
   },
   pods: [
@@ -194,7 +192,6 @@ let operations: OperationEntry[] = [
     ],
   },
 ];
-const annotations = new Map<number, { tags: string[]; note: string }>();
 const unlockedPods = new Set<number>();
 
 const panelStates = new Map<number, PanelState>();
@@ -425,37 +422,12 @@ export async function mockInvoke<T>(
       });
     case Commands.VerifyHandoff:
       return result({ checked: 2, valid: 2, issues: [] });
-    case Commands.RebuildSearchIndex:
-      return result({ indexed: items.length, skipped: 0, failures: [], ocrAvailable: true });
-    case Commands.SearchItems: {
-      const query = String(args?.query ?? "").toLowerCase();
-      const podId = args?.podId == null ? null : Number(args.podId);
-      return result(
-        items
-          .filter((item) => podId === null || item.podId === podId)
-          .filter((item) => {
-            const annotation = annotations.get(item.id) ?? { tags: [], note: "" };
-            return [item.name, item.originalPath ?? "", annotation.note, ...annotation.tags]
-              .join(" ")
-              .toLowerCase()
-              .includes(query);
-          })
-          .map((item) => ({
-            item,
-            ...(annotations.get(item.id) ?? { tags: [], note: "" }),
-            snippet: item.kind === "text" ? "浏览器预览中的本地索引示例" : "",
-            matchedOn: ["文件名"],
-          })),
-      );
-    }
-    case Commands.UpdateItemAnnotation:
-      annotations.set(Number(args?.itemId), {
-        tags: Array.isArray(args?.tags) ? args.tags.map(String) : [],
-        note: String(args?.note ?? ""),
-      });
+    case Commands.GetDataUsage:
+      return result({ bytes: 18432 * 1024 });
+    case Commands.ChangeDataDir:
       return result(undefined);
-    case Commands.GetItemAnnotation:
-      return result(annotations.get(Number(args?.itemId)) ?? { tags: [], note: "" });
+    case Commands.RestartApp:
+      return result(undefined);
     case Commands.GetPodSecurityStatus: {
       const podId = Number(args?.podId);
       const sensitive = Boolean(settings.pods.find((pod) => pod.id === podId)?.security.enabled);
@@ -478,34 +450,6 @@ export async function mockInvoke<T>(
     case Commands.LockAllSensitivePods:
       unlockedPods.clear();
       return result(undefined);
-    case Commands.GetOrganizationPolicy:
-      return result({
-        managed: false,
-        source: "C:\\ProgramData\\FloePod\\organization-policy.json",
-        policy: {
-          organizationName: "",
-          disableMove: false,
-          requireCopyDefault: false,
-          requirePrivacyScan: false,
-          lockRules: false,
-          disableFulltextIndex: false,
-          allowedDataRoots: [],
-          maximumHistoryDays: 90,
-          mandatoryRetentionDays: 0,
-          diagnosticIncludePaths: false,
-          supportContact: "",
-          managedHotkeys: null,
-          managedPods: [],
-        },
-      });
-    case Commands.ExportAuditLog:
-      return result({ path: "D:\\FloePod-audit.json", records: operations.length });
-    case Commands.ExportDiagnosticBundle:
-      return result({ path: "D:\\FloePod-diagnostics.zip", records: operations.length });
-    case Commands.ExportSettingsFile:
-      return result({ path: "D:\\FloePod-settings.json", records: 1 });
-    case Commands.ImportSettingsFile:
-      return result(settings);
     case Commands.ExportItems: {
       const ids = Array.isArray(args?.ids) ? args.ids.map(Number) : [];
       if (args?.mode === "move") {

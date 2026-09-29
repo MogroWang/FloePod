@@ -119,15 +119,6 @@ onMounted(refreshStatus);
         @update:model-value="(value) => update({ suppressThumbnails: value })"
       />
     </SettingsRow>
-    <div class="sep" />
-    <SettingsRow label="禁止全文索引" hint="正文与 OCR 不进索引，文件名不受影响">
-      <ToggleSwitch
-        label="禁止全文索引"
-        :model-value="security.suppressIndex"
-        :disabled="!security.enabled"
-        @update:model-value="(value) => update({ suppressIndex: value })"
-      />
-    </SettingsRow>
     <div class="security-status" role="status" aria-live="polite">
       <span>{{ message }}</span>
       <span v-if="status?.expiresSoon">{{ status.expiresSoon }} 项已达到提醒或清理期限。</span>

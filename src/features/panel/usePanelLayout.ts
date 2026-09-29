@@ -37,13 +37,19 @@ export function usePanelLayout(
       const head = headEl.value;
       if (!root || !body || !content || !head) return;
 
-      // 只测量内容元素；若测量滚动视口，原生窗口高度会被反复回灌而持续增长。
       const bodyStyle = getComputedStyle(body);
       const rootStyle = getComputedStyle(root);
       const bodyPadding = cssPixels(bodyStyle.paddingTop) + cssPixels(bodyStyle.paddingBottom);
       const rootBorder =
         cssPixels(rootStyle.borderTopWidth) + cssPixels(rootStyle.borderBottomWidth);
+      // .panel-content 有 min-height: 100%：直接量 scrollHeight 会把「当前
+      // 视口高度」当成内容高度读回来，叠加 scrollHeight 的整数取整与显示器
+      // 非整数缩放的舍入，每次切换视图都收缩约 1px，面板因此越切越短。
+      // 测量前临时解除最小高度，读取与视口无关的固有内容高度再恢复。
+      const previousMinHeight = content.style.minHeight;
+      content.style.minHeight = "0";
       const intrinsicBody = Math.ceil(content.scrollHeight + bodyPadding);
+      content.style.minHeight = previousMinHeight;
       const bodyHeight = mode.value === "list" ? Math.min(intrinsicBody, 560) : intrinsicBody;
       const chromeHeight = head.offsetHeight + (footEl.value?.offsetHeight ?? 0) + rootBorder;
       await ipc
@@ -65,6 +71,7 @@ export function usePanelLayout(
     target.value = element as HTMLElement | null;
   };
   return {
+    rootEl,
     bindHead: bind(headEl),
     bindList: bind(listEl),
     bindContent: bind(contentEl),
