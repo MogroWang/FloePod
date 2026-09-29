@@ -60,6 +60,10 @@ fn apply_patch(pod: &mut Pod, patch: &serde_json::Value) -> Result<(), String> {
                 pod.panel_width = u32::try_from(unsigned(value, field)?)
                     .map_err(|_| format!("字段 {field} 超出有效范围"))?;
             }
+            "panelMinHeight" => {
+                pod.panel_min_height = u32::try_from(unsigned(value, field)?)
+                    .map_err(|_| format!("字段 {field} 超出有效范围"))?;
+            }
             "hoverDelayMs" => pod.hover_delay_ms = unsigned(value, field)?,
             "hoverOpen" => {
                 pod.hover_open = value

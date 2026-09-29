@@ -7,7 +7,7 @@ use crate::events::{MENU_CHOICE, MENU_CLOSED, MENU_HIDE, MENU_SHOW};
 // 自身不直接触碰条目数据。seq 序号消解新旧菜单竞态：旧菜单的 blur / 关闭
 // 请求不会影响刚打开的新菜单。
 
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -29,38 +29,10 @@ static MENU_READY: AtomicBool = AtomicBool::new(false);
 static MENU_POD: AtomicU64 = AtomicU64::new(0);
 /// 是否存在未关闭的菜单（open 置位、hide 复位）。
 static MENU_OPEN: AtomicBool = AtomicBool::new(false);
-/// 当前菜单的原生材质：0=plain、1=acrylic。
-/// 与 MENU_POD 同一代 open 写入，保证前端半透明底色和原生窗口材质一致。
-static MENU_MATERIAL: AtomicU8 = AtomicU8::new(0);
 /// 菜单窗口开始淡出后，原生窗口的隐藏截止时间；由看门狗 tick 兑现。
 static MENU_HIDE_AT: Mutex<Option<Instant>> = Mutex::new(None);
 /// 菜单淡出时长（毫秒），与 ContextMenuWindow 的淡出动画对齐。
 const MENU_FADE_OUT_MS: u64 = 140;
-
-fn material_code(material: &str) -> u8 {
-    match material {
-        "acrylic" => 1,
-        _ => 0,
-    }
-}
-
-fn material_name(code: u8) -> &'static str {
-    match code {
-        1 => "acrylic",
-        _ => "plain",
-    }
-}
-
-fn source_material(app: &AppHandle, pod_id: u64) -> &'static str {
-    let settings = manager::current_settings(app);
-    let code = settings
-        .pods
-        .iter()
-        .find(|pod| pod.id == pod_id && pod.enabled)
-        .map(|pod| material_code(&pod.panel_material))
-        .unwrap_or(0);
-    material_name(code)
-}
 
 /// 菜单项描述：浮动面板组装、菜单窗口渲染、选择后原样回传浮动面板执行。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
@@ -98,15 +70,11 @@ pub fn open(app: &AppHandle, pod_id: u64, items: &[MenuItemSpec]) -> Result<(), 
     }
     let seq = MENU_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
     let previous_pod = MENU_POD.swap(pod_id, Ordering::Relaxed);
-    let requested_material = source_material(app, pod_id);
-    // 在隐藏状态先尝试应用系统材质；失败（如 WebView 未就绪）时降级为
-    // plain，让前端使用近实心底色而不是透明漏出桌面。
-    let material = app
-        .get_webview_window(LABEL)
-        .filter(|window| manager::apply_window_material(window, requested_material))
-        .map(|_| requested_material)
-        .unwrap_or("plain");
-    MENU_MATERIAL.store(material_code(material), Ordering::Relaxed);
+    // 1.8.1 起菜单填充恒定完全不透明：不再继承来源匣的亚克力材质。
+    // 全局菜单窗口可能带着上一轮的 ACCENT 残留，打开前仍要清一遍。
+    if let Some(window) = app.get_webview_window(LABEL) {
+        manager::apply_window_material(&window, "plain");
+    }
     // 旧菜单的 blur 关闭请求会因 seq 校验被忽略（不能误杀新菜单），
     // 这里对被取代的旧归属匣补发 CLOSED，保证其保活状态总能被解除。
     if previous_pod != 0 && previous_pod != pod_id && MENU_OPEN.load(Ordering::Relaxed) {
@@ -129,7 +97,6 @@ pub fn open(app: &AppHandle, pod_id: u64, items: &[MenuItemSpec]) -> Result<(), 
                 seq,
                 pod_id,
                 items: items.to_vec(),
-                material: material.to_string(),
             },
         )
         .map_err(|error| format!("菜单窗口事件发送失败: {error}"))
@@ -149,12 +116,8 @@ pub fn resize_and_show(app: &AppHandle, seq: u64, width: f64, height: f64) {
     let position = clamp_to_monitor(app, cursor_position(), size);
     let _ = window.set_size(size);
     let _ = window.set_position(position);
-    // 菜单继承来源匣浮动面板的材质。先清理两个原生材质通道再应用目标材质，
-    // 避免复用全局菜单窗口时旧材质与 ACCENT 亚克力叠加。
-    let _ = manager::apply_window_material(
-        &window,
-        material_name(MENU_MATERIAL.load(Ordering::Relaxed)),
-    );
+    // 菜单填充恒定普通：复用窗口时清掉可能残留的 ACCENT / systembackdrop。
+    let _ = manager::apply_window_material(&window, "plain");
     // 窗口必须与菜单卡片同形：四周不留阴影余量（阴影已移除），四角按卡片
     // 圆角裁剪。否则透明余量会吞掉落在其上的点击——点击不会让菜单失焦，
     // 也不会作用于下层窗口，表现为「点左键菜单不消失」。
@@ -346,17 +309,5 @@ mod tests {
         assert!(spec.separator);
         assert!(spec.item_ids.is_empty());
         assert!(!spec.danger);
-    }
-
-    #[test]
-    fn menu_material_codes_are_stable_and_unknown_values_fall_back_to_plain() {
-        for (material, code) in [("plain", 0), ("acrylic", 1)] {
-            assert_eq!(material_code(material), code);
-            assert_eq!(material_name(code), material);
-        }
-        // 云母已移除，存量值回落为普通。
-        assert_eq!(material_code("mica"), 0);
-        assert_eq!(material_code("legacy-blur"), 0);
-        assert_eq!(material_name(u8::MAX), "plain");
     }
 }

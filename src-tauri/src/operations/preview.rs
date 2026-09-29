@@ -28,7 +28,6 @@ pub fn preview_remove(
             db::items_by_ids(&connection, ids)?,
         )
     };
-    staging::validate_item_pods(&settings, &state, &items)?;
     security::require_items_unlocked(app, &items)?;
     let details = items
         .iter()

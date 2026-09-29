@@ -58,8 +58,6 @@ pub struct MenuShow {
     pub seq: u64,
     pub pod_id: u64,
     pub items: Vec<crate::menu::MenuItemSpec>,
-    #[schemars(extend("enum" = ["plain","acrylic"]))]
-    pub material: String,
 }
 #[derive(Clone, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]

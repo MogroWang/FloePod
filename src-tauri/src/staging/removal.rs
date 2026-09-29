@@ -31,24 +31,34 @@ pub fn remove_items(app: AppHandle, ids: Vec<i64>, delete_files: bool) -> Result
         )
     };
     security::require_items_unlocked(&app, &items)?;
-    let validated: Vec<(&StagedItem, PathBuf)> = if delete_files {
-        // 移出到回收站不依赖数据目录与全量设置状态；仍要求条目属于当前
-        // 配置中的匣，避免把历史残留路径误送进回收站。
-        validate_item_pods(&current, &state, &items)?;
-        items
-            .iter()
-            .map(|item| item_path(item, &current).map(|path| (item, path)))
-            .collect::<Result<_, _>>()?
-    } else {
-        Vec::new()
-    };
 
     let mut removed_ids = Vec::new();
     let mut failed = Vec::new();
     let mut operation_items = Vec::new();
     if delete_files {
-        for (item, path) in validated {
+        for item in &items {
             let item_snapshot = operations::snapshot(item);
+            // 逐条解析目标路径：一条解析失败只计入失败清单，不放大成整批失败。
+            // （1.8.0 之前 validate_item_pods + 全批 collect 把单条错误放大成
+            // 整批失败，是「移出失败」反复出现的主要原因。）
+            let path = match item_path(item, &current) {
+                Ok(path) => path,
+                Err(error) => {
+                    failed.push(format!("{}: {error}", item.name));
+                    operation_items.push(OperationItemDraft {
+                        item_id: Some(item.id),
+                        name: item.name.clone(),
+                        source_path: Some(item.staging_path.clone()),
+                        target_path: None,
+                        action: "remove".into(),
+                        status: "failed".into(),
+                        error: Some(error),
+                        snapshot: item_snapshot,
+                        compensation: None,
+                    });
+                    continue;
+                }
+            };
             match fs::symlink_metadata(&path) {
                 Ok(metadata) if crate::file_ops::is_reparse_or_symlink(&metadata) => {
                     let message = "拒绝把符号链接或重解析点移入回收站".to_string();

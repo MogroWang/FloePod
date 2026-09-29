@@ -586,6 +586,21 @@ async function removePodWithFolder() {
             </div>
           </div>
           <div class="frow">
+            <span class="flabel">浮动面板最小长度</span>
+            <div class="fctrl">
+              <RangeSlider
+                :value="podNumberValue(pod, 'panelMinHeight')"
+                :min="160"
+                :max="900"
+                :step="10"
+                aria-label="浮动面板最小长度"
+                @update:value="(v) => previewPodNumber(pod.id, 'panelMinHeight', v)"
+                @commit="(v) => commitPodNumber(pod, 'panelMinHeight', v)"
+              />
+              <span class="fval">{{ podNumberValue(pod, "panelMinHeight") }}px</span>
+            </div>
+          </div>
+          <div class="frow">
             <span class="flabel">浮动面板材质</span>
             <div class="fctrl">
               <SegmentedControl

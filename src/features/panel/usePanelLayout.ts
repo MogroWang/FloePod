@@ -52,8 +52,13 @@ export function usePanelLayout(
       content.style.minHeight = previousMinHeight;
       const bodyHeight = mode.value === "list" ? Math.min(intrinsicBody, 560) : intrinsicBody;
       const chromeHeight = head.offsetHeight + (footEl.value?.offsetHeight ?? 0) + rootBorder;
+      // 匣设置的「最小长度」约束面板总高度：内容较少（空匣、少量条目）时
+      // 面板也不低于该值，避免面板缩成一截。
+      const pod = context.settingsStore.pod(context.podId());
+      const minHeight = Math.min(900, Math.max(160, pod?.panelMinHeight ?? 160));
+      const requested = Math.ceil(bodyHeight + chromeHeight);
       await ipc
-        .setPanelSize(context.podId(), Math.ceil(bodyHeight + chromeHeight))
+        .setPanelSize(context.podId(), Math.max(minHeight, requested))
         .catch((err) => console.error("panel resize failed", err));
     }, 110);
   }
