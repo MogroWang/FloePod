@@ -7,7 +7,6 @@ use tauri::{AppHandle, Manager};
 use crate::db;
 use crate::events;
 use crate::manager;
-use crate::policy;
 use crate::security;
 use crate::settings::{self, Pod, Settings};
 use crate::staging;

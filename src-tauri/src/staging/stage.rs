@@ -10,7 +10,6 @@ use crate::events;
 use crate::file_ops::{self, StagedMove};
 use crate::lnk;
 use crate::operations::{self, CompensationDraft, OperationDraft, OperationItemDraft};
-use crate::policy;
 use crate::rules;
 use crate::security;
 use crate::settings::{self, Pod};

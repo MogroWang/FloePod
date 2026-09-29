@@ -9,8 +9,6 @@ use std::path::PathBuf;
 
 use rusqlite::params;
 
-use crate::db;
-use crate::file_ops;
 use crate::state::AppState;
 
 pub fn undo_root(state: &AppState) -> PathBuf {
