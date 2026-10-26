@@ -3,3 +3,10 @@ packages:
 
 allowBuilds:
   esbuild: true
+
+# 供应链修复：这两个包的锁定版本命中已知漏洞公告（GHSA-68fv-2mgg-jv7q /
+# GHSA-hrr3-gc8f-f4qj 等），上游依赖声明的 semver 范围已允许安全版本，
+# 但既有 lockfile 会保留旧解析，故在此强制提升。
+overrides:
+  source-map-js: ^1.2.2
+  fast-uri: ^3.1.9

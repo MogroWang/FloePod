@@ -123,7 +123,10 @@ pub(crate) fn clean_office(source: &Path, output: &Path) -> Result<Vec<String>, 
     let mut removed = Vec::new();
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
-        let name = entry.name().replace('\\', "/");
+        let name = entry
+            .name()
+            .map_err(|error| error.to_string())?
+            .replace('\\', "/");
         let options = SimpleFileOptions::default().compression_method(entry.compression());
         if entry.is_dir() {
             writer
