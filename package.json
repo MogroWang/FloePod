@@ -1,7 +1,7 @@
 {
   "name": "floepod",
   "private": true,
-  "version": "1.8.1",
+  "version": "1.8.2",
   "description": "浮匣 FloePod - 本地优先的屏幕边缘文件暂存工具",
   "type": "module",
   "packageManager": "pnpm@11.22.0",
@@ -27,7 +27,7 @@
     "@tauri-apps/plugin-dialog": "^2.7.3",
     "@tauri-apps/plugin-opener": "^2.5.5",
     "pinia": "^3.0.4",
-    "vue": "^3.5.42"
+    "vue": "^3.5.44"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
@@ -36,7 +36,7 @@
     "ajv": "8.20.0",
     "prettier": "3.9.6",
     "typescript": "~5.9.3",
-    "vite": "^7.3.6",
+    "vite": "^7.3.7",
     "vue-tsc": "^3.3.11",
     "yaml": "2.9.0"
   }

@@ -1,6 +1,6 @@
 [package]
 name = "floe-pod"
-version = "1.8.1"
+version = "1.8.2"
 description = "浮匣 FloePod - 本地优先的屏幕边缘文件暂存工具"
 authors = ["MogroWang Studio"]
 edition = "2021"
@@ -44,7 +44,7 @@ regex = "1"
 quick-xml = "0.41"
 kamadak-exif = "0.6"
 lopdf = { version = "0.44", default-features = false }
-zip = { version = "6.0", default-features = false, features = ["deflate"] }
+zip = { version = "9.1", default-features = false, features = ["deflate"] }
 winreg = "0.55"
 windows = { version = "0.61", features = [
   "Foundation",
