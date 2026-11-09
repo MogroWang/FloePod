@@ -11,7 +11,7 @@
 
 ### 变更
 
-- **依赖告警的发现途径改为主动**：不再有每周计划运行，新披露公告要等下一次 PR 审计或手动派发 CI 才会被发现；持续通知交给 GitHub Dependabot alerts。`docs/release.md` 与 `docs/dependency-audit.md` 记录了这一取舍和本次复查结果
+- **依赖告警的发现途径改为主动**：不再有每周计划运行，新披露公告要等下一次 PR 审计或手动派发 CI 才会被发现；仓库已开启 GitHub Dependabot alerts 作为持续通知（不产生工作流运行）。`docs/release.md` 与 `docs/dependency-audit.md` 记录了这一取舍和本次复查结果
 - **依赖与版本同步**：`src-tauri/Cargo.toml` 的 `rusqlite` 声明改为 `0.41`，`src-tauri/Cargo.lock` 随之更新；`package.json`、`tauri.conf.json`、`Cargo.toml`、`Cargo.lock`、README 的版本号同步至 1.8.3
 
 ## 1.8.2
