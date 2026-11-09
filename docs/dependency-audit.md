@@ -1,4 +1,4 @@
-# 依赖审计记录（2026-09-08）
+# 依赖审计记录
 
 本次保持现有大版本兼容范围，更新 Vue 3.5.42、Pinia 3.0.4、TypeScript 5.9.3、vue-tsc 3.3.11；前后端 Tauri clipboard-manager 2.3.3、dialog 2.7.3、opener 2.5.5；Rust dialog 的 fs 依赖更新到 2.5.2。未为消除告警跨越 Tauri/GTK 的不兼容大版本。
 
@@ -12,4 +12,22 @@
 | RUSTSEC-2024-0429 unsound | glib 0.18.5 | GTK/drag/tray 的非 Windows 路径；Windows 目标不可达。修复版本要求 glib ≥0.20，不能直接替换 Tauri 所用 GTK 0.18 ABI；未来 Linux 支持仍需上游迁移 |
 | RUSTSEC-2025-0081、0075、0080、0100、0098 unmaintained | unic-char-property/range/common/ucd-ident/ucd-version 0.9.0 | Windows 构建与运行树实际可达：urlpattern → tauri-utils → Tauri。没有在本次范围内找到兼容的维护版替换；不是“Windows 不受影响” |
 
-未维护不等于已证明可利用，Windows 不可达也不等于其他平台已安全。没有添加 advisory ignore、审计失败降级或跳过锁文件校验。每周计划再次查询新披露告警。离线本地验证所用 vendor/cache 位于工作区外层，不提交仓库；下载的 crates 用 crates.io 索引 SHA-256 校验，正式 CI 仍使用官方 registry 和 `--locked`。
+未维护不等于已证明可利用，Windows 不可达也不等于其他平台已安全。没有添加 advisory ignore、审计失败降级或跳过锁文件校验。离线本地验证所用 vendor/cache 位于工作区外层，不提交仓库；下载的 crates 用 crates.io 索引 SHA-256 校验，正式 CI 仍使用官方 registry 和 `--locked`。
+
+不再有每周计划运行。新披露的公告要等到下一次 PR 审计或手动派发 CI 才被发现；持续通知由仓库已开启的 GitHub Dependabot alerts 负责（仓库设置项，不产生工作流运行，也不会有定时红叉）。
+
+## 2026-11-09 复查（1.8.3）
+
+定时运行在 `Audit locked Rust dependencies` 报出 1 条 vulnerability，退出码 1：
+
+| 公告 | 锁定包 | 处理 |
+| --- | --- | --- |
+| RUSTSEC-2026-0459（CVE-2026-119375） | libsqlite3-sys 0.38.2（rusqlite 0.40.2 `bundled`，SQLite 3.53.2） | `rusqlite` 升到 0.41.1，`libsqlite3-sys` 随之升到 0.39.1（SQLite 3.54.1）。公告 2026-10-30 发布，晚于 1.8.2 的合并（2026-10-26），当次 PR 审计不可能命中 |
+
+漏洞内容是：数据库与同名 `-wal` 文件的页大小不一致时，SQLite 3.54.0 之前的版本可能把页缓存中的未初始化内存当作查询结果返回（本地内存泄露）。修复后 `cargo audit` 退出码为 0。
+
+剩余 9 条 unmaintained、2 条 unsound、2 条 yanked 仍按告警显示、不阻断构建：
+
+- zbus_names / zvariant / zvariant_derive 属于 Linux 平台链，Windows 目标依赖树不包含它们。
+- tokio 的 `RUSTSEC-2026-0386` 只涉及 `AsyncFd` 等 Unix 专用 API。
+- async-executor 1.14.0、clipboard-win 5.4.1 被撤回（yanked）但仍可锁定构建；升级需等上游发版后再单独评估，不在本次范围内冒险换版本。

@@ -2,7 +2,19 @@
 
 记录每个版本的显著变更，最新版本在最上面。
 
-## 1.8.2（当前）
+## 1.8.3（当前）
+
+### 修复
+
+- **每周一的定时 CI 仍在触发**：`ci.yml` 里的 `schedule: cron "23 3 * * 1"` 从引入起一直保留，每周一 11:23（北京时间）自动跑一次完整 CI。1.8.2 只修了当周失败的依赖、没有移除触发器，于是这周又自动跑、又因新公告变红。现在整个 `schedule` 触发块被删除，`build-windows` 上仅为定时运行存在的 `if: github.event_name != 'schedule'` 一并清理；CI 只在 PR、merge queue 与手动 `workflow_dispatch` 时运行。`scripts/workflows.test.mjs` 增加断言，`ci.on` 只允许这三个事件、job 的 `if` 不得引用 `schedule`，防止定时触发器被重新加回
+- **定时运行暴露的 SQLite 内存泄露**：2026-11-09 的运行在 `Audit locked Rust dependencies` 失败，`RUSTSEC-2026-0459`（CVE-2026-119375）命中 `libsqlite3-sys 0.38.2`（`rusqlite 0.40.2` 的 `bundled`，SQLite 3.53.2）——数据库与同名 `-wal` 文件页大小不一致时，普通查询可能返回进程内存中的残留字节。`rusqlite` 升级到 0.41.1，`libsqlite3-sys` 随之到 0.39.1（内置 SQLite 3.54.1），`cargo audit` 退出码回到 0；剩余 9 条 unmaintained、2 条 unsound、2 条 yanked 仍只作为告警显示
+
+### 变更
+
+- **依赖告警的发现途径改为主动**：不再有每周计划运行，新披露公告要等下一次 PR 审计或手动派发 CI 才会被发现；仓库已开启 GitHub Dependabot alerts 作为持续通知（不产生工作流运行）。`docs/release.md` 与 `docs/dependency-audit.md` 记录了这一取舍和本次复查结果
+- **依赖与版本同步**：`src-tauri/Cargo.toml` 的 `rusqlite` 声明改为 `0.41`，`src-tauri/Cargo.lock` 随之更新；`package.json`、`tauri.conf.json`、`Cargo.toml`、`Cargo.lock`、README 的版本号同步至 1.8.3
+
+## 1.8.2
 
 ### 修复
 

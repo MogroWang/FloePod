@@ -47,6 +47,10 @@ test("release has a serial non-dropping queue and no broad push/tag chain or rep
   assert.ok(ci.on.merge_group);
   assert.deepEqual(ci.permissions, { contents: "read" });
   for (const job of Object.values(ci.jobs)) assert.equal(job.permissions, undefined);
+  // No scheduled runs: a weekly cron produced red runs nobody acted on, and
+  // advisory discovery belongs to Dependabot alerts, not to a failing workflow.
+  assert.deepEqual(Object.keys(ci.on).sort(), ["merge_group", "pull_request", "workflow_dispatch"]);
+  for (const job of Object.values(ci.jobs)) if (job.if) assert.doesNotMatch(job.if, /schedule/);
   const releaseCommands = Object.values(release.jobs)
     .flatMap((job) => job.steps ?? [])
     .map((step) => step.run ?? "")
