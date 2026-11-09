@@ -4,8 +4,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
     types: [checks_requested]
-  schedule:
-    - cron: "23 3 * * 1"
+  # 只有 PR、merge queue 和手动触发；不设 schedule，避免无人处理的定时红叉。
   workflow_dispatch:
 permissions:
   contents: read
@@ -45,7 +44,6 @@ jobs:
         run: cargo audit --file src-tauri/Cargo.lock
   build-windows:
     name: Validate and package Windows x64
-    if: github.event_name != 'schedule'
     runs-on: windows-latest
     timeout-minutes: 90
     steps:

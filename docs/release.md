@@ -4,7 +4,7 @@
 
 版本在 PR 中统一更新 `package.json`、`src-tauri/tauri.conf.json`、Cargo package、Cargo.lock 根包和 README 当前版本。`pnpm version:check` 检查一致性；PR 和 `merge_group` 的 Version job 读取实时默认分支的不可变快照、最新 Release 与精确标签，要求版本严格增加且未被使用。Windows 安装包约束为稳定三段版本，范围不超过 `255.255.65535`。
 
-CI 在 PR opened/synchronize/reopened/ready_for_review 和 merge_group checks_requested 执行，只使用只读令牌，不给 PR 注入签名证书、写令牌或 attestation 权限。质量检查包括前端/发布脚本回归测试、格式、版本、IPC、Rust 测试/Clippy、依赖审计、Windows 生产构建和五种产物验证。每周计划只复查依赖告警。
+CI 在 PR opened/synchronize/reopened/ready_for_review 和 merge_group checks_requested 执行，只使用只读令牌，不给 PR 注入签名证书、写令牌或 attestation 权限。质量检查包括前端/发布脚本回归测试、格式、版本、IPC、Rust 测试/Clippy、依赖审计、Windows 生产构建和五种产物验证。工作流**没有 `schedule` 触发**：CI 只在 PR、merge queue 与手动 `workflow_dispatch` 时运行，不会每个周一自动跑一次无人处理的定时任务；`scripts/workflows.test.mjs` 断言 `ci.on` 只有这三个事件，重新加回 cron 会让测试失败。
 
 ## 管理员必须设置的仓库规则
 
